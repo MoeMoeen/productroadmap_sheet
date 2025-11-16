@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any, Optional, Protocol
 import logging
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -176,21 +177,17 @@ class IntakeService:
     ) -> Optional[Initiative]:
         initiative_key = self._extract_initiative_key(row)
         if initiative_key:
-            existing = (
-                self.db.query(Initiative).filter(Initiative.initiative_key == initiative_key).one_or_none()
-            )
+            stmt = select(Initiative).where(Initiative.initiative_key == initiative_key)
+            existing = self.db.execute(stmt).scalar_one_or_none()
             if existing is not None:
                 return existing
 
-        return (
-            self.db.query(Initiative)
-            .filter(
-                Initiative.source_sheet_id == source_sheet_id,
-                Initiative.source_tab_name == source_tab_name,
-                Initiative.source_row_number == source_row_number,
-            )
-            .one_or_none()
+        stmt = select(Initiative).where(
+            Initiative.source_sheet_id == source_sheet_id,
+            Initiative.source_tab_name == source_tab_name,
+            Initiative.source_row_number == source_row_number,
         )
+        return self.db.execute(stmt).scalar_one_or_none()
 
     @staticmethod
     def _extract_initiative_key(row: IntakeRow) -> Optional[str]:
