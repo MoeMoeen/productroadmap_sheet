@@ -1,5 +1,5 @@
-from typing import Dict
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Dict, List
+from pydantic import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -26,18 +26,22 @@ class Settings(BaseSettings):
     MATH_MODELS_SHEET_ID: str = ""
     MATH_MODELS_TAB: str = "MathModels"
 
-    # Intake sheets: name -> sheet_id (optionally encode tab in your reader)
-    # Example env usage: INTAKE_SHEETS__UK_SALES=1Abc... INTAKE_SHEETS__FR_MARKETING=1Xyz...
+    # Intake sheets: name -> sheet_id
     INTAKE_SHEETS: Dict[str, str] = {}
 
     # Jobs
     CRON_ENABLED: bool = True
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        case_sensitive=False,
-        env_nested_delimiter="__",  # allows INTAKE_SHEETS__KEY=value
-    )
+    # Intake config (no hardcoded magic numbers)
+    INTAKE_CREATE_MAX_RETRIES: int = 3
+    INTAKE_ALLOWED_STATUSES: List[str] = ["new", "withdrawn"]
+    INTAKE_BATCH_COMMIT_EVERY: int = 100
+    INTAKE_KEY_HEADER_NAME: str = "Initiative Key"  # header to locate the key column
+    INTAKE_HEADER_ROW_INDEX: int = 1  # header row (1-indexed)
+
+    class Config:
+        env_file = ".env"
+        case_sensitive = False
 
 
 settings = Settings()
