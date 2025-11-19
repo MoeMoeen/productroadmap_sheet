@@ -42,7 +42,9 @@ def run_sync_for_sheet(
         start_data_row=start_data_row,
         max_rows=max_rows,
     )
-    # Use per-row upsert to preserve precise row numbers from sheet (gaps allowed)
+    # Batched upserts with periodic commits to improve performance and allow atomic chunks
+    batch_size = commit_every or getattr(settings, "INTAKE_BATCH_COMMIT_EVERY", 100)
+    count = 0
     for row_number, row_dict in rows:
         intake_service.upsert_from_intake_row(
             row=row_dict,
@@ -50,7 +52,25 @@ def run_sync_for_sheet(
             source_tab_name=tab_name,
             source_row_number=row_number,
             allow_status_override=allow_status_override,
+            auto_commit=False,
         )
+        count += 1 #what's the purpose of this line? It keeps track of how many rows have been processed to determine when to commit the batch. If count reaches batch_size, a commit is performed.
+        if batch_size and (count % batch_size == 0):
+            try:
+                db.commit()
+                # After commit, backfill any pending keys
+                intake_service.flush_pending_key_backfills()
+            except Exception:
+                db.rollback()
+                # Continue processing remaining rows; errors logged by service
+                pass
+    # Final commit and backfill for remainder
+    try:
+        db.commit()
+        intake_service.flush_pending_key_backfills()
+    except Exception:
+        db.rollback()
+        pass
 
 
 

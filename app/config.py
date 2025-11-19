@@ -71,7 +71,6 @@ class Settings(BaseSettings):
     INTAKE_KEY_HEADER_NAME: str = "Initiative Key"
     INTAKE_KEY_HEADER_ALIASES: List[str] = []
     INTAKE_HEADER_ROW_INDEX: int = 1
-    INTAKE_BATCH_COMMIT_EVERY: int = 100
 
     model_config = SettingsConfigDict(
         env_file=".env",

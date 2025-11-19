@@ -75,6 +75,9 @@ class IntakeService:
     def __init__(self, db: Session, key_writer: Optional[InitiativeKeyWriter] = None) -> None:
         self.db = db
         self.key_writer = key_writer
+        # Queue of pending key backfills to perform after a commit
+        # Each entry: (sheet_id, tab_name, row_number, initiative_key)
+        self._pending_key_backfills: list[tuple[str, str, int, str]] = []
 
     def upsert_from_intake_row(
         self,
@@ -83,6 +86,7 @@ class IntakeService:
         source_tab_name: str,
         source_row_number: int,
         allow_status_override: bool = False,
+        auto_commit: bool = True,
     ) -> Initiative:
         dto: InitiativeCreate = map_sheet_row_to_initiative_create(row)
         if not dto.title:
@@ -95,7 +99,8 @@ class IntakeService:
             source_row_number=source_row_number,
         )
 
-        if initiative is None:
+        created = initiative is None
+        if created:
             initiative = self._create_from_intake(
                 dto=dto,
                 source_sheet_id=source_sheet_id,
@@ -118,7 +123,10 @@ class IntakeService:
             )
             key_val = getattr(initiative, "initiative_key", None)
             if key_val:
-                self._backfill_initiative_key(source_sheet_id, source_tab_name, source_row_number, str(key_val))
+                # Defer key backfill until commit (safer). Caller can trigger flush_pending_key_backfills().
+                self._pending_key_backfills.append(
+                    (source_sheet_id, source_tab_name, source_row_number, str(key_val))
+                )
         else:
             self._apply_intake_update(initiative, dto, allow_status_override=allow_status_override)
             try:
@@ -134,9 +142,11 @@ class IntakeService:
                     "row": source_row_number,
                 },
             )
-
-        self.db.commit()
-        self.db.refresh(initiative)
+        if auto_commit:
+            self.db.commit()
+            self.db.refresh(initiative)
+            # Perform any pending key backfills now that data is committed
+            self.flush_pending_key_backfills()
         return initiative
 
     def upsert_many(
@@ -158,6 +168,7 @@ class IntakeService:
                 source_tab_name=source_tab_name,
                 source_row_number=row_num,
                 allow_status_override=allow_status_override,
+                auto_commit=False,
             )
             out.append(initiative)
 
@@ -168,11 +179,15 @@ class IntakeService:
                         "intake.batch_commit",
                         extra={"count": idx + 1, "sheet_id": source_sheet_id, "tab": source_tab_name},
                     )
+                    # After commit, backfill any pending keys safely
+                    self.flush_pending_key_backfills()
                 except Exception:
                     self.db.rollback()
                     logger.exception("intake.batch_commit_failed")
         try:
             self.db.commit()
+            # Final backfill after last commit
+            self.flush_pending_key_backfills()
         except Exception:
             self.db.rollback()
             logger.exception("intake.final_commit_failed")
@@ -278,6 +293,19 @@ class IntakeService:
             self.key_writer.write_initiative_key(sheet_id, tab_name, row_number, initiative_key)
         except Exception:
             logger.exception("intake.key_backfill_failed")
+
+    def flush_pending_key_backfills(self) -> None:
+        """Write any queued initiative keys to their intake sheet cells.
+
+        This should be called after a successful commit when using batched transactions.
+        """
+        if not self._pending_key_backfills:
+            return
+        # Copy and clear to avoid re-entrancy issues
+        pending = self._pending_key_backfills
+        self._pending_key_backfills = []
+        for sheet_id, tab_name, row_number, key in pending:
+            self._backfill_initiative_key(sheet_id, tab_name, row_number, key)
 
 
 __all__ = [
