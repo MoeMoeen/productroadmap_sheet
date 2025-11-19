@@ -3,61 +3,54 @@ from __future__ import annotations
 from typing import Optional
 
 from app.config import settings
-from app.sheets.client import get_sheets_service
+from app.sheets.client import SheetsClient
+from app.utils.header_utils import normalize_header
 
 
-def _column_index_to_a1(idx: int) -> str:
-    # 1-based index -> A, B, ..., Z, AA, AB, ...
-    result = ""
+def _col_index_to_a1(idx: int) -> str:
+    if idx <= 0:
+        return "A"
+    s = ""
     while idx:
-        idx, remainder = divmod(idx - 1, 26)
-        result = chr(65 + remainder) + result
-    return result
+        idx, rem = divmod(idx - 1, 26)
+        s = chr(65 + rem) + s
+    return s
 
 
 class GoogleSheetsIntakeWriter:
-    """
-    Concrete writer that writes the initiative_key back to the intake sheet.
+    """Concrete writer for writing initiative_key back to intake sheet.
 
-    Finds the column by matching header == settings.INTAKE_KEY_HEADER_NAME on header row.
+    Finds the column by matching the header (case-insensitive) on the configured header row.
     """
 
-    def __init__(self, service=None):
-        self.service = service or get_sheets_service()
+    def __init__(self, client: SheetsClient) -> None:
+        self.client = client
 
     def _find_key_column_index(self, sheet_id: str, tab_name: str) -> Optional[int]:
-        header_row = settings.INTAKE_HEADER_ROW_INDEX
+        header_row = getattr(settings, "INTAKE_HEADER_ROW_INDEX", 1) or 1
         range_a1 = f"{tab_name}!{header_row}:{header_row}"
-        resp = (
-            self.service.spreadsheets()
-            .values()
-            .get(spreadsheetId=sheet_id, range=range_a1, valueRenderOption="UNFORMATTED_VALUE")
-            .execute()
-        )
-        values = resp.get("values", [[]])
+        values = self.client.get_values(sheet_id, range_a1)
         headers = values[0] if values else []
-        target = (settings.INTAKE_KEY_HEADER_NAME or "").strip().lower()
-        for i, h in enumerate(headers, start=1):  # 1-based column index
-            if isinstance(h, str) and h.strip().lower() == target:
+        target = normalize_header(getattr(settings, "INTAKE_KEY_HEADER_NAME", "Initiative Key") or "")
+        # allow aliases (normalized)
+        alias_set = {normalize_header(h) for h in (getattr(settings, "INTAKE_KEY_HEADER_ALIASES", []) or [])}
+        for i, h in enumerate(headers, start=1):
+            if h is None:
+                continue
+            name = normalize_header(str(h))
+            if name == target or name in alias_set:
                 return i
         return None
 
     def write_initiative_key(self, sheet_id: str, tab_name: str, row_number: int, initiative_key: str) -> None:
         col_idx = self._find_key_column_index(sheet_id, tab_name)
         if not col_idx:
-            # No matching header; nothing to do
             return
-        col_a1 = _column_index_to_a1(col_idx)
+        col_a1 = _col_index_to_a1(col_idx)
         cell_a1 = f"{tab_name}!{col_a1}{row_number}"
-        body = {"values": [[initiative_key]]}
-        (
-            self.service.spreadsheets()
-            .values()
-            .update(
-                spreadsheetId=sheet_id,
-                range=cell_a1,
-                valueInputOption="RAW",
-                body=body,
-            )
-            .execute()
+        self.client.update_values(
+            spreadsheet_id=sheet_id,
+            range_=cell_a1,
+            values=[[initiative_key]],
+            value_input_option="RAW",
         )

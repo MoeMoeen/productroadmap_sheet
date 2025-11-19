@@ -79,6 +79,8 @@ class Initiative(Base):
     missing_fields = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Source that last updated this row (e.g., "intake", "backlog", "system")
+    updated_source = Column(String(20), nullable=True)
     created_by_user_id = Column(String(100), nullable=True)
 
     # I. Scoring summary (framework-agnostic)

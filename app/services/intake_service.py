@@ -9,7 +9,7 @@ Enhancements:
 """
 from __future__ import annotations
 
-from typing import Any, Optional, Protocol
+from typing import Optional, Protocol
 import logging
 
 from sqlalchemy import select
@@ -22,6 +22,7 @@ from app.schemas.initiative import InitiativeCreate  # type: ignore
 from app.services.initiative_key import generate_initiative_key  # type: ignore
 from app.services.intake_mapper import map_sheet_row_to_initiative_create  # type: ignore
 from app.sheets.intake_reader import IntakeRow  # type: ignore
+from app.utils.header_utils import get_value_by_header_alias
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +102,11 @@ class IntakeService:
                 source_tab_name=source_tab_name,
                 source_row_number=source_row_number,
             )
+            # Stamp source of update
+            try:
+                setattr(initiative, "updated_source", "intake")
+            except Exception:
+                logger.debug("intake.updated_source_set_failed_on_create")
             logger.info(
                 "intake.create",
                 extra={
@@ -115,6 +121,10 @@ class IntakeService:
                 self._backfill_initiative_key(source_sheet_id, source_tab_name, source_row_number, str(key_val))
         else:
             self._apply_intake_update(initiative, dto, allow_status_override=allow_status_override)
+            try:
+                setattr(initiative, "updated_source", "intake")
+            except Exception:
+                logger.debug("intake.updated_source_set_failed_on_update")
             logger.debug(
                 "intake.update",
                 extra={
@@ -191,10 +201,17 @@ class IntakeService:
 
     @staticmethod
     def _extract_initiative_key(row: IntakeRow) -> Optional[str]:
-        for key in ("initiative_key", "Initiative Key", "INITIATIVE_KEY"):
-            if key in row and row[key]:
-                return str(row[key]).strip()
-        return None
+        if not row:
+            return None
+        val = get_value_by_header_alias(
+            row,
+            getattr(settings, "INTAKE_KEY_HEADER_NAME", "Initiative Key"),
+            getattr(settings, "INTAKE_KEY_HEADER_ALIASES", []),
+        )
+        if val is None:
+            return None
+        s = str(val).strip()
+        return s or None
 
     def _create_from_intake(
         self,
