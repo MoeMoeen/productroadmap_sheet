@@ -1,0 +1,22 @@
+[
+  {
+    "sheet_key": "intake_emea",
+    "spreadsheet_id": "1mQLVtMhgC-09fQ2xczyxghiIwZFb2e5ac5JVODkyJsU",
+    "region": "EMEA",
+    "description": "Test EMEA intake sheet",
+    "tabs": [
+      {
+        "key": "emea_main",
+        "spreadsheet_id": "1mQLVtMhgC-09fQ2xczyxghiIwZFb2e5ac5JVODkyJsU",
+        "tab_name": "Marketing_EMEA",
+        "header_row": 1,
+        "start_data_row": 2,
+        "max_rows": null,
+        "active": true,
+        "region": "EMEA",
+        "department": "Marketing",
+        "allow_status_override": false
+      }
+    ]
+  }
+]

@@ -1,6 +1,12 @@
-from typing import List, Optional, Dict
-from pydantic import BaseModel, Field
+from typing import List, Optional
+from pathlib import Path
+import json
+
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 class IntakeTabConfig(BaseModel):
@@ -33,6 +39,9 @@ class BacklogSheetConfig(BaseModel):
     product_org: Optional[str] = None  # optional label for multi-org
 
 
+BASE_DIR = Path(__file__).resolve().parent.parent  # project root folder
+
+
 class Settings(BaseSettings):
     # App
     ENV: str = "dev"
@@ -53,6 +62,9 @@ class Settings(BaseSettings):
 
     # Intake: hierarchical config
     INTAKE_SHEETS: List[IntakeSheetConfig] = Field(default_factory=list)
+
+    # NEW: path to JSON file with intake config
+    INTAKE_SHEETS_CONFIG_FILE: Optional[str] = None
 
     # Central backlog (either single default or multiple per org)
     CENTRAL_BACKLOG: Optional[BacklogSheetConfig] = None
@@ -76,7 +88,38 @@ class Settings(BaseSettings):
         env_file=".env",
         case_sensitive=False,
         env_nested_delimiter="__",
+        extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def load_intake_sheets_from_file(self) -> "Settings":
+        """
+        If INTAKE_SHEETS_CONFIG_FILE is set, read that JSON file
+        and use it to populate INTAKE_SHEETS.
+        """
+        if self.INTAKE_SHEETS_CONFIG_FILE:
+            cfg_path = Path(self.INTAKE_SHEETS_CONFIG_FILE)
+            if not cfg_path.is_absolute():
+                cfg_path = BASE_DIR / cfg_path
+
+            if not cfg_path.exists():
+                raise FileNotFoundError(
+                    f"INTAKE_SHEETS_CONFIG_FILE points to {cfg_path}, but it does not exist."
+                )
+
+            with cfg_path.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+
+            if not isinstance(raw, list):
+                raise ValueError(
+                    "INTAKE_SHEETS config file must contain a JSON list of intake sheet objects."
+                )
+
+            self.INTAKE_SHEETS = [
+                IntakeSheetConfig.model_validate(item) for item in raw
+            ]
+
+        return self
 
 
 settings = Settings()
