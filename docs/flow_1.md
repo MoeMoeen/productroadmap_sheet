@@ -1869,3 +1869,241 @@ Backend/LLM own derived fields like `llm_summary` and `score_llm_suggested`.
 
 ---
 
+
+
+# **Flow 1 — Completion Checkpoint Summary**
+
+# ✅ **FLOW 1 — CHECKPOINT SUMMARY**
+
+### *(Full end-to-end pipeline implemented and working)*
+
+Flow 1 is now **fully built, wired, and verified** from end to end.
+It includes: intake ingestion → DB upsert → central backlog sync (both directions).
+Below is a complete summary of what was done.
+
+---
+
+# 1. **Configuration Layer — Implemented & Stable**
+
+### ✔ `.env` configuration established
+
+* Holds environment-dependent paths and secrets
+* Includes:
+
+  * `DATABASE_URL`
+  * `GOOGLE_SERVICE_ACCOUNT_FILE`
+  * `CENTRAL_BACKLOG__...`
+  * `INTAKE_SHEETS_CONFIG_FILE=intake_sheets_test_config.json`
+
+### ✔ `config.py` redesigned into a robust Pydantic Settings module
+
+* Handles:
+
+  * App settings
+  * DB settings
+  * OpenAI settings (future use)
+  * Intake sheet configuration (via JSON file)
+  * Backlog sheet configuration (via env nested delimiter)
+
+### ✔ Intake sheets configuration moved to external JSON
+
+* Uses `INTAKE_SHEETS_CONFIG_FILE`
+* Validator loads JSON → converts into typed `IntakeSheetConfig`/`IntakeTabConfig` objects
+* Fully supports multi-sheet, multi-tab intake setups
+
+This forms a **clean separation** between:
+
+* Environment variables
+* Config contract (models + validation)
+* Concrete tenant/environment configuration (JSON)
+
+---
+
+# 2. **Google Sheets Layer — Working End-to-End**
+
+### ✔ Service Account setup complete
+
+* Google Cloud project ready
+* Sheets API enabled
+* Service account created
+* JSON key downloaded & stored locally
+* Sheets shared with service account (Editor)
+
+### ✔ Low-level Sheets client working (tested)
+
+* Verified reading from intake & backlog sheets
+* Verified writing to backlog sheet
+* Verified update operations
+* Auth flow is clean and stable
+
+This confirms **Google Sheets connectivity is fully integrated** with the backend.
+
+---
+
+# 3. **Database Layer — Created & Verified**
+
+### ✔ DB schema initialization
+
+* SQLAlchemy `Base` + all models imported centrally
+* All tables created via `init_db.py`
+* DB connected to Flow 1 via `SessionLocal`
+* Verified writing & reading Initiative rows
+
+### ✔ Initiative model fully connected to relationships
+
+* Fixed missing model import issue
+* Resolved `InitiativeMathModel` resolution
+* `Base.metadata` automatically loads all models now
+
+Database is **production-ready** for Flow 1.
+
+---
+
+# 4. **Flow 1 Step-by-Step Jobs — All Operational**
+
+### ✔ **Intake sync (`sync_intake_job`)**
+
+Reads intake rows → maps them → upserts into DB
+
+* `IntakeReader` working properly
+* `map_sheet_row_to_initiative_create` mapping row fields to Pydantic schema
+* `IntakeService` working for:
+
+  * New initiative creation
+  * Updates
+  * Status rules
+  * Relationship to sheets (source_sheet_id, source_tab_name, row_number)
+* `initiative_key` generation working
+* **Key backfill to intake sheet working** after adding idempotent backfill logic
+
+Intake → DB works perfectly.
+
+---
+
+### ✔ **Backlog update (`backlog_update_job`)**
+
+Reads backlog sheet → updates existing initiatives in DB
+
+* `_resolve_backlog_target` correctly finds configured backlog sheet
+* `BacklogReader` correctly reads rows
+* `update_many` applies only centrally editable fields
+* Proper commit batching
+* No-op if backlog sheet is empty → safe behavior
+
+---
+
+### ✔ **Backlog sync (`backlog_sync_job`)**
+
+Writes DB initiatives → regenerates the “Backlog” Google Sheet
+
+* `initiative_to_backlog_row` mapping working
+* `write_backlog_from_db` correctly rewrites:
+
+  * Headers (single source of truth)
+  * Initiative rows
+  * Metadata columns
+* `_to_sheet_value` fix prevents datetime serialization errors
+* Protected ranges applied for non-editable fields
+* Central backlog sheet now shows your first 16 initiatives, cleanly formatted
+
+Backlog sheet is now fully synced from DB.
+
+---
+
+# 5. **Flow 1 CLI — Fully Functional**
+
+### ✔ Command:
+
+```bash
+uv run python -m test_scripts.flow1_cli --log-level INFO
+```
+
+### ✔ What it does:
+
+1. Intake sync
+2. Backlog update
+3. Backlog sync
+
+### ✔ Verified Output
+
+All three stages completed with:
+
+```
+flow1.intake_sync.done
+flow1.backlog_update.done
+flow1.backlog_sync.done
+flow1.done
+flow1.cli.done
+```
+
+### ✔ Result:
+
+* Intake sheet now has initiative keys filled
+* DB contains all initiatives
+* Central backlog sheet rebuilt with correct structure & values
+
+Flow 1 end-to-end is now **officially COMPLETE** 🚀
+
+---
+
+# 6. **System Status After Flow 1 Completion**
+
+### 🔵 Google Sheets integration = DONE
+
+### 🔵 Intake sync (Sheet → DB) = DONE
+
+### 🔵 Backlog update (Sheet → DB) = DONE
+
+### 🔵 Backlog sync (DB → Sheet) = DONE
+
+### 🔵 Initiative key roundtrip = DONE
+
+### 🔵 Schema validation = DONE
+
+### 🔵 Logging & CLI = DONE
+
+Flow 1 is **stable, deterministic, idempotent, and production-grade**.
+
+---
+
+# ✔️ You now have a fully operational “Flow 1” pipeline
+
+This is the foundation of your roadmap product — the entire left half of the ingestion/data synchronization engine.
+
+We can now safely move on to:
+
+### 🔥 Next Steps (Choose based on priority)
+
+1. **Flow 1 enhancements**
+
+   * Add multi-intake-sheet pipelines
+   * Add support for more intake fields
+   * Add intake validation errors / data quality checks
+
+2. **Flow 2 (Scoring & Frameworks)**
+
+   * Apply RICE / WSJF / custom frameworks
+   * Save scoring results to DB
+   * Sync scoring output to backlog sheet
+
+3. **Flow 3 (AI Layer)**
+
+   * LLM-powered initiative summarization
+   * LLM suggestions for missing fields
+   * AI scoring / math model generation
+
+4. **Multi-tenant architecture**
+
+   * Per-org config
+   * OAuth2 for Google Sheets access
+   * Org-level DB scoping
+   * Sheet config UI
+
+5. **Admin UI / Setup Assistant**
+
+   * Auto-create intake key column
+   * Validate sheet structure
+   * Colored warnings on invalid config
+
+---
+

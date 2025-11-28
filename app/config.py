@@ -81,8 +81,12 @@ class Settings(BaseSettings):
     INTAKE_ALLOWED_STATUSES: List[str] = ["new", "withdrawn"]
     INTAKE_BATCH_COMMIT_EVERY: int = 100
     INTAKE_KEY_HEADER_NAME: str = "Initiative Key"
-    INTAKE_KEY_HEADER_ALIASES: List[str] = []
+    INTAKE_KEY_HEADER_ALIASES: List[str] = ["InitiativeKey", "initiative_key"]
     INTAKE_HEADER_ROW_INDEX: int = 1
+
+    # Scoring
+    SCORING_ENABLE_HISTORY: bool = True  # write InitiativeScore rows for audit trail
+    SCORING_BATCH_COMMIT_EVERY: int = 100
 
     model_config = SettingsConfigDict(
         env_file=".env",

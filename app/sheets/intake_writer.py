@@ -1,3 +1,5 @@
+# projectroadmap_sheet_project/app/sheets/intake_writer.py
+
 from __future__ import annotations
 
 from typing import Optional
@@ -27,6 +29,7 @@ class GoogleSheetsIntakeWriter:
         self.client = client
 
     def _find_key_column_index(self, sheet_id: str, tab_name: str) -> Optional[int]:
+        """Find the column index (1-based) for the initiative key header."""
         header_row = getattr(settings, "INTAKE_HEADER_ROW_INDEX", 1) or 1
         range_a1 = f"{tab_name}!{header_row}:{header_row}"
         values = self.client.get_values(sheet_id, range_a1)
@@ -43,6 +46,7 @@ class GoogleSheetsIntakeWriter:
         return None
 
     def write_initiative_key(self, sheet_id: str, tab_name: str, row_number: int, initiative_key: str) -> None:
+        """Write the initiative_key to the specified row in the intake sheet."""
         col_idx = self._find_key_column_index(sheet_id, tab_name)
         if not col_idx:
             return

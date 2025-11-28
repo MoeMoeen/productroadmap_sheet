@@ -1,7 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, JSON
 from sqlalchemy.orm import relationship
-
 from app.db.base import Base
 
 
@@ -22,8 +21,8 @@ class InitiativeMathModel(Base):
     suggested_by_llm = Column(Boolean, nullable=False, default=False)
     approved_by_user = Column(Boolean, nullable=False, default=False)
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     initiative = relationship(
         "Initiative",
@@ -49,9 +48,11 @@ class InitiativeScore(Base):
     overall_score = Column(Float, nullable=True)
 
     inputs_json = Column(JSON, nullable=True)  # raw inputs used to compute scores
+    components_json = Column(JSON, nullable=True)  # intermediate components for audit
+    warnings_json = Column(JSON, nullable=True)  # warnings from scoring engine
     llm_suggested = Column(Boolean, nullable=False, default=False)
     approved_by_user = Column(Boolean, nullable=False, default=False)
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     initiative = relationship("Initiative", back_populates="scores")

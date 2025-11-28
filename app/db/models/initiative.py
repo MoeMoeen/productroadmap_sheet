@@ -1,6 +1,6 @@
 # productroadmap_sheet_project/app/db/models/initiative.py
 
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import (
     Boolean,
     Column,
@@ -79,8 +79,8 @@ class Initiative(Base):
     # H. Lifecycle & workflow
     status = Column(String(50), nullable=False, default="new")
     missing_fields = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     # Source that last updated this row (e.g., "intake", "backlog", "system")
     updated_source = Column(String(20), nullable=True)
     created_by_user_id = Column(String(100), nullable=True)

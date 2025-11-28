@@ -1,3 +1,5 @@
+# productroadmap_sheet_project/app/services/intake_service.py
+
 """IntakeService implementation (Flow 1 - Step 2).
 
 Enhancements:
@@ -79,6 +81,24 @@ class IntakeService:
         # Each entry: (sheet_id, tab_name, row_number, initiative_key)
         self._pending_key_backfills: list[tuple[str, str, int, str]] = []
 
+    def _queue_key_backfill(
+        self,
+        sheet_id: str,
+        tab_name: str,
+        row_number: int,
+        initiative: Initiative,
+    ) -> None:
+        """Queue a key backfill for this initiative if it has a key.
+
+        Idempotent: writing the same key again is harmless.
+        """
+        key_val = getattr(initiative, "initiative_key", None)
+        if not key_val:
+            return
+        self._pending_key_backfills.append(
+            (sheet_id, tab_name, row_number, str(key_val))
+        )
+
     def upsert_from_intake_row(
         self,
         row: IntakeRow,
@@ -88,6 +108,7 @@ class IntakeService:
         allow_status_override: bool = False,
         auto_commit: bool = True,
     ) -> Initiative:
+        """Create or update an Initiative from a single intake sheet row."""
         dto: InitiativeCreate = map_sheet_row_to_initiative_create(row)
         if not dto.title:
             raise ValueError("Intake row missing required Title field")
@@ -99,7 +120,8 @@ class IntakeService:
             source_row_number=source_row_number,
         )
 
-        created = initiative is None
+        created = initiative is None # line added to keep track of whether we are creating a new initiative or updating an existing one.
+        # if initiative does not exist, created is True, so we proceed to create it
         if created:
             initiative = self._create_from_intake(
                 dto=dto,
@@ -107,7 +129,6 @@ class IntakeService:
                 source_tab_name=source_tab_name,
                 source_row_number=source_row_number,
             )
-            # Stamp source of update
             try:
                 setattr(initiative, "updated_source", "intake")
             except Exception:
@@ -121,12 +142,6 @@ class IntakeService:
                     "row": source_row_number,
                 },
             )
-            key_val = getattr(initiative, "initiative_key", None)
-            if key_val:
-                # Defer key backfill until commit (safer). Caller can trigger flush_pending_key_backfills().
-                self._pending_key_backfills.append(
-                    (source_sheet_id, source_tab_name, source_row_number, str(key_val))
-                )
         else:
             self._apply_intake_update(initiative, dto, allow_status_override=allow_status_override)
             try:
@@ -142,6 +157,15 @@ class IntakeService:
                     "row": source_row_number,
                 },
             )
+
+        # always queue a key backfill if initiative has a key
+        self._queue_key_backfill(
+            sheet_id=source_sheet_id,
+            tab_name=source_tab_name,
+            row_number=source_row_number,
+            initiative=initiative,
+        )
+
         if auto_commit:
             self.db.commit()
             self.db.refresh(initiative)

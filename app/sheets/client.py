@@ -1,3 +1,5 @@
+# productroadmap_sheet_project/app/sheets/client.py
+
 from __future__ import annotations
 
 from typing import Any, List
@@ -34,6 +36,7 @@ class SheetsClient:
         range_: str,
         value_render_option: str = "UNFORMATTED_VALUE",
     ) -> List[List[Any]]:
+        """Get values from a given spreadsheet and range."""
         resp = (
             self.service.spreadsheets()
             .values()
@@ -53,6 +56,7 @@ class SheetsClient:
         values: List[List[Any]],
         value_input_option: str = "USER_ENTERED",
     ) -> None:
+        """Update values in a given spreadsheet and range."""
         body = {"values": values}
         (
             self.service.spreadsheets()

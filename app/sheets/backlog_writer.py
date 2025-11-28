@@ -1,3 +1,5 @@
+# productroadmap_sheet_project/app/sheets/backlog_writer.py
+
 from __future__ import annotations
 
 from typing import Any, List, Dict
@@ -7,6 +9,9 @@ from sqlalchemy.orm import Session
 from app.db.models.initiative import Initiative  # type: ignore
 from app.sheets.client import SheetsClient
 from app.services.backlog_service import CENTRAL_EDITABLE_FIELDS
+
+from datetime import date, datetime
+from typing import Any
 
 
 # Central Backlog header definition (keep single source of truth)
@@ -67,6 +72,20 @@ CENTRAL_HEADER_TO_FIELD: Dict[str, str] = {
 }
 
 
+def _to_sheet_value(value: Any):
+    """Normalize Python values into something Sheets API can accept.
+
+    - datetime/date -> ISO string
+    - None -> ""
+    - everything else -> as-is
+    """
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if value is None:
+        return ""
+    return value
+
+
 def _list_join(values: Any) -> str:
     """Render list-like values as comma-separated string for Sheets."""
     if not values:
@@ -81,31 +100,31 @@ def initiative_to_backlog_row(initiative: Initiative) -> List[Any]:
     deps_inits = _list_join(getattr(initiative, "dependencies_initiatives", None))
 
     return [
-        getattr(initiative, "initiative_key", None),
-        getattr(initiative, "title", None),
-        getattr(initiative, "requesting_team", None),
-        getattr(initiative, "requester_name", None),
-        getattr(initiative, "requester_email", None),
-        getattr(initiative, "country", None),
-        getattr(initiative, "product_area", None),
-        getattr(initiative, "status", None),
-        getattr(initiative, "strategic_theme", None),
-        getattr(initiative, "customer_segment", None),
-        getattr(initiative, "initiative_type", None),
-        getattr(initiative, "hypothesis", None),
-        getattr(initiative, "value_score", None),
-        getattr(initiative, "effort_score", None),
-        getattr(initiative, "overall_score", None),
-        getattr(initiative, "active_scoring_framework", None),
-        getattr(initiative, "use_math_model", None),
+        _to_sheet_value(getattr(initiative, "initiative_key", None)),
+        _to_sheet_value(getattr(initiative, "title", None)),
+        _to_sheet_value(getattr(initiative, "requesting_team", None)),
+        _to_sheet_value(getattr(initiative, "requester_name", None)),
+        _to_sheet_value(getattr(initiative, "requester_email", None)),
+        _to_sheet_value(getattr(initiative, "country", None)),
+        _to_sheet_value(getattr(initiative, "product_area", None)),
+        _to_sheet_value(getattr(initiative, "status", None)),
+        _to_sheet_value(getattr(initiative, "strategic_theme", None)),
+        _to_sheet_value(getattr(initiative, "customer_segment", None)),
+        _to_sheet_value(getattr(initiative, "initiative_type", None)),
+        _to_sheet_value(getattr(initiative, "hypothesis", None)),
+        _to_sheet_value(getattr(initiative, "value_score", None)),
+        _to_sheet_value(getattr(initiative, "effort_score", None)),
+        _to_sheet_value(getattr(initiative, "overall_score", None)),
+        _to_sheet_value(getattr(initiative, "active_scoring_framework", None)),
+        _to_sheet_value(getattr(initiative, "use_math_model", None)),
         deps_inits,
-        getattr(initiative, "dependencies_others", None),
-        getattr(initiative, "llm_summary", None),
-        getattr(initiative, "llm_notes", None),
-        getattr(initiative, "strategic_priority_coefficient", None),
+        _to_sheet_value(getattr(initiative, "dependencies_others", None)),
+        _to_sheet_value(getattr(initiative, "llm_summary", None)),
+        _to_sheet_value(getattr(initiative, "llm_notes", None)),
+        _to_sheet_value(getattr(initiative, "strategic_priority_coefficient", None)),
         # Metadata
-        getattr(initiative, "updated_at", None),
-        getattr(initiative, "updated_source", None),
+        _to_sheet_value(getattr(initiative, "updated_at", None)),
+        _to_sheet_value(getattr(initiative, "updated_source", None)),
     ]
 
 
@@ -221,3 +240,5 @@ def _apply_backlog_protected_ranges(
         )
 
     client.batch_update(spreadsheet_id, requests)
+
+
