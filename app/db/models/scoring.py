@@ -1,3 +1,5 @@
+# productroadmap_sheet_project/app/db/models/scoring.py
+
 from datetime import datetime, timezone
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, JSON
 from sqlalchemy.orm import relationship
