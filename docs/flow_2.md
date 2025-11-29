@@ -1,6 +1,3 @@
-Perfect — Flow 1 is now a **complete and stable ingestion backbone**, and that gives us the foundation needed to move into **Flow 2: Scoring & Frameworks** — the layer where initiatives get intelligent, comparable, and decision-ready.
-
-Below is a **crystal-clear, structured Flow 2 Gameplay / Roadmap** designed for your current backend architecture and your long-term SaaS & AI plans.
 
 ---
 
@@ -357,3 +354,56 @@ Flow 2 will give you:
 Flow 2 makes your roadmap system become a **decision intelligence engine**, not just a data sync pipeline.
 
 ---
+
+# Where do manual scoring inputs from backlog fit in?
+
+Your understanding is exactly right:
+
+> “Certain inputs for various scoring flows and frameworks must come from the central backlog sheet and be passed to the backend scoring service to compute scores, then update the DB, and reflect back on the central backlog.”
+
+Conceptually, the full loop is:
+
+1. **Product team edits central backlog sheet**
+
+   * E.g. fields like:
+
+     * `Impact Expected`
+     * `Effort Engineering Days`
+     * `Strategic Priority Coefficient`
+     * `Business Value` (in future)
+     * `Time Sensitivity` / `Risk Level`
+
+2. **Flow 1 – Backlog Update (Sheet → DB)**
+
+   * `run_backlog_update(...)` reads the backlog sheet
+   * `BacklogService.update_many(...)` writes those central fields into `Initiative`.
+
+3. **Flow 2 – Scoring (DB → scores)**
+
+   * `ScoringService` reads `Initiative` fields
+   * Maps them to `ScoreInputs`
+   * Runs RICE / WSJF
+   * Updates `Initiative` scores + optional `InitiativeScore` history
+
+4. **Flow 1 – Backlog Sync (DB → Sheet)**
+
+   * `write_backlog_from_db(...)` writes:
+
+     * `Value Score`
+     * `Effort Score`
+     * `Overall Score`
+     * `Active Scoring Framework`
+   * Back into the central backlog sheet.
+
+So **yes**: product team edits **central sheet** → values go to **DB** via Flow 1 → Flow 2 reads them → scores go back to **DB** → Flow 1 writes the results back to **central sheet**.
+
+# Flow 1:
+uv run python -m test_scripts.flow1_cli --log-level INFO
+
+# Flow 2:
+uv run python -m test_scripts.flow2_scoring_cli --framework RICE --only-missing --log-level INFO
+uv run python -m test_scripts.backlog_sync_cli --log-level INFO
+
+
+---
+

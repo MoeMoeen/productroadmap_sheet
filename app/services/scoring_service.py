@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 class ScoringService:
     """Service layer for computing and persisting initiative scores.
-
+    
     Responsibilities:
     - Map Initiative fields -> ScoreInputs
     - Delegate to pluggable scoring engines
@@ -108,14 +108,14 @@ class ScoringService:
 
     def score_all(
         self,
-        framework: ScoringFramework,
+        framework: Optional[ScoringFramework],
         commit_every: Optional[int] = None,
         only_missing_scores: bool = True,
     ) -> int:
         """Batch score multiple initiatives.
 
         Args:
-            framework: Scoring framework
+            framework: Scoring framework override for all initiatives. If None, use per-initiative selection.
             commit_every: Commit every N initiatives; defaults to SCORING_BATCH_COMMIT_EVERY
             only_missing_scores: If True, skip initiatives already scored with this framework
 
@@ -126,27 +126,49 @@ class ScoringService:
 
         # Build query
         stmt = select(Initiative).order_by(Initiative.id)
-        if only_missing_scores:
-            stmt = stmt.where(
-                (Initiative.overall_score.is_(None))
-                | (Initiative.active_scoring_framework != framework.value)
-            )
+        if framework is not None:
+            if only_missing_scores:
+                stmt = stmt.where(
+                    (Initiative.overall_score.is_(None))
+                    | (Initiative.active_scoring_framework != framework.value)
+                )
+        else:
+            # Per-initiative mode: if only_missing, only pick those lacking an overall score.
+            if only_missing_scores:
+                stmt = stmt.where(Initiative.overall_score.is_(None))
 
         initiatives = self.db.execute(stmt).scalars().all()
         total = len(initiatives)
-        logger.info("scoring.batch_start", extra={"framework": framework.value, "total": total})
+        logger.info(
+            "scoring.batch_start",
+            extra={"framework": (framework.value if framework else "AUTO"), "total": total},
+        )
 
         scored = 0
         for idx, initiative in enumerate(initiatives, start=1):
             try:
-                self.score_initiative(initiative, framework, enable_history=settings.SCORING_ENABLE_HISTORY)
+                chosen = self._resolve_framework_for_initiative(initiative, framework)
+                if chosen is None:
+                    logger.warning(
+                        "scoring.skip_no_framework",
+                        extra={
+                            "initiative_key": getattr(initiative, "initiative_key", None),
+                        },
+                    )
+                    continue
+
+                self.score_initiative(
+                    initiative,
+                    chosen,
+                    enable_history=settings.SCORING_ENABLE_HISTORY,
+                )
                 scored += 1
             except Exception:
                 logger.exception(
                     "scoring.error",
                     extra={
                         "initiative_key": getattr(initiative, "initiative_key", None),
-                        "framework": framework.value,
+                        "framework": (framework.value if framework else "AUTO"),
                     },
                 )
                 # Continue processing; don't let one bad initiative stop the batch
@@ -156,7 +178,7 @@ class ScoringService:
                     self.db.commit()
                     logger.info(
                         "scoring.batch_commit",
-                        extra={"count": idx, "framework": framework.value},
+                        extra={"count": idx, "framework": (framework.value if framework else "AUTO")},
                     )
                 except Exception:
                     self.db.rollback()
@@ -165,12 +187,42 @@ class ScoringService:
         # Final commit
         try:
             self.db.commit()
-            logger.info("scoring.batch_done", extra={"scored": scored, "framework": framework.value})
+            logger.info(
+                "scoring.batch_done",
+                extra={"scored": scored, "framework": (framework.value if framework else "AUTO")},
+            )
         except Exception:
             self.db.rollback()
             logger.exception("scoring.final_commit_failed")
 
         return scored
+
+    def _resolve_framework_for_initiative(
+        self,
+        initiative: Initiative,
+        explicit_override: Optional[ScoringFramework],
+    ) -> Optional[ScoringFramework]:
+        """Pick framework for an initiative based on override, initiative field, or settings default.
+
+        Returns None if no valid framework can be determined.
+        """
+        if explicit_override is not None:
+            return explicit_override
+
+        raw = getattr(initiative, "active_scoring_framework", None)
+        if isinstance(raw, str) and raw:
+            try:
+                return ScoringFramework(raw.upper())
+            except ValueError:
+                pass
+
+        default_raw = settings.SCORING_DEFAULT_FRAMEWORK
+        if isinstance(default_raw, str) and default_raw:
+            try:
+                return ScoringFramework(default_raw.upper())
+            except ValueError:
+                return None
+        return None
 
     def _build_score_inputs(self, initiative: Initiative, framework: ScoringFramework) -> ScoreInputs:
         """Map Initiative fields to ScoreInputs based on framework requirements.
@@ -190,18 +242,31 @@ class ScoringService:
         RICE needs: reach, impact, confidence, effort
         """
         # Reach: could come from traffic estimates, user base, etc.
+        reach_val = cast(Optional[float], initiative.reach_estimated_users)
+        reach = float(reach_val) if reach_val is not None else settings.SCORING_DEFAULT_RICE_REACH
+
+        # Impact normalization: map impact_expected into categorical 0-3 using thresholds
         impact_expected_val = cast(Optional[float], initiative.impact_expected)
-        reach = float(impact_expected_val) if impact_expected_val is not None else 1.0
+        if impact_expected_val is None:
+            impact = settings.SCORING_DEFAULT_RICE_IMPACT
+        else:
+            thresholds = settings.SCORING_RICE_IMPACT_THRESHOLDS
+            # thresholds: [t0, t1, t2]; <=t0->0, <=t1->1, <=t2->2, else 3
+            if impact_expected_val <= thresholds[0]:
+                impact = 0.0
+            elif impact_expected_val <= thresholds[1]:
+                impact = 1.0
+            elif impact_expected_val <= thresholds[2]:
+                impact = 2.0
+            else:
+                impact = 3.0
 
-        # Impact: scale 0-3 (minimal/low/medium/high)
-        impact = float(impact_expected_val) if impact_expected_val is not None else 1.0
-
-        # Confidence: 0-1 (we might not have explicit confidence; default to medium)
-        confidence = 0.8  # default confidence if not tracked
+        # Confidence: 0-1 (fallback from config)
+        confidence = settings.SCORING_DEFAULT_RICE_CONFIDENCE
 
         # Effort: engineering days
         eng_days_val = cast(Optional[float], initiative.effort_engineering_days)
-        effort = float(eng_days_val) if eng_days_val is not None else 1.0
+        effort = float(eng_days_val) if eng_days_val is not None else settings.SCORING_DEFAULT_RICE_EFFORT
 
         return ScoreInputs(
             reach=reach,
@@ -226,17 +291,17 @@ class ScoringService:
 
         # Time criticality: could derive from deadline urgency or time_sensitivity field
         time_sens_val = cast(Optional[str], initiative.time_sensitivity)
-        time_criticality = 5.0 if time_sens_val else 3.0  # simple heuristic
+        time_criticality = 5.0 if time_sens_val else settings.SCORING_DEFAULT_WSJF_TIME_CRITICALITY
 
         # Risk reduction: if we track risk level, map it numerically
         risk_map = {"low": 1.0, "medium": 3.0, "high": 5.0}
         risk_level_val = cast(Optional[str], initiative.risk_level)
         risk_level_str = str(risk_level_val).lower() if risk_level_val else ""
-        risk_reduction = risk_map.get(risk_level_str, 2.0)
+        risk_reduction = risk_map.get(risk_level_str, settings.SCORING_DEFAULT_WSJF_RISK_REDUCTION)
 
         # Job size: engineering effort
         eng_days_val = cast(Optional[float], initiative.effort_engineering_days)
-        job_size = float(eng_days_val) if eng_days_val is not None else 1.0
+        job_size = float(eng_days_val) if eng_days_val is not None else settings.SCORING_DEFAULT_WSJF_JOB_SIZE
 
         return ScoreInputs(
             business_value=business_value,

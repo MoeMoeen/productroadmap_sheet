@@ -59,6 +59,8 @@ class Initiative(Base):
     impact_low = Column(Float, nullable=True)
     impact_expected = Column(Float, nullable=True)
     impact_high = Column(Float, nullable=True)
+    # New: estimated number of users reached / affected (for RICE 'reach')
+    reach_estimated_users = Column(Float, nullable=True)
 
     # F. Effort & cost (high-level)
     effort_tshirt_size = Column(String(10), nullable=True)  # XS/S/M/L/XL

@@ -1,5 +1,11 @@
 # productroadmap_sheet_project/app/jobs/flow1_full_sync_job.py
-
+"""
+Flow 1 is the end-to-end sync cycle for departmental intake sheets feeding into a central backlog sheet.
+It consists of three main steps:
+1. Intake Sync: Sync data from departmental intake Google Sheets into the database, including backfilling initiative keys.
+2. Backlog Update: Apply any central edits made in the backlog sheet back into the database.
+3. Backlog Sync: Regenerate the central backlog Google Sheet from the updated database initiatives.
+"""
 from __future__ import annotations
 
 import logging

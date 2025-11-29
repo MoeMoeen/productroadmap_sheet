@@ -89,6 +89,20 @@ class Settings(BaseSettings):
     # Scoring
     SCORING_ENABLE_HISTORY: bool = True  # write InitiativeScore rows for audit trail
     SCORING_BATCH_COMMIT_EVERY: int = 100
+    # Optional default framework when initiative does not specify one (e.g., "RICE" or "WSJF")
+    SCORING_DEFAULT_FRAMEWORK: Optional[str] = None
+    # Scoring defaults (framework input fallbacks)
+    SCORING_DEFAULT_RICE_REACH: float = 1.0
+    SCORING_DEFAULT_RICE_IMPACT: float = 1.0
+    SCORING_DEFAULT_RICE_CONFIDENCE: float = 0.8
+    SCORING_DEFAULT_RICE_EFFORT: float = 1.0
+
+    SCORING_DEFAULT_WSJF_TIME_CRITICALITY: float = 3.0
+    SCORING_DEFAULT_WSJF_RISK_REDUCTION: float = 2.0
+    SCORING_DEFAULT_WSJF_JOB_SIZE: float = 1.0
+    # Impact normalization thresholds for RICE (map impact_expected to 0-3 buckets)
+    # Values are upper bounds for buckets 0,1,2; > last becomes 3.
+    SCORING_RICE_IMPACT_THRESHOLDS: list[float] = [0.5, 1.5, 2.5]
 
     model_config = SettingsConfigDict(
         env_file=".env",

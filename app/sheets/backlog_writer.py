@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Dict
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from app.db.models.initiative import Initiative  # type: ignore
+from app.db.models.initiative import Initiative
 from app.sheets.client import SheetsClient
 from app.services.backlog_service import CENTRAL_EDITABLE_FIELDS
-
-from datetime import date, datetime
-from typing import Any
-
 
 # Central Backlog header definition (keep single source of truth)
 CENTRAL_BACKLOG_HEADER: List[str] = [
@@ -28,17 +25,20 @@ CENTRAL_BACKLOG_HEADER: List[str] = [
     "Customer Segment",
     "Initiative Type",
     "Hypothesis",
+    # Scoring outputs
     "Value Score",
     "Effort Score",
     "Overall Score",
     "Active Scoring Framework",
     "Use Math Model",
+    # Dependencies & LLM
     "Dependencies Initiatives",
     "Dependencies Others",
     "LLM Summary",
     "LLM Notes",
+    # Strategic coefficient
     "Strategic Priority Coefficient",
-    # Metadata (appended at the end)
+    # Metadata
     "Updated At",
     "Updated Source",
 ]
@@ -122,10 +122,19 @@ def initiative_to_backlog_row(initiative: Initiative) -> List[Any]:
         _to_sheet_value(getattr(initiative, "llm_summary", None)),
         _to_sheet_value(getattr(initiative, "llm_notes", None)),
         _to_sheet_value(getattr(initiative, "strategic_priority_coefficient", None)),
-        # Metadata
         _to_sheet_value(getattr(initiative, "updated_at", None)),
         _to_sheet_value(getattr(initiative, "updated_source", None)),
     ]
+
+
+def _col_index_to_a1(idx: int) -> str:
+    if idx <= 0:
+        return "A"
+    result = ""
+    while idx:
+        idx, rem = divmod(idx - 1, 26)
+        result = chr(65 + rem) + result
+    return result
 
 
 def write_backlog_from_db(
@@ -175,16 +184,6 @@ def write_backlog_from_db(
     )
 
 
-def _col_index_to_a1(idx: int) -> str:
-    if idx <= 0:
-        return "A"
-    result = ""
-    while idx:
-        idx, rem = divmod(idx - 1, 26)
-        result = chr(65 + rem) + result
-    return result
-
-
 def _apply_backlog_protected_ranges(
     client: SheetsClient,
     spreadsheet_id: str,
@@ -193,52 +192,86 @@ def _apply_backlog_protected_ranges(
 ) -> None:
     """Protect all columns that are NOT in CENTRAL_EDITABLE_FIELDS (warning-only).
 
-    We identify columns by header labels using CENTRAL_HEADER_TO_FIELD mapping.
-    Columns without a known mapping are protected by default.
+    More robust parsing of sheet properties to avoid KeyError when the client
+    returns a simplified structure.
     """
     props = client.get_sheet_properties(spreadsheet_id, tab_name)
-    sheet_id = props.get("sheetId")
-    grid = props.get("gridProperties", {})
-    row_count = int(grid.get("rowCount", 1000))
-    if sheet_id is None:
+    if not props:
         return
 
-    # Determine which column indexes (0-based) to protect
-    protected_col_indexes: List[int] = []
-    for idx, label in enumerate(header):
-        field = CENTRAL_HEADER_TO_FIELD.get(label)
-        # If field not mapped or not editable centrally, protect it
-        if not field or field not in CENTRAL_EDITABLE_FIELDS:
-            protected_col_indexes.append(idx)
+    # Try multiple shapes
+    sheet_id: Optional[int] = None
+    sheet_props = None
 
-    # Clear existing auto-protected ranges created by this tool (optional best-effort)
-    requests: List[dict] = []
-    for pr in props.get("protectedRanges", []) or []:
-        desc = pr.get("description", "") or ""
-        if desc.startswith("AutoProtected (product backlog)"):
-            requests.append({"deleteProtectedRange": {"protectedRangeId": pr.get("protectedRangeId")}})
+    # Shape A: {"properties": {"sheetId": X, ...}}
+    if isinstance(props, dict) and "properties" in props and isinstance(props["properties"], dict):
+        sheet_props = props["properties"]
+        sheet_id = sheet_props.get("sheetId")
 
-    # Add new protected ranges
-    for col_idx in protected_col_indexes:
-        requests.append(
+    # Shape B: {"sheetId": X, "title": "..."}
+    if sheet_id is None and "sheetId" in props:
+        sheet_id = props.get("sheetId")
+        sheet_props = props  # may also carry protectedRanges
+
+    # Shape C: {"sheets": [{ "properties": {...}, ...}, ...]}
+    if sheet_id is None and "sheets" in props:
+        for s in props["sheets"]:
+            p = s.get("properties", {})
+            if p.get("title") == tab_name:
+                sheet_id = p.get("sheetId")
+                sheet_props = s  # full sheet entry
+                break
+
+    if sheet_id is None:
+        # Cannot proceed safely
+        return
+
+    existing = []
+    # protectedRanges may be at top level or inside sheet entry
+    if isinstance(sheet_props, dict):
+        existing = sheet_props.get("protectedRanges", []) or []
+    if not existing and isinstance(props, dict):
+        existing = props.get("protectedRanges", []) or []
+
+    # Delete previously auto-added warning ranges
+    to_delete_ids = [
+        pr.get("protectedRangeId")
+        for pr in existing
+        if isinstance(pr, dict) and pr.get("description", "").startswith("AUTO_PROTECT_NON_PRODUCT")
+    ]
+    delete_requests = [
+        {"deleteProtectedRange": {"protectedRangeId": rid}}
+        for rid in to_delete_ids
+        if rid is not None
+    ]
+
+    non_product_cols = []
+    for idx, col_name in enumerate(header):
+        field = CENTRAL_HEADER_TO_FIELD.get(col_name)
+        if field not in CENTRAL_EDITABLE_FIELDS:
+            non_product_cols.append(idx)
+
+    add_requests = []
+    for col_idx in non_product_cols:
+        add_requests.append(
             {
                 "addProtectedRange": {
                     "protectedRange": {
                         "range": {
                             "sheetId": sheet_id,
-                            "startRowIndex": 0,
-                            "endRowIndex": row_count,
+                            "startRowIndex": 1,          # leave header row editable
                             "startColumnIndex": col_idx,
                             "endColumnIndex": col_idx + 1,
                         },
-                        "description": f"AutoProtected (product backlog): protect column {header[col_idx]}",
-                        # Use warningOnly to avoid permission issues while still warning editors
+                        "description": f"AUTO_PROTECT_NON_PRODUCT_{col_idx}",
                         "warningOnly": True,
                     }
                 }
             }
         )
 
-    client.batch_update(spreadsheet_id, requests)
+    batch_requests = delete_requests + add_requests
+    if batch_requests:
+        client.batch_update(spreadsheet_id, batch_requests)
 
 

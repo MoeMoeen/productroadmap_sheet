@@ -1,7 +1,9 @@
 # productroadmap_sheet_project/app/services/intake_service.py
 
-"""IntakeService implementation (Flow 1 - Step 2).
-
+"""
+IntakeService implementation (Flow 1 - Step 2).
+What it does:
+- Upserts Initiatives from intake sheet rows into the database.
 Enhancements:
 - Batch upsert with periodic commits (no hardcoded sizes).
 - Initiative key write-back using a concrete Sheets writer.
