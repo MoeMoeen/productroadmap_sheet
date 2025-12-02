@@ -1,0 +1,163 @@
+# productroadmap_sheet_project/app/jobs/flow3_product_ops_job.py
+
+from __future__ import annotations
+
+import logging
+from typing import List, Optional, Dict
+
+from sqlalchemy.orm import Session
+
+from app.config import settings
+from app.db.models.initiative import Initiative
+from app.sheets.client import SheetsClient, get_sheets_service
+from app.sheets.scoring_inputs_reader import ScoringInputsReader, ScoringInputsRow
+
+logger = logging.getLogger(__name__)
+
+
+def _get_product_ops_reader(spreadsheet_id: Optional[str] = None, tab_name: Optional[str] = None) -> ScoringInputsReader:
+    sheet_id = spreadsheet_id or (settings.PRODUCT_OPS.spreadsheet_id if settings.PRODUCT_OPS else None)
+    tab = tab_name or (settings.PRODUCT_OPS.scoring_inputs_tab if settings.PRODUCT_OPS else None) or "Scoring_Inputs"
+    if not sheet_id:
+        raise ValueError("PRODUCT_OPS is not configured and no spreadsheet_id override was provided.")
+    service = get_sheets_service()
+    client = SheetsClient(service)
+    return ScoringInputsReader(client=client, spreadsheet_id=sheet_id, tab_name=tab)
+
+
+def run_flow3_preview_inputs(*, spreadsheet_id: Optional[str] = None, tab_name: Optional[str] = None) -> List[ScoringInputsRow]:
+    """Fetch and parse the Product Ops Scoring_Inputs tab; return parsed rows for inspection."""
+    reader = _get_product_ops_reader(spreadsheet_id, tab_name)
+    rows = reader.read()
+    logger.info("flow3.preview.rows", extra={"count": len(rows)})
+    sample = rows[:3]
+    for r in sample:
+        logger.debug(
+            "flow3.preview.row",
+            extra={
+                "initiative_key": r.initiative_key,
+                "active_framework": r.active_scoring_framework,
+                "frameworks": list(r.framework_inputs.keys()),
+            },
+        )
+    return rows
+
+
+def run_flow3_sync_inputs_to_initiatives(
+    db: Session,
+    *,
+    commit_every: Optional[int] = None,
+    spreadsheet_id: Optional[str] = None,
+    tab_name: Optional[str] = None,
+) -> int:
+    """Strong sync: write Scoring_Inputs values into Initiative fields.
+
+    Unified naming convention across all layers (sheet → code → DB):
+      - Sheet: "RICE: Reach" or "rice_reach" → Reader: rice_reach → DB: Initiative.rice_reach
+      
+    Mappings:
+      - Initiative Key → finder
+      - Active Scoring Framework → Initiative.active_scoring_framework
+      - Use Math Model → Initiative.use_math_model
+      - Strategic Priority Coefficient → Initiative.strategic_priority_coefficient
+      - Risk Level → Initiative.risk_level
+      - Time Sensitivity → Initiative.time_sensitivity
+      
+    RICE parameters:
+      - RICE: Reach → Initiative.rice_reach
+      - RICE: Impact → Initiative.rice_impact
+      - RICE: Confidence → Initiative.rice_confidence
+      - RICE: Effort → Initiative.rice_effort
+      
+    WSJF parameters:
+      - WSJF: Business Value → Initiative.wsjf_business_value
+      - WSJF: Time Criticality → Initiative.wsjf_time_criticality
+      - WSJF: Risk Reduction → Initiative.wsjf_risk_reduction
+      - WSJF: Job Size → Initiative.wsjf_job_size
+      
+    Shared parameter:
+      - effort_engineering_days (can be populated from rice_effort or wsjf_job_size for backwards compatibility)
+
+    Strong sync: empty cells → None in DB.
+    """
+    batch_size = commit_every or settings.SCORING_BATCH_COMMIT_EVERY
+
+    rows = run_flow3_preview_inputs(spreadsheet_id=spreadsheet_id, tab_name=tab_name)
+    total = len(rows)
+    updated = 0
+    logger.info("flow3.sync.start", extra={"rows": total})
+
+    # Index initiatives by key for faster lookups
+    keys = [r.initiative_key for r in rows]
+    if not keys:
+        return 0
+    existing: Dict[str, Initiative] = {}
+    for i in db.query(Initiative).filter(Initiative.initiative_key.in_(keys)).all():
+        existing[getattr(i, "initiative_key")] = i
+
+    for idx, row in enumerate(rows, start=1):
+        ini = existing.get(row.initiative_key)
+        if not ini:
+            logger.warning("flow3.sync.missing_initiative", extra={"initiative_key": row.initiative_key})
+            continue
+
+        # admin fields
+        if row.active_scoring_framework is not None:
+            ini.active_scoring_framework = row.active_scoring_framework  # type: ignore[assignment]
+        if row.use_math_model is not None:
+            ini.use_math_model = bool(row.use_math_model)  # type: ignore[assignment]
+
+        # extras (strong sync: always set; blank = default 1.0)
+        spc = row.extras.get("strategic_priority_coefficient")
+        ini.strategic_priority_coefficient = float(spc) if spc is not None else 1.0  # type: ignore[assignment]
+        
+        rl = row.extras.get("risk_level")
+        ini.risk_level = str(rl) if rl else None  # type: ignore[assignment]
+        
+        ts = row.extras.get("time_sensitivity")
+        ini.time_sensitivity = str(ts) if ts else None  # type: ignore[assignment]
+
+        # framework inputs (unified naming: sheet → reader → DB all use rice_reach, wsjf_job_size, etc.)
+        rice = row.framework_inputs.get("RICE")
+        if rice:
+            # Direct mapping to new framework-prefixed DB fields
+            ini.rice_reach = rice.get("rice_reach")  # type: ignore[assignment]
+            ini.rice_impact = rice.get("rice_impact")  # type: ignore[assignment]
+            ini.rice_confidence = rice.get("rice_confidence")  # type: ignore[assignment]
+            ini.rice_effort = rice.get("rice_effort")  # type: ignore[assignment]
+            
+            # Also update effort_engineering_days for backwards compatibility
+            if rice.get("rice_effort") is not None:
+                ini.effort_engineering_days = rice.get("rice_effort")  # type: ignore[assignment]
+
+        wsjf = row.framework_inputs.get("WSJF")
+        if wsjf:
+            # Direct mapping to new framework-prefixed DB fields
+            ini.wsjf_business_value = wsjf.get("wsjf_business_value")  # type: ignore[assignment]
+            ini.wsjf_time_criticality = wsjf.get("wsjf_time_criticality")  # type: ignore[assignment]
+            ini.wsjf_risk_reduction = wsjf.get("wsjf_risk_reduction")  # type: ignore[assignment]
+            ini.wsjf_job_size = wsjf.get("wsjf_job_size")  # type: ignore[assignment]
+            
+            # Also update effort_engineering_days for backwards compatibility (WSJF wins if both present)
+            if wsjf.get("wsjf_job_size") is not None:
+                ini.effort_engineering_days = wsjf.get("wsjf_job_size")  # type: ignore[assignment]
+
+        ini.updated_source = "product_ops"  # type: ignore[assignment]
+        updated += 1
+
+        if batch_size and (idx % batch_size == 0):
+            try:
+                db.commit()
+                logger.info("flow3.sync.batch_commit", extra={"count": idx})
+            except Exception:
+                db.rollback()
+                logger.exception("flow3.sync.batch_commit_failed")
+
+    try:
+        db.commit()
+        logger.info("flow3.sync.done", extra={"updated": updated})
+    except Exception:
+        db.rollback()
+        logger.exception("flow3.sync.final_commit_failed")
+
+    return updated

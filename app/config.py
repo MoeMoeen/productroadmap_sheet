@@ -40,6 +40,11 @@ class BacklogSheetConfig(BaseModel):
     tab_name: str = "Backlog"
     product_org: Optional[str] = None  # optional label for multi-org
 
+class ProductOpsConfig(BaseModel):
+    spreadsheet_id: str
+    scoring_inputs_tab: str = "Scoring_Inputs"
+    config_tab: str = "Config"
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # project root folder
 
@@ -72,6 +77,10 @@ class Settings(BaseSettings):
     CENTRAL_BACKLOG: Optional[BacklogSheetConfig] = None
     CENTRAL_BACKLOG_SHEETS: List[BacklogSheetConfig] = Field(default_factory=list)
 
+    # Product Ops workbook (control plane for Product)
+    PRODUCT_OPS: Optional[ProductOpsConfig] = None
+    PRODUCT_OPS_CONFIG_FILE: Optional[str] = None
+
     # Scoring/math/params sheets (global or per org)
     MATH_MODELS_SHEET_ID: Optional[str] = None
     MATH_MODELS_TAB: str = "MathModels"
@@ -97,6 +106,7 @@ class Settings(BaseSettings):
     SCORING_DEFAULT_RICE_CONFIDENCE: float = 0.8
     SCORING_DEFAULT_RICE_EFFORT: float = 1.0
 
+    SCORING_DEFAULT_WSJF_BUSINESS_VALUE: float = 5.0
     SCORING_DEFAULT_WSJF_TIME_CRITICALITY: float = 3.0
     SCORING_DEFAULT_WSJF_RISK_REDUCTION: float = 2.0
     SCORING_DEFAULT_WSJF_JOB_SIZE: float = 1.0
@@ -138,6 +148,34 @@ class Settings(BaseSettings):
             self.INTAKE_SHEETS = [
                 IntakeSheetConfig.model_validate(item) for item in raw
             ]
+
+        return self
+
+    @model_validator(mode="after")
+    def load_product_ops_from_file(self) -> "Settings":
+        """
+        If PRODUCT_OPS_CONFIG_FILE is set, read that JSON file
+        and use it to populate PRODUCT_OPS.
+        """
+        if self.PRODUCT_OPS_CONFIG_FILE:
+            cfg_path = Path(self.PRODUCT_OPS_CONFIG_FILE)
+            if not cfg_path.is_absolute():
+                cfg_path = BASE_DIR / cfg_path
+
+            if not cfg_path.exists():
+                raise FileNotFoundError(
+                    f"PRODUCT_OPS_CONFIG_FILE points to {cfg_path}, but it does not exist."
+                )
+
+            with cfg_path.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+
+            if not isinstance(raw, dict):
+                raise ValueError(
+                    "PRODUCT_OPS config file must contain a JSON object with spreadsheet_id and tab names."
+                )
+
+            self.PRODUCT_OPS = ProductOpsConfig.model_validate(raw)
 
         return self
 

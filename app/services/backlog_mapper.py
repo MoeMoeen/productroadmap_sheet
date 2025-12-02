@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from app.sheets.backlog_reader import BacklogRow  # type: ignore
+from productroadmap_sheet_project.app.sheets.backlog_reader import BacklogRow  # type: ignore
 
 def _to_float(value: Any) -> Optional[float]:
     if value is None:

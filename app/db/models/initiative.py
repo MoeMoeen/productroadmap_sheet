@@ -60,11 +60,24 @@ class Initiative(Base):
     impact_expected = Column(Float, nullable=True)
     impact_high = Column(Float, nullable=True)
     # New: estimated number of users reached / affected (for RICE 'reach')
-    reach_estimated_users = Column(Float, nullable=True)
+    reach_estimated_users = Column(Float, nullable=True)  # DEPRECATED: use rice_reach
+
+    # Framework-specific scoring parameters (unified naming: <framework>_<param>)
+    # RICE framework parameters
+    rice_reach = Column(Float, nullable=True)
+    rice_impact = Column(Float, nullable=True)
+    rice_confidence = Column(Float, nullable=True)
+    rice_effort = Column(Float, nullable=True)
+    
+    # WSJF framework parameters
+    wsjf_business_value = Column(Float, nullable=True)
+    wsjf_time_criticality = Column(Float, nullable=True)
+    wsjf_risk_reduction = Column(Float, nullable=True)
+    wsjf_job_size = Column(Float, nullable=True)
 
     # F. Effort & cost (high-level)
     effort_tshirt_size = Column(String(10), nullable=True)  # XS/S/M/L/XL
-    effort_engineering_days = Column(Float, nullable=True)
+    effort_engineering_days = Column(Float, nullable=True)  # Shared across frameworks
     effort_other_teams_days = Column(Float, nullable=True)
     infra_cost_estimate = Column(Float, nullable=True)
     total_cost_estimate = Column(Float, nullable=True)

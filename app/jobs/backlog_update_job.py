@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings, BacklogSheetConfig
 from app.sheets.client import SheetsClient, get_sheets_service
-from app.sheets.backlog_reader import BacklogReader
+from productroadmap_sheet_project.app.sheets.backlog_reader import BacklogReader
 from app.services.backlog_service import BacklogService
 
 

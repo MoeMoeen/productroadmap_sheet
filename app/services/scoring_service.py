@@ -22,7 +22,7 @@ class ScoringService:
     Responsibilities:
     - Map Initiative fields -> ScoreInputs
     - Delegate to pluggable scoring engines
-    - Update Initiative current scores
+    - Update Initiative current scores in DB
     - Optionally write InitiativeScore history rows
     - Support batch scoring with commit control
     """
@@ -237,36 +237,22 @@ class ScoringService:
             raise ValueError(f"Unsupported framework: {framework}")
 
     def _build_rice_inputs(self, initiative: Initiative) -> ScoreInputs:
-        """Build RICE inputs from Initiative.
+        """Build RICE inputs from Initiative using framework-prefixed fields.
 
         RICE needs: reach, impact, confidence, effort
         """
-        # Reach: could come from traffic estimates, user base, etc.
-        reach_val = cast(Optional[float], initiative.reach_estimated_users)
+        # Use new framework-prefixed fields
+        reach_val = cast(Optional[float], getattr(initiative, "rice_reach", None))
         reach = float(reach_val) if reach_val is not None else settings.SCORING_DEFAULT_RICE_REACH
 
-        # Impact normalization: map impact_expected into categorical 0-3 using thresholds
-        impact_expected_val = cast(Optional[float], initiative.impact_expected)
-        if impact_expected_val is None:
-            impact = settings.SCORING_DEFAULT_RICE_IMPACT
-        else:
-            thresholds = settings.SCORING_RICE_IMPACT_THRESHOLDS
-            # thresholds: [t0, t1, t2]; <=t0->0, <=t1->1, <=t2->2, else 3
-            if impact_expected_val <= thresholds[0]:
-                impact = 0.0
-            elif impact_expected_val <= thresholds[1]:
-                impact = 1.0
-            elif impact_expected_val <= thresholds[2]:
-                impact = 2.0
-            else:
-                impact = 3.0
+        impact_val = cast(Optional[float], getattr(initiative, "rice_impact", None))
+        impact = float(impact_val) if impact_val is not None else settings.SCORING_DEFAULT_RICE_IMPACT
 
-        # Confidence: 0-1 (fallback from config)
-        confidence = settings.SCORING_DEFAULT_RICE_CONFIDENCE
+        confidence_val = cast(Optional[float], getattr(initiative, "rice_confidence", None))
+        confidence = float(confidence_val) if confidence_val is not None else settings.SCORING_DEFAULT_RICE_CONFIDENCE
 
-        # Effort: engineering days
-        eng_days_val = cast(Optional[float], initiative.effort_engineering_days)
-        effort = float(eng_days_val) if eng_days_val is not None else settings.SCORING_DEFAULT_RICE_EFFORT
+        effort_val = cast(Optional[float], getattr(initiative, "rice_effort", None))
+        effort = float(effort_val) if effort_val is not None else settings.SCORING_DEFAULT_RICE_EFFORT
 
         return ScoreInputs(
             reach=reach,
@@ -276,32 +262,22 @@ class ScoringService:
         )
 
     def _build_wsjf_inputs(self, initiative: Initiative) -> ScoreInputs:
-        """Build WSJF inputs from Initiative.
+        """Build WSJF inputs from Initiative using framework-prefixed fields.
 
         WSJF needs: business_value, time_criticality, risk_reduction, job_size
         """
-        # Business value: might map from impact or strategic priority
-        impact_expected_val = cast(Optional[float], initiative.impact_expected)
-        impact_val = float(impact_expected_val) if impact_expected_val is not None else 0.0
-        
-        priority_coef_val = cast(Optional[float], initiative.strategic_priority_coefficient)
-        priority_coef = float(priority_coef_val) if priority_coef_val is not None else 1.0
-        
-        business_value = impact_val * priority_coef
+        # Use new framework-prefixed fields directly
+        business_value_val = cast(Optional[float], getattr(initiative, "wsjf_business_value", None))
+        business_value = float(business_value_val) if business_value_val is not None else settings.SCORING_DEFAULT_WSJF_BUSINESS_VALUE
 
-        # Time criticality: could derive from deadline urgency or time_sensitivity field
-        time_sens_val = cast(Optional[str], initiative.time_sensitivity)
-        time_criticality = 5.0 if time_sens_val else settings.SCORING_DEFAULT_WSJF_TIME_CRITICALITY
+        time_criticality_val = cast(Optional[float], getattr(initiative, "wsjf_time_criticality", None))
+        time_criticality = float(time_criticality_val) if time_criticality_val is not None else settings.SCORING_DEFAULT_WSJF_TIME_CRITICALITY
 
-        # Risk reduction: if we track risk level, map it numerically
-        risk_map = {"low": 1.0, "medium": 3.0, "high": 5.0}
-        risk_level_val = cast(Optional[str], initiative.risk_level)
-        risk_level_str = str(risk_level_val).lower() if risk_level_val else ""
-        risk_reduction = risk_map.get(risk_level_str, settings.SCORING_DEFAULT_WSJF_RISK_REDUCTION)
+        risk_reduction_val = cast(Optional[float], getattr(initiative, "wsjf_risk_reduction", None))
+        risk_reduction = float(risk_reduction_val) if risk_reduction_val is not None else settings.SCORING_DEFAULT_WSJF_RISK_REDUCTION
 
-        # Job size: engineering effort
-        eng_days_val = cast(Optional[float], initiative.effort_engineering_days)
-        job_size = float(eng_days_val) if eng_days_val is not None else settings.SCORING_DEFAULT_WSJF_JOB_SIZE
+        job_size_val = cast(Optional[float], getattr(initiative, "wsjf_job_size", None))
+        job_size = float(job_size_val) if job_size_val is not None else settings.SCORING_DEFAULT_WSJF_JOB_SIZE
 
         return ScoreInputs(
             business_value=business_value,
