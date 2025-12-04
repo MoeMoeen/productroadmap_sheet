@@ -59,8 +59,6 @@ class Initiative(Base):
     impact_low = Column(Float, nullable=True)
     impact_expected = Column(Float, nullable=True)
     impact_high = Column(Float, nullable=True)
-    # New: estimated number of users reached / affected (for RICE 'reach')
-    reach_estimated_users = Column(Float, nullable=True)  # DEPRECATED: use rice_reach
 
     # Framework-specific scoring parameters (unified naming: <framework>_<param>)
     # RICE framework parameters

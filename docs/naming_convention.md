@@ -70,10 +70,6 @@ Some parameters are framework-agnostic and don't need prefixes:
 - `rice_reach`, `rice_impact`, `rice_confidence`, `rice_effort`
 - `wsjf_business_value`, `wsjf_time_criticality`, `wsjf_risk_reduction`, `wsjf_job_size`
 
-### Deprecated fields (v1 - for backwards compatibility):
-- `reach_estimated_users` (use `rice_reach`)
-- `impact_expected` (use `rice_impact`)
-
 ## Example Sheet Structure
 
 Your Product Ops `Scoring_Inputs` tab should have:
