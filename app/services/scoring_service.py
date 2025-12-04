@@ -60,12 +60,22 @@ class ScoringService:
         engine = get_engine(framework)
         result = engine.compute(inputs)
 
-        # Update Initiative current scores
+        # Update Initiative current scores (active framework)
         initiative.value_score = result.value_score  # type: ignore[assignment]
         initiative.effort_score = result.effort_score  # type: ignore[assignment]
         initiative.overall_score = result.overall_score  # type: ignore[assignment]
         initiative.active_scoring_framework = framework.value  # type: ignore[assignment]
         initiative.updated_source = "scoring"  # type: ignore[assignment]
+
+        # Also store per-framework scores (for multi-framework comparison and Product Ops sheet)
+        if framework == ScoringFramework.RICE:
+            initiative.rice_value_score = result.value_score  # type: ignore[assignment]
+            initiative.rice_effort_score = result.effort_score  # type: ignore[assignment]
+            initiative.rice_overall_score = result.overall_score  # type: ignore[assignment]
+        elif framework == ScoringFramework.WSJF:
+            initiative.wsjf_value_score = result.value_score  # type: ignore[assignment]
+            initiative.wsjf_effort_score = result.effort_score  # type: ignore[assignment]
+            initiative.wsjf_overall_score = result.overall_score  # type: ignore[assignment]
 
         # Log warnings
         for warn in result.warnings:
@@ -105,6 +115,40 @@ class ScoringService:
         )
 
         return history_row
+
+    def score_initiative_all_frameworks(
+        self,
+        initiative: Initiative,
+        enable_history: Optional[bool] = None,
+    ) -> None:
+        """Score an initiative using all available frameworks.
+
+        This computes RICE and WSJF scores separately, storing each in its own fields
+        (rice_value_score, rice_effort_score, rice_overall_score, etc.). Useful for:
+        - Product Ops sheet to show all frameworks side-by-side for comparison
+        - Multi-framework dashboards
+        - Allowing PMs to see both scores regardless of active_scoring_framework
+
+        Side effects:
+            - Updates all framework-specific score columns on Initiative
+            - Does NOT change active_scoring_framework or active score fields (value_score, effort_score, overall_score)
+            - Call score_initiative() separately if you want to set the active framework
+        """
+        if enable_history is None:
+            enable_history = settings.SCORING_ENABLE_HISTORY
+
+        for framework in ScoringFramework:
+            try:
+                self.score_initiative(initiative, framework, enable_history=enable_history)
+            except Exception:
+                logger.exception(
+                    "scoring.multi_framework_error",
+                    extra={
+                        "initiative_key": getattr(initiative, "initiative_key", None),
+                        "framework": framework.value,
+                    },
+                )
+                # Continue with other frameworks; don't let one fail the whole pass
 
     def score_all(
         self,
@@ -196,6 +240,73 @@ class ScoringService:
             logger.exception("scoring.final_commit_failed")
 
         return scored
+
+    def score_all_frameworks(
+        self,
+        commit_every: Optional[int] = None,
+    ) -> int:
+        """Score all initiatives using ALL frameworks (both RICE and WSJF).
+
+        This is typically called by Flow 3 after syncing Product Ops inputs:
+        - Reads all initiatives from DB
+        - For each initiative, computes RICE score and stores in rice_* fields
+        - For each initiative, computes WSJF score and stores in wsjf_* fields
+        - Does NOT change active_scoring_framework or active score fields
+        - Allows Product Ops sheet to display all framework scores for comparison
+
+        Returns:
+            Count of initiatives processed (not necessarily scored if errors occurred)
+        """
+        batch_size = commit_every or settings.SCORING_BATCH_COMMIT_EVERY
+
+        stmt = select(Initiative).order_by(Initiative.id)
+        initiatives = self.db.execute(stmt).scalars().all()
+        total = len(initiatives)
+        logger.info(
+            "scoring.batch_all_frameworks_start",
+            extra={"total": total},
+        )
+
+        processed = 0
+        for idx, initiative in enumerate(initiatives, start=1):
+            try:
+                self.score_initiative_all_frameworks(
+                    initiative,
+                    enable_history=settings.SCORING_ENABLE_HISTORY,
+                )
+                processed += 1
+            except Exception:
+                logger.exception(
+                    "scoring.all_frameworks_error",
+                    extra={
+                        "initiative_key": getattr(initiative, "initiative_key", None),
+                    },
+                )
+                # Continue processing
+
+            if batch_size and (idx % batch_size == 0):
+                try:
+                    self.db.commit()
+                    logger.info(
+                        "scoring.batch_all_frameworks_commit",
+                        extra={"count": idx},
+                    )
+                except Exception:
+                    self.db.rollback()
+                    logger.exception("scoring.batch_all_frameworks_commit_failed")
+
+        # Final commit
+        try:
+            self.db.commit()
+            logger.info(
+                "scoring.batch_all_frameworks_done",
+                extra={"processed": processed},
+            )
+        except Exception:
+            self.db.rollback()
+            logger.exception("scoring.batch_all_frameworks_final_commit_failed")
+
+        return processed
 
     def _resolve_framework_for_initiative(
         self,

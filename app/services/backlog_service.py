@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models.initiative import Initiative  # type: ignore
-from productroadmap_sheet_project.app.sheets.backlog_reader import BacklogRow  # type: ignore
+from app.sheets.backlog_reader import BacklogRow  # type: ignore
 from app.config import settings
 from app.utils.header_utils import get_value_by_header_alias
 

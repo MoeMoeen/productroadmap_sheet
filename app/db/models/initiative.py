@@ -100,11 +100,24 @@ class Initiative(Base):
     updated_source = Column(String(20), nullable=True)
     created_by_user_id = Column(String(100), nullable=True)
 
-    # I. Scoring summary (framework-agnostic)
+    # I. Scoring summary (framework-agnostic & per-framework)
+    # Active framework scores (currently selected for display/use)
     active_scoring_framework = Column(String(50), nullable=True)
     value_score = Column(Float, nullable=True)
     effort_score = Column(Float, nullable=True)
     overall_score = Column(Float, nullable=True)
+    
+    # Per-framework scores (stored for all frameworks; allow comparison and switching)
+    # RICE framework scores
+    rice_value_score = Column(Float, nullable=True)
+    rice_effort_score = Column(Float, nullable=True)
+    rice_overall_score = Column(Float, nullable=True)
+    
+    # WSJF framework scores
+    wsjf_value_score = Column(Float, nullable=True)
+    wsjf_effort_score = Column(Float, nullable=True)
+    wsjf_overall_score = Column(Float, nullable=True)
+    
     score_llm_suggested = Column(Boolean, nullable=False, default=False)
     score_approved_by_user = Column(Boolean, nullable=False, default=False)
 

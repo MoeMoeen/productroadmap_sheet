@@ -11,6 +11,7 @@ from app.config import settings
 from app.db.models.initiative import Initiative
 from app.sheets.client import SheetsClient, get_sheets_service
 from app.sheets.scoring_inputs_reader import ScoringInputsReader, ScoringInputsRow
+from app.sheets.productops_writer import write_scores_to_productops_sheet
 
 logger = logging.getLogger(__name__)
 
@@ -161,3 +162,51 @@ def run_flow3_sync_inputs_to_initiatives(
         logger.exception("flow3.sync.final_commit_failed")
 
     return updated
+
+
+def run_flow3_write_scores_to_sheet(
+    db: Session,
+    *,
+    spreadsheet_id: Optional[str] = None,
+    tab_name: Optional[str] = None,
+) -> int:
+    """Flow 3.C Phase 2: Write per-framework scores from DB back to Product Ops sheet.
+
+    This completes the round-trip for Flow 3:
+    1. Flow 3.B: Sync inputs from sheet to DB (active_scoring_framework, rice_reach, etc.)
+    2. Flow 2/3.C.1: Compute scores using ScoringService (stores in rice_value_score, wsjf_value_score)
+    3. Flow 3.C.2 (this function): Write computed scores back to sheet
+
+    Benefits:
+    - PM can see computed scores for audit/validation
+    - Both framework scores visible for comparison
+    - Complete data lineage: inputs → DB → outputs → PM review
+
+    Uses targeted cell updates (efficient):
+    - Finds each initiative's row by initiative_key
+    - Updates only the score columns (rice_value_score, wsjf_overall_score, etc.)
+    - Batch updates via Google Sheets API
+
+    Args:
+        db: Database session
+        spreadsheet_id: Override Product Ops spreadsheet ID
+        tab_name: Override Scoring_Inputs tab name
+
+    Returns:
+        Number of initiatives with scores written to sheet
+    """
+    sheet_id = spreadsheet_id or (settings.PRODUCT_OPS.spreadsheet_id if settings.PRODUCT_OPS else None)
+    tab = tab_name or (settings.PRODUCT_OPS.scoring_inputs_tab if settings.PRODUCT_OPS else None) or "Scoring_Inputs"
+    if not sheet_id:
+        raise ValueError("PRODUCT_OPS is not configured and no spreadsheet_id override was provided.")
+
+    service = get_sheets_service()
+    client = SheetsClient(service)
+
+    try:
+        count = write_scores_to_productops_sheet(db, client, sheet_id, tab)
+        logger.info("flow3.write_scores.done", extra={"updated": count})
+        return count
+    except Exception:
+        logger.exception("flow3.write_scores.failed")
+        raise
