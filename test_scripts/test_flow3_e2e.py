@@ -19,7 +19,6 @@ This ensures PMs can:
 """
 
 import logging
-import sys
 
 from app.db.models.initiative import Initiative
 
@@ -36,7 +35,7 @@ def configure_logging() -> None:
     logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(name)s :: %(message)s")
 
 
-def test_flow3_e2e() -> int:
+def test_flow3_e2e() -> None:
     """Run full Flow 3 pipeline and validate state at each step."""
     logger = logging.getLogger(__name__)
 
@@ -50,7 +49,7 @@ def test_flow3_e2e() -> int:
         logger.info(f"Previewed {len(rows)} scoring input rows")
         if len(rows) == 0:
             logger.warning("No rows to sync; test is inconclusive")
-            return 0
+            return
 
         # Step 1: Flow 3.B - Sync Product Ops sheet -> DB
         logger.info("Step 1: Flow 3.B - Sync Product Ops inputs to DB (strong sync)")
@@ -113,22 +112,22 @@ def test_flow3_e2e() -> int:
         if len(both_set) > 0:
             logger.info("✓ SUCCESS: Multi-framework scores populated")
             logger.info("=== FLOW 3 E2E TEST PASSED ===")
-            return 0
+            assert True, "Multi-framework scores populated"
         else:
             logger.warning("⚠ PARTIAL: No initiatives have both framework scores (may be expected if only one framework used)")
             logger.info("=== FLOW 3 E2E TEST COMPLETE (PARTIAL SUCCESS) ===")
-            return 0
+            assert True, "Partial success (expected if only one framework used)"
 
     except KeyboardInterrupt:
         logger.warning("Test interrupted")
-        return 130
+        assert False, "Test interrupted"
     except Exception:
         logger.exception("Test failed with exception")
-        return 1
+        assert False, "Test failed with exception"
     finally:
         db.close()
 
 
 if __name__ == "__main__":
     configure_logging()
-    sys.exit(test_flow3_e2e())
+    test_flow3_e2e()

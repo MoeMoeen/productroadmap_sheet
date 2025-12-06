@@ -116,6 +116,70 @@ class ScoringService:
 
         return history_row
 
+    def _compute_framework_scores_only(
+        self,
+        initiative: Initiative,
+        framework: ScoringFramework,
+        enable_history: bool,
+    ) -> Optional[InitiativeScore]:
+        """Compute per-framework scores without touching active fields.
+
+        This is used by Flow 3 to populate the per-framework score columns
+        (rice_* and wsjf_*). It intentionally avoids mutating the active
+        scoring fields so it cannot override the framework chosen elsewhere
+        (e.g., Product Ops decision or Flow 2 run).
+        """
+
+        inputs = self._build_score_inputs(initiative, framework)
+        engine = get_engine(framework)
+        result = engine.compute(inputs)
+
+        if framework == ScoringFramework.RICE:
+            initiative.rice_value_score = result.value_score  # type: ignore[assignment]
+            initiative.rice_effort_score = result.effort_score  # type: ignore[assignment]
+            initiative.rice_overall_score = result.overall_score  # type: ignore[assignment]
+        elif framework == ScoringFramework.WSJF:
+            initiative.wsjf_value_score = result.value_score  # type: ignore[assignment]
+            initiative.wsjf_effort_score = result.effort_score  # type: ignore[assignment]
+            initiative.wsjf_overall_score = result.overall_score  # type: ignore[assignment]
+
+        for warn in result.warnings:
+            logger.warning(
+                "scoring.warning",
+                extra={
+                    "initiative_key": initiative.initiative_key,
+                    "framework": framework.value,
+                    "warning": warn,
+                },
+            )
+
+        history_row: Optional[InitiativeScore] = None
+        if enable_history:
+            history_row = InitiativeScore(
+                initiative_id=initiative.id,
+                framework_name=framework.value,
+                value_score=result.value_score,
+                effort_score=result.effort_score,
+                overall_score=result.overall_score,
+                inputs_json=inputs.model_dump(),
+                components_json=result.components,
+                warnings_json=result.warnings,
+                llm_suggested=False,
+                approved_by_user=False,
+            )
+            self.db.add(history_row)
+
+        logger.debug(
+            "scoring.computed_per_framework",
+            extra={
+                "initiative_key": initiative.initiative_key,
+                "framework": framework.value,
+                "overall_score": result.overall_score,
+            },
+        )
+
+        return history_row
+
     def score_initiative_all_frameworks(
         self,
         initiative: Initiative,
@@ -139,7 +203,11 @@ class ScoringService:
 
         for framework in ScoringFramework:
             try:
-                self.score_initiative(initiative, framework, enable_history=enable_history)
+                self._compute_framework_scores_only(
+                    initiative,
+                    framework,
+                    enable_history=enable_history,
+                )
             except Exception:
                 logger.exception(
                     "scoring.multi_framework_error",
