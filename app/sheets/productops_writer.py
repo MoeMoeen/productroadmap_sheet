@@ -55,7 +55,7 @@ def write_scores_to_productops_sheet(
     - Reads per-framework scores from DB (rice_value_score, wsjf_overall_score, etc.)
     - Finds each initiative's row in the sheet by initiative_key
     - Updates ONLY the score columns (doesn't touch other columns)
-    - Uses batchUpdate for efficiency (multiple updates in single API call)
+    - Uses single batch_update_values API call for efficiency (all cells in one request)
 
     Args:
         db: Database session
@@ -67,7 +67,7 @@ def write_scores_to_productops_sheet(
         Number of initiatives with scores updated in sheet
 
     Side effects:
-        - Updates Product Ops sheet cells for score columns
+        - Updates Product Ops sheet cells for score columns via single batch API call
         - Logs progress and any missing initiatives
     """
     if not spreadsheet_id:
@@ -105,8 +105,9 @@ def write_scores_to_productops_sheet(
         extra={"count": len(initiatives), "score_columns": len(col_map) - 1},
     )
 
-    # Step 4: Build targeted cell updates using update_values for each cell
-    # Google Sheets API: update_values(range, values) where range is A1 notation like "Sheet!M2:M2"
+    # Step 4: Build batch update with all cell updates
+    # Collect all updates into a single batch request for efficiency
+    batch_updates: List[Dict[str, Any]] = []
     updated_initiatives: set = set()
 
     for row_idx, row_data in enumerate(values[1:], start=2):  # Start at row 2 (row 1 = headers)
@@ -127,7 +128,7 @@ def write_scores_to_productops_sheet(
             )
             continue
 
-        # For each score column, update if value exists
+        # For each score column, collect update if value exists
         for field, col_idx in col_map.items():
             if field == "initiative_key":
                 continue
@@ -137,21 +138,37 @@ def write_scores_to_productops_sheet(
             if score_value is None:
                 continue  # Don't update empty scores (leave blank)
 
-            # Update this single cell
+            # Add to batch
             cell_range = _cell_range_for_update(tab_name, col_idx, row_idx)
-            try:
-                client.update_values(spreadsheet_id, cell_range, [[score_value]])
-                updated_initiatives.add(key)
-            except Exception:
-                logger.exception(
-                    "productops_writer.cell_update_failed",
-                    extra={"field": field, "row": row_idx, "range": cell_range},
-                )
+            batch_updates.append({
+                "range": cell_range,
+                "values": [[score_value]]
+            })
+            updated_initiatives.add(key)
 
-    logger.info(
-        "productops_writer.done",
-        extra={"updated_initiatives": len(updated_initiatives), "total_rows": len(values) - 1},
-    )
+    # Step 5: Execute single batch update if we have any updates
+    if batch_updates:
+        try:
+            client.batch_update_values(spreadsheet_id, batch_updates)
+            logger.info(
+                "productops_writer.done",
+                extra={
+                    "updated_initiatives": len(updated_initiatives),
+                    "total_cells_updated": len(batch_updates),
+                    "total_rows": len(values) - 1,
+                },
+            )
+        except Exception:
+            logger.exception(
+                "productops_writer.batch_update_failed",
+                extra={"num_updates": len(batch_updates)},
+            )
+            return 0
+    else:
+        logger.info(
+            "productops_writer.no_updates",
+            extra={"total_rows": len(values) - 1},
+        )
 
     return len(updated_initiatives)
 

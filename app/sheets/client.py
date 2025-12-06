@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any, Dict, List
 
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
@@ -125,6 +125,34 @@ class SheetsClient:
         body = {"requests": requests}
         (
             self.service.spreadsheets()
+            .batchUpdate(spreadsheetId=spreadsheet_id, body=body)
+            .execute()
+        )
+
+    def batch_update_values(
+        self,
+        spreadsheet_id: str,
+        data: List[Dict[str, Any]],
+        value_input_option: str = "USER_ENTERED",
+    ) -> None:
+        """Batch update multiple ranges with values in a single API call.
+
+        Args:
+            spreadsheet_id: The spreadsheet ID
+            data: List of dicts with keys 'range' and 'values'
+                  e.g., [{"range": "Sheet1!A1", "values": [[1]]}, ...]
+            value_input_option: How to interpret input values (default: USER_ENTERED)
+        """
+        if not data:
+            return
+
+        body = {
+            "valueInputOption": value_input_option,
+            "data": data,
+        }
+        (
+            self.service.spreadsheets()
+            .values()
             .batchUpdate(spreadsheetId=spreadsheet_id, body=body)
             .execute()
         )
