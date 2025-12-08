@@ -463,36 +463,23 @@ Here’s a refined step-by-step plan reflecting everything we’ve aligned on:
 
 1. **Extend ScoringService or add helper to accept explicit `ScoreInputs`**
 
-   * Option A: add `score_initiative_with_inputs(initiative, framework, inputs)` that:
-
-     * Uses `inputs` directly.
-     * Still updates `Initiative` & `InitiativeScore` as now.
-   * Option B: keep existing `score_initiative` and just ensure Initiative fields are up-to-date (since strong sync already did that).
-
-   With strong sync, **Option B is enough**:
-
-   * Flow 3:
-
-     * Sync sheet values → Initiative fields.
-     * Call existing `score_initiative(initiative, framework, ...)`.
-   * The merge behavior is: sheet wrote into Initiative; scoring uses Initiative.
+   * The `score_initiative_all_frameworks` method allows scoring an initiative using all available frameworks without changing the active scoring framework.
+   * The `score_all_frameworks` method processes all initiatives in the database, computing scores for both RICE and WSJF frameworks.
 
 2. **Implement Flow 3 scoring job from Product Ops**
 
    In `flow3_product_ops_job.py`:
 
-   ````python
+   ```python
    def run_flow3_scoring_from_sheet(db: Session) -> None:
        # Precondition: strong sync already done (or we do both in this job)
        # 1. Read scoring inputs (to know which frameworks have inputs)
        # 2. For each row:
        #    - Get Initiative
        #    - For each framework that has any non-empty inputs:
-       #         - Decide: do we store multiple framework scores in InitiativeScore only?
-       #         - Or also set Initiative.active_scoring_framework when appropriate
-       #    - Call ScoringService.score_initiative(initiative, framework)
+       #         - Call ScoringService.score_initiative(initiative, framework)
        # 3. Commit
-       ```
+   ```
 
    Key behavior:
 
@@ -500,8 +487,6 @@ Here’s a refined step-by-step plan reflecting everything we’ve aligned on:
    - Multiple `InitiativeScore` rows are created (one per framework).
    - On the Product Ops sheet:
      - You can write the per-framework outputs into `RICE: Overall Score`, `WSJF: Overall Score`, etc.
-
-   ````
 
 3. **Write framework-specific outputs back to Scoring_Inputs tab**
 

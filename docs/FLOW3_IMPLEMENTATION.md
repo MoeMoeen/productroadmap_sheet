@@ -6,12 +6,34 @@
 
 ## Overview
 
-Flow 3 establishes the **Product Ops sheet as a control plane** for scoring decisions. PMs use the Product Ops sheet to:
-1. Input scoring parameters (rice_reach, wsjf_job_size, etc.)
-2. Select active scoring framework per initiative
-3. View computed scores for comparison across frameworks
+Flow 3 integrates the Product Ops workbook with the scoring system, allowing for efficient scoring of initiatives using multiple frameworks (RICE and WSJF) simultaneously.
 
-This document describes the complete Flow 3 implementation, fixing the critical data sync gap identified during testing.
+### Key Components
+
+1. **Scoring Inputs Tab**
+   - The `Scoring_Inputs` tab allows product managers to input parameters for both RICE and WSJF frameworks.
+   - Each initiative can have multiple framework scores computed without altering the active scoring framework.
+
+2. **ScoringService Enhancements**
+   - The `score_initiative_all_frameworks` method computes scores for all frameworks for a single initiative.
+   - The `score_all_frameworks` method processes all initiatives, allowing for batch scoring across both frameworks.
+
+3. **Strong Sync Logic**
+   - The strong sync mechanism ensures that inputs from the `Scoring_Inputs` tab are reflected in the corresponding initiative fields in the database.
+
+4. **Config Tab**
+   - A new `Config` tab allows product managers to adjust scoring configurations without modifying the codebase.
+
+### Implementation Steps
+
+1. **Create Product Ops Workbook**
+   - Set up the `Product Ops Workbook` with necessary tabs.
+
+2. **Implement Scoring Logic**
+   - Use the new scoring methods to compute and store scores based on inputs from the `Scoring_Inputs` tab.
+
+3. **Testing and Validation**
+   - Ensure that the scoring logic works as intended and that the outputs are correctly reflected in the Product Ops sheet.
 
 ---
 
