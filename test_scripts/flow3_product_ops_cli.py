@@ -21,21 +21,21 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Flow 3: Product Ops Scoring Inputs and Multi-Framework Support",
         epilog="""
-Examples:
-  # Preview inputs from Product Ops sheet
-  %(prog)s --preview --log-level DEBUG
+        Examples:
+        # Preview inputs from Product Ops sheet
+        %(prog)s --preview --log-level DEBUG
 
-  # Sync inputs from sheet to DB (strong sync)
-  %(prog)s --sync --batch-size 100
+        # Sync inputs from sheet to DB (strong sync)
+        %(prog)s --sync --batch-size 100
 
-  # Compute RICE and WSJF scores for all initiatives (side-by-side comparison)
-  %(prog)s --compute-all --batch-size 100
+        # Compute RICE and WSJF scores for all initiatives (side-by-side comparison)
+        %(prog)s --compute-all --batch-size 100
 
-  # Write per-framework scores back to Product Ops sheet
-  %(prog)s --write-scores
+        # Write per-framework scores back to Product Ops sheet
+        %(prog)s --write-scores
 
-  # Full pipeline (sync inputs, compute all frameworks, write scores)
-  %(prog)s --sync && %(prog)s --compute-all && %(prog)s --write-scores
+        # Full pipeline (sync inputs, compute all frameworks, write scores)
+        %(prog)s --sync && %(prog)s --compute-all && %(prog)s --write-scores
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

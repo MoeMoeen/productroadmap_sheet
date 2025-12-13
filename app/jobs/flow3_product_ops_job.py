@@ -13,7 +13,48 @@ from app.sheets.client import SheetsClient, get_sheets_service
 from app.sheets.scoring_inputs_reader import ScoringInputsReader, ScoringInputsRow
 from app.sheets.productops_writer import write_scores_to_productops_sheet
 
+
+class ScoringInputsFormatter(logging.Formatter):
+    """Custom formatter that includes scoring-specific fields when present."""
+    
+    def format(self, record: logging.LogRecord) -> str:
+        # Build base message
+        base = super().format(record)
+        
+        # Add scoring fields if present (using getattr for dynamic attributes)
+        extra_parts = []
+        initiative_key = getattr(record, 'initiative_key', None)
+        if initiative_key:
+            extra_parts.append(f"initiative={initiative_key}")
+        
+        active_framework = getattr(record, 'active_framework', None)
+        if active_framework is not None:
+            extra_parts.append(f"active_framework={active_framework}")
+        
+        frameworks = getattr(record, 'frameworks', None)
+        if frameworks is not None:
+            extra_parts.append(f"frameworks={frameworks}")
+        
+        count = getattr(record, 'count', None)
+        if count is not None:
+            extra_parts.append(f"count={count}")
+        
+        updated = getattr(record, 'updated', None)
+        if updated is not None:
+            extra_parts.append(f"updated={updated}")
+        
+        if extra_parts:
+            return f"{base} | {' '.join(extra_parts)}"
+        return base
+
+
+# Only set up handler if not already configured (avoid duplicate handlers)
 logger = logging.getLogger(__name__)
+if not logger.handlers:
+    formatter = ScoringInputsFormatter("%(asctime)s [%(levelname)s] %(name)s :: %(message)s")
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
 
 
 def _get_product_ops_reader(spreadsheet_id: Optional[str] = None, tab_name: Optional[str] = None) -> ScoringInputsReader:
@@ -31,7 +72,7 @@ def run_flow3_preview_inputs(*, spreadsheet_id: Optional[str] = None, tab_name: 
     reader = _get_product_ops_reader(spreadsheet_id, tab_name)
     rows = reader.read()
     logger.info("flow3.preview.rows", extra={"count": len(rows)})
-    sample = rows[:3]
+    sample = rows
     for r in sample:
         logger.debug(
             "flow3.preview.row",

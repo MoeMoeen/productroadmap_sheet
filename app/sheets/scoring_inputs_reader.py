@@ -56,7 +56,7 @@ class ScoringInputsReader:
 
             if lower in {"initiative key", "initiative_key"}:
                 generic = "initiative_key"
-            elif lower in {"active scoring framework", "active_framework", "framework"}:
+            elif lower in {"active scoring framework", "active_scoring_framework", "active_framework", "framework"}:
                 generic = "active_scoring_framework"
             elif lower in {"use math model", "use_math_model"}:
                 generic = "use_math_model"

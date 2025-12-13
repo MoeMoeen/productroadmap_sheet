@@ -1,4 +1,8 @@
 # productroadmap_sheet_project/app/services/scoring/registry.py
+"""
+Registry for scoring frameworks and their engines. This module defines available scoring frameworks,
+their required input fields, and provides access to their scoring engines.
+"""
 
 from __future__ import annotations
 

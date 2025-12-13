@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List
+import logging
 
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def get_sheets_service():
@@ -146,14 +149,30 @@ class SheetsClient:
         if not data:
             return
 
+        logger.debug(
+            "sheets_client.batch_update_values",
+            extra={
+                "num_updates": len(data),
+                "first_update": str(data[0]) if data else None,
+            },
+        )
+
         body = {
             "valueInputOption": value_input_option,
             "data": data,
         }
-        (
+        result = (
             self.service.spreadsheets()
             .values()
             .batchUpdate(spreadsheetId=spreadsheet_id, body=body)
             .execute()
+        )
+        
+        logger.debug(
+            "sheets_client.batch_update_values_result",
+            extra={
+                "updated_cells": result.get("totalUpdatedCells"),
+                "updated_ranges": result.get("totalUpdatedRanges"),
+            },
         )
     

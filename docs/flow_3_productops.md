@@ -554,13 +554,310 @@ Same pattern as before:
 
 ---
 
-If you like, next concrete step would be:
+## 🧩 Flow 3 Implementation Status
 
-👉 Start with **Phase 3.A + 3.B**:
+### **Phase 3.A – Product Ops Workbook Plumbing** ✅ COMPLETE
 
-* Create Product Ops workbook.
-* Wire `PRODUCT_OPS` into config.
-* Implement `ScoringInputsReader`.
-* Implement strong sync job: read `Scoring_Inputs` → write to Initiative fields (with empty ⇒ `None` semantics).
+**Goal:** Introduce the Product Ops workbook and basic wiring.
 
-Once that’s in, we can plug in scoring and sheet outputs on top.
+**Implemented:**
+1. ✅ **Product Ops Google Sheet created**
+   - Spreadsheet ID: `1zfxk-qQram2stUWYytiXapOeVh3yNulb32QYVJrOGt8`
+   - Tab: `Scoring_Inputs`
+
+2. ✅ **Service account access configured**
+   - Sheet shared with service account
+   - Read/write permissions verified
+
+3. ✅ **Configuration in place**
+   - `product_ops_config.json` created with:
+     ```json
+     {
+       "spreadsheet_id": "1zfxk-qQram2stUWYytiXapOeVh3yNulb32QYVJrOGt8",
+       "scoring_inputs_tab": "Scoring_Inputs",
+       "config_tab": "Config"
+     }
+     ```
+   - Environment variable: `PRODUCT_OPS_CONFIG_FILE=product_ops_config.json`
+
+4. ✅ **`Scoring_Inputs` schema implemented**
+   - Headers support both formats:
+     - Namespaced: `RICE: Reach`, `WSJF: Business Value`
+     - Underscore: `rice_reach`, `wsjf_business_value`
+   - Input columns (PM-editable):
+     - `initiative_key`
+     - `active_scoring_framework`
+     - `use_math_model`
+     - `rice_reach`, `rice_impact`, `rice_confidence`, `rice_effort`
+     - `wsjf_business_value`, `wsjf_time_criticality`, `wsjf_risk_reduction`, `wsjf_job_size`
+     - `strategic_priority_coefficient`
+   - Output columns (system-populated):
+     - `rice_value_score`, `rice_effort_score`, `rice_overall_score`
+     - `wsjf_value_score`, `wsjf_effort_score`, `wsjf_overall_score`
+
+5. ✅ **`ScoringInputsReader` implemented**
+   - File: `app/sheets/scoring_inputs_reader.py`
+   - Features:
+     - Flexible header parsing (handles both `RICE: Reach` and `rice_reach` formats)
+     - Per-row parsing into framework-specific inputs
+     - Returns structured data: `{initiative_key, active_framework, rice_{params}, wsjf_{params}}`
+
+6. ✅ **Flow 3 job implemented**
+   - File: `app/jobs/flow3_product_ops_job.py`
+   - Commands:
+     - `--preview`: Validate sheet inputs
+     - `--sync`: Strong sync sheet → DB
+     - `--compute-all`: Compute RICE & WSJF for all initiatives
+     - `--write-scores`: Write per-framework scores back to sheet
+
+7. ✅ **CLI implemented**
+   - File: `test_scripts/flow3_product_ops_cli.py`
+   - Custom logging formatter for detailed per-row tracking
+
+---
+
+### **Phase 3.B – Strong Sync of Scoring Inputs** ✅ COMPLETE
+
+**Goal:** Sheet becomes the master for framework inputs; Initiative fields mirror those inputs.
+
+**Implemented:**
+1. ✅ **Field mapping defined and implemented**
+   - Sheet column → DB field mapping:
+     - `rice_reach` → `Initiative.rice_reach`
+     - `rice_impact` → `Initiative.rice_impact`
+     - `rice_confidence` → `Initiative.rice_confidence`
+     - `rice_effort` → `Initiative.rice_effort`
+     - `wsjf_business_value` → `Initiative.wsjf_business_value`
+     - `wsjf_time_criticality` → `Initiative.wsjf_time_criticality`
+     - `wsjf_risk_reduction` → `Initiative.wsjf_risk_reduction`
+     - `wsjf_job_size` → `Initiative.wsjf_job_size`
+     - `active_scoring_framework` → `Initiative.active_scoring_framework`
+     - `strategic_priority_coefficient` → `Initiative.strategic_priority_coefficient`
+
+2. ✅ **Strong sync logic implemented**
+   - Function: `run_flow3_sync_inputs_to_initiatives(db, commit_every, spreadsheet_id, tab_name)`
+   - Behavior:
+     - Non-empty cell in sheet → explicit value in Initiative
+     - Empty cell in sheet → `None` in Initiative (clears old values)
+     - Sets `updated_source = 'product_ops'` for audit trail
+   - Batch commit support for performance
+
+3. ✅ **Tested and validated**
+   - Successfully synced 10 initiatives from Product Ops sheet
+   - Verified field values match sheet inputs exactly
+   - Confirmed empty cells clear DB values (strong sync enforcement)
+
+---
+
+### **Phase 3.C – Multi-Framework Scoring** ✅ COMPLETE
+
+**Goal:** Compute and store RICE and WSJF scores side-by-side for comparison.
+
+**Implemented:**
+1. ✅ **Per-framework score storage in DB**
+   - Migration: `20251204_per_fw_scores.py`
+   - New DB columns on `Initiative`:
+     - `rice_value_score`, `rice_effort_score`, `rice_overall_score`
+     - `wsjf_value_score`, `wsjf_effort_score`, `wsjf_overall_score`
+
+2. ✅ **ScoringService enhancements**
+   - `_compute_framework_scores_only(initiative, framework, enable_history)`:
+     - Computes scores for a specific framework
+     - Updates **only** per-framework score fields
+     - **Does NOT** change `active_scoring_framework` or active score fields
+     - Prevents side effects during multi-framework scoring
+   
+   - `score_initiative_all_frameworks(initiative, enable_history)`:
+     - Scores one initiative with **all** frameworks (RICE + WSJF)
+     - Stores results in per-framework fields
+     - Used by Flow 3 for side-by-side comparison
+   
+   - `score_all_frameworks(commit_every)`:
+     - Batch version: processes all initiatives
+     - Computes both RICE and WSJF for every initiative
+     - Efficient batch commits
+
+3. ✅ **Product Ops writer implemented**
+   - File: `app/sheets/productops_writer.py`
+   - Function: `write_scores_to_productops_sheet(db, client, spreadsheet_id, tab_name)`
+   - Features:
+     - Reads all initiatives from DB
+     - Maps score columns in sheet header
+     - Builds batch update payload for all score cells
+     - Uses `SheetsClient.batch_update_values()` for efficient single API call
+     - Updates columns: `rice_value_score`, `rice_effort_score`, `rice_overall_score`, `wsjf_value_score`, `wsjf_effort_score`, `wsjf_overall_score`
+
+4. ✅ **Tested and validated**
+   - Successfully computed RICE and WSJF scores for 10+ initiatives
+   - Verified per-framework scores stored correctly in DB
+   - Confirmed scores written back to Product Ops sheet
+   - Verified active scoring framework remains unchanged during compute-all
+
+---
+
+### **Phase 3.D – Config Tab** ⏳ PLANNED (Not Implemented)
+
+**Goal:** Move product-owned config knobs from `config.py` to Product Ops `Config` tab.
+
+**Planned features:**
+1. ⏳ **Config tab schema**
+   - Headers: `Key`, `Value`, `Type`, `Scope`, `Description`
+   - Example configs:
+     - `SCORING_DEFAULT_FRAMEWORK`: Default framework when none set
+     - `SCORING_BATCH_COMMIT_EVERY`: Batch commit size
+     - `USE_AI_SUGGESTED_SCORES`: Enable/disable AI scoring
+
+2. ⏳ **ConfigReader implementation**
+   - Read `Config` tab into `dict[str, str]`
+   - Merge with code-based defaults
+
+3. ⏳ **Runtime config service**
+   - Priority: CLI override > Sheet config > Code defaults
+   - Used by Flow 2 and Flow 3 jobs
+
+**Why not implemented yet:**
+- Phase 3.A-C provide core functionality
+- Config extraction should be driven by actual usage pain points
+- Better to consolidate and test 3.A-C first
+
+**Next steps for 3.D:**
+- Document which configs PMs actually need to change
+- Implement `ConfigReader`
+- Add runtime config merging logic
+- Test with Flow 2 and Flow 3
+
+---
+
+### **Phase 3.E – Simulations & Optimization** 📋 FUTURE
+
+**Goal:** Enable scenario planning and optimization.
+
+**Planned features:**
+- Monte Carlo simulations for risk/uncertainty
+- Capacity planning and allocation
+- Multi-objective optimization (value vs. cost vs. risk)
+- Scenario tabs for "what-if" analysis
+
+**Dependencies:**
+- Stable Phase 3.A-C pipeline
+- Production usage and feedback
+- Clear PM requirements for simulation/optimization needs
+
+---
+
+## 🎯 Current System State (As of 2025-12-09)
+
+### ✅ What Works End-to-End
+
+**Full Flow 3 Pipeline:**
+```bash
+# 1. Preview inputs from Product Ops sheet
+uv run python -m test_scripts.flow3_product_ops_cli --preview
+
+# 2. Sync inputs from sheet to DB (strong sync)
+uv run python -m test_scripts.flow3_product_ops_cli --sync
+
+# 3. Compute RICE and WSJF scores for all initiatives
+uv run python -m test_scripts.flow3_product_ops_cli --compute-all
+
+# 4. Write per-framework scores back to Product Ops sheet
+uv run python -m test_scripts.flow3_product_ops_cli --write-scores
+```
+
+**Integration with Flow 1 (Backlog Sync):**
+- Active scores from DB → Central Backlog sheet
+- PMs can switch `active_scoring_framework` on Central Backlog
+- Backlog displays the active framework's scores
+
+**Integration with Flow 2 (Active Scoring):**
+- Respects `active_scoring_framework` from Product Ops sheet
+- Updates active score fields (`value_score`, `effort_score`, `overall_score`)
+- Does NOT interfere with per-framework scores
+
+### 📊 Data Flow Architecture
+
+```
+Product Ops Sheet (Scoring_Inputs)
+         ↓
+    [Flow 3 Sync]
+         ↓
+    Initiative DB fields (rice_*, wsjf_*, active_scoring_framework)
+         ↓
+    [Flow 3 Compute All] → Per-framework scores (rice_*_score, wsjf_*_score)
+         ↓                          ↓
+    [Flow 3 Write]          [Flow 2 Active Scoring] → Active scores (value_score, overall_score)
+         ↓                          ↓
+Product Ops Sheet (outputs)    Central Backlog Sheet (active scores only)
+```
+
+### 🔧 Key Design Decisions
+
+1. **Strong Sync Enforcement**
+   - Product Ops sheet is source of truth for inputs
+   - Empty cells in sheet → `None` in DB (clears stale data)
+   - No silent fallbacks or hidden defaults
+
+2. **Per-Framework Score Isolation**
+   - `score_all_frameworks()` only touches per-framework fields
+   - Active scoring framework selection remains independent
+   - PMs can compare RICE vs. WSJF without losing data
+
+3. **Separation of Concerns**
+   - Flow 3: Product Ops experimentation (all frameworks)
+   - Flow 2: Active scoring decision (one framework)
+   - Flow 1: Backlog presentation (active framework only)
+
+4. **Efficient Batch Operations**
+   - Single API call for writing all scores (`batch_update_values`)
+   - Batch commits every N initiatives (configurable)
+   - Targeted cell updates (no full sheet regeneration)
+
+---
+
+## 📝 Next Steps
+
+### Immediate (Recommended)
+1. ✅ **Test Flow 1 integration** (verify Central Backlog sync)
+2. ✅ **Test framework switching** (change active framework, verify scores update)
+3. ⏳ **Document PM user guide** (how to use Product Ops sheet)
+4. ⏳ **Add integration tests** (full Flow 3 pipeline)
+
+### Short-term (When Needed)
+1. ⏳ **Implement Phase 3.D** (Config tab) if config changes become frequent
+2. ⏳ **Add validation rules** (e.g., "Reach must be > 0")
+3. ⏳ **Add error recovery** (retry logic, partial failures)
+
+### Long-term (Future)
+1. 📋 **Phase 3.E** (Simulations & Optimization)
+2. 📋 **Math Model scoring framework** (custom formulas)
+3. 📋 **AI-assisted parameter suggestions**
+
+---
+
+## 🐛 Known Issues / Limitations
+
+1. **`---` separator rows in Product Ops sheet**
+   - Warning logged but harmless
+   - Skipped during sync (no DB entry exists)
+   - Consider: Add validation to reject invalid initiative keys
+
+2. **No conflict resolution for concurrent edits**
+   - Last write wins (sheet → DB)
+   - Consider: Add timestamp/version tracking
+
+3. **No rollback mechanism**
+   - Strong sync is irreversible without manual DB restore
+   - Consider: Add "preview mode" that shows diff before committing
+
+4. **No input validation**
+   - Accepts any numeric values (could be negative, zero, etc.)
+   - Consider: Add validation rules per parameter
+
+---
+The Complete Flow:
+
+1. Flow 3 --sync          → Update initiative inputs in DB
+2. Flow 3 --compute-all   → Compute RICE + WSJF scores (per-framework fields)
+3. Flow 3 --write-scores  → Write per-framework scores to Product Ops
+4. Flow 2 --all           → Update ACTIVE scores from per-framework scores ⬅️ THIS WAS MISSING
+5. Flow 1 (backlog sync)  → Write active scores to Central Backlog
