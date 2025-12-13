@@ -861,3 +861,27 @@ The Complete Flow:
 3. Flow 3 --write-scores  → Write per-framework scores to Product Ops
 4. Flow 2 --all           → Update ACTIVE scores from per-framework scores ⬅️ THIS WAS MISSING
 5. Flow 1 (backlog sync)  → Write active scores to Central Backlog
+
+---
+
+## Authoritative Propagation Path (Concise)
+
+1) Product Ops changes → Flow 3 `--sync` (Sheet → DB)
+2) Flow 3 `--compute-all` (per-framework only: `rice_value_score`, `rice_overall_score`, `wsjf_value_score`, `wsjf_overall_score`)
+3) Flow 3 `--write-scores` (DB → Product Ops sheet, per-framework columns)
+4) Flow 2 `--all` (Activate: copy per-framework based on `active_scoring_framework` into `value_score`, `overall_score`, and `effort_score` when applicable)
+5) Flow 1 Backlog Sync (DB → Central Backlog)
+
+Notes
+
+- Flow 3 does NOT update `value_score`/`overall_score`; Flow 2 is REQUIRED to activate RICE/WSJF into active fields.
+- Header normalization supports underscore variants (e.g., `active_scoring_framework`).
+
+## Framework Switching: Central Backlog Test Case
+
+Scenario: Change `active_scoring_framework` on Central Backlog (e.g., WSJF → RICE).
+
+Steps:
+- Backlog Update (Sheet → DB): run `run_backlog_update` (or CLI) to pull the change into DB.
+- Flow 2 `--all`: update `value_score`/`overall_score` from the chosen per-framework fields.
+- Backlog Sync: push updated active scores back to Central Backlog (DB → Sheet).

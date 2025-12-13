@@ -148,6 +148,8 @@ These are the numbers the optimizer eventually cares about.
 
 The details of scoring (RICE inputs, math model formula etc.) will live in separate tables (InitiativeScore, InitiativeMathModel) but the summary sits here.
 
+Operational note: Active scores (`value_score`, `overall_score`, and `effort_score` when applicable) are derived from per-framework fields by Flow 2 based on `active_scoring_framework`. Per-framework fields include `rice_value_score`, `rice_overall_score`, `wsjf_value_score`, `wsjf_overall_score`. Flow 3 computes per-framework scores; Flow 2 activates them into the active fields.
+
 ---
 
 ### J. LLM & math-model hooks (high-level on Initiative)
@@ -160,6 +162,7 @@ The details of scoring (RICE inputs, math model formula etc.) will live in separ
 
 
 The actual math model (formula, parameters, assumptions) sits in a separate entity, but we link it from here.
+See planned `InitiativeMathModel` entity (to be defined in modeling docs) for formula and parameter storage.
 
 ---
 
@@ -186,15 +189,17 @@ If product edits the score cells on the sheet:
 
 We treat those as final values.
 
-We might set a flag score_overridden_by_product = True.
+We might set a flag `score_overridden_by_product = True` (planned/optional).
 
-Optimizer uses the final values.
+Optimizer uses the final `value_score` and `overall_score` when overridden.
 
 This gives us:
 
 Traceability: we still know what the models suggested.
 
 Human control: product owns the final call.
+
+Use consistent names: “Central Backlog” for the consolidated sheet, and “Product Ops” for the workbook with scoring inputs. Explicit per-framework fields referenced: `rice_value_score`, `rice_overall_score`, `wsjf_value_score`, `wsjf_overall_score`.
 
 ## 2. Scoring framework factory & value/effort/overall
 

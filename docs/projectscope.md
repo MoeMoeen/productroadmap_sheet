@@ -99,10 +99,14 @@ Ultimately, the platform becomes the **single source of truth** for product deci
 
 1. **Departments submit initiatives** → Intake to central backlog.
 2. **Validation service** flags missing fields + auto-suggests improvements.
-3. **PM chooses scoring framework** (e.g., RICE, MathModel).
-4. **Backend seeds required parameters** → Params sheet.
-5. **LLM proposes formulas** for math models → PM approves in MathModels sheet.
-6. **PM and stakeholders fill/approve parameter values**.
+3. **PM chooses scoring framework** (e.g., RICE, WSJF, MathModel) in Central Backlog.
+4. **Flow 3 – Product Ops Scoring** (optional for multi-framework comparison):
+   - Backend seeds parameters → Product Ops sheet.
+   - PM fills inputs, backend computes RICE + WSJF per-framework scores.
+5. **Flow 2 – Score Activation** (required bridge):
+   - Backend copies per-framework scores to active fields based on `active_scoring_framework`.
+   - Active scores ready for optimization and Central Backlog sync.
+6. **PM and stakeholders review/override scores** if needed.
 7. **Backend computes scores** (value, effort, overall).
 8. **Portfolio optimization** selects the best initiative set given constraints.
 9. **Roadmap entries** are generated, versioned, and published.
@@ -443,48 +447,179 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
 
 ---
 
-## 8. Suggested implementation path (phased, but all compatible with the end vision)
+## 8. Implementation phases (current status & roadmap)
 
-If you want a rough path without going line-by-line yet:
+### **✅ COMPLETED:**
 
-1. **Phase 0 – Design the initiative schema & templates**
+**Phase 0 – Design the initiative schema & templates**
+- ✅ Comprehensive `initiative_schema.md` with all fields, derivations, and constraints
+- ✅ Department intake template standardized with header normalization
+- ✅ Central backlog model defined in DB + Google Sheets
 
-   * Define the canonical fields.
-   * Design the department intake template.
-   * Design the central backlog model.
+**Phase 1 – Pure consolidation (Flow 1: Intake Sync)**
+- ✅ Google Sheets API integration with batch updates (1 API call for N cells)
+- ✅ All intake sheets read and consolidated into DB via `sync_intake_job.py`
+- ✅ Central Backlog sheet as single source of truth (read-only view with formulas)
+- ✅ Bidirectional sync: Sheets ↔ DB with atomic updates
 
-2. **Phase 1 – Pure consolidation**
+**Phase 2 – Validation & simple scoring (Flow 1 + Flow 2 Score Activation)**
+- ✅ Required field validation with `missing_fields` tracking
+- ✅ Multi-framework scoring engine (RICE, WSJF pluggable via `BaseFramework`)
+- ✅ **Flow 2 Score Activation**: Copies per-framework scores to active fields based on `active_scoring_framework`
+- ✅ Dynamic framework switching on Central Backlog works end-to-end
+- ✅ Parameter management and per-framework field isolation
 
-   * Connect Python to Google Sheets.
-   * Read all intake sheets.
-   * Write a single “master backlog” sheet and/or DB table.
-   * No LLM, no optimization yet.
+### **🔄 IN PROGRESS:**
 
-3. **Phase 2 – Validation & simple scoring**
+**Phase 3 – Product Ops Multi-Framework Scoring & Parameterization (Flow 3)**
 
-   * Implement required field checks.
-   * Add `status`, `missing_fields`, simple heuristic value/effort scores.
-   * Write these back to Sheets.
+- **Phase 3.A (Plumbing)** ✅
+  * Product Ops workbook integration complete
+  * Config loading and header normalization working
+  * Department/initiative/framework row parsing functional
+  
+- **Phase 3.B (Strong Sync)** ✅
+  * Product Ops sheet ↔ DB sync with batch updates
+  * Parameter reads/writes optimized
+  * Atomic transactional updates implemented
+  
+- **Phase 3.C (Multi-framework)** ✅
+  * RICE + WSJF per-framework computation in isolated fields
+  * Automatic scoring write-back to Central Backlog
+  * Framework-specific field preservation
+  
+- **Phase 3.D (Config Tab)** ⏳ **Deferred**
+  * Config-driven system behaviors planned for future
 
-4. **Phase 3 – Basic LP portfolio optimizer**
+### **📋 PLANNED (Future):**
 
-   * Implement a linear solver with a single objective + capacity constraints.
-   * Extend to weighted-sum multi-objective (easy & powerful) if desired.
-   * Produce a ranked, selected list for one “scenario”.
-   * Write scenario results into a “Roadmap_QX” sheet.
+4. **Phase 4 – MathModel Framework & LLM-Assisted Scoring**
+   * **MathModels Sheet** – Dedicated sheet for custom quantitative formulas per initiative
+   * **InitiativeMathModel** – DB model persistence and versioning
+   * **LLM Integration for MathModels**:
+     - Formula generation from PM free-text descriptions
+     - Parameter suggestion with units, ranges, and metadata
+     - Assumptions extraction and documentation
+     - Plain-language formula explanations
+   * **MathModelFramework** – Scoring framework using custom formulas
+   * **Bidirectional Sheet-DB Sync** – MathModels sheet ↔ DB with batch updates
+   * **Safe Formula Evaluation** – Parser and evaluator for approved formulas
+   * **Parameter Seeding** – Auto-create Params rows from parsed formula variables
+   * **Formula Approval Workflow** – LLM suggestions → PM review → approved formula
 
-5. **Phase 4 – LLM & Monte Carlo**
+5. **Phase 5 – Portfolio Optimization & Roadmap Generation**
+   * Linear / mixed-integer optimization solver (pulp, ortools)
+   * Multi-objective weighted-sum scenarios
+   * Capacity-constrained roadmap generation
+   * Roadmap sheet generation with selected initiatives
 
-   * LLM for enrichment (summaries, classification, suggestion of ranges).
-   * Monte Carlo to handle uncertainty and produce robustness / risk indicators.
-   * add goal-programming / Pareto-style multi-objective if/when needed
+6. **Phase 6 – LLM Enrichment for General Operations**
+   * Initiative summaries and classification
+   * Strategic theme tagging
+   * General context enrichment (non-MathModel)
+   * Automated hypothesis generation
 
-6. **Phase 5 – Refine UX & governance**
+7. **Phase 7 – Advanced Simulation & Uncertainty Modeling**
+   * Monte Carlo uncertainty modeling
+   * Robustness scoring and risk indicators
+   * Sensitivity analysis for key parameters
+   * Portfolio risk assessment
 
-   * Notifications, dashboards, scenario comparison views.
-   * Better access control & workflows.
+8. **Phase 8 – UX & Governance Refinements**
+   * Notifications, dashboards, scenario comparison views
+   * Access control & workflows
+   * Audit trails and decision history
 
 ---
+
+## 9. Operational Notes (Current Implementation)
+
+### **Three-Flow Architecture**
+
+The current system operates with three independent, coordinated data flows:
+
+1. **Flow 1 – Intake Consolidation (Source of Truth)**
+   - **What**: Department intake sheets → DB → Central Backlog sheet
+   - **When**: Triggered manually or on schedule via `sync_intake_job.py`
+   - **Responsibility**: Consolidates all initiative requests into canonical DB model
+   - **Key Operations**:
+     - `backlog_update_cli --sync`: Pull Central Backlog sheet changes into DB
+     - `sync_intake_job.py`: Pull all department intake sheets into DB
+     - `backlog_sync_cli --log-level INFO`: Push DB state back to Central Backlog sheet
+
+2. **Flow 2 – Score Activation (Required Bridge)**
+   - **What**: Per-framework scores → Active scores (based on `active_scoring_framework`)
+   - **When**: After any scoring change; REQUIRED before pushing to sheets
+   - **Responsibility**: Makes per-framework isolation work; enables dynamic framework switching
+   - **Key Operation**:
+     - `flow2_scoring_cli --all`: Activates per-framework scores to active fields
+   - **Example**: If `active_scoring_framework = RICE`, copies `rice_value_score` → `value_score`, `rice_overall_score` → `overall_score`
+
+3. **Flow 3 – Product Ops Multi-Framework Scoring (Optional)**
+   - **What**: Product Ops sheet → Per-framework scoring → Write back
+   - **When**: On schedule or manual trigger
+   - **Responsibility**: Computes RICE + WSJF scores from Product Ops parameters
+   - **Key Operations**:
+     - `flow3_cli --sync`: Read Product Ops sheet into DB
+     - `flow3_cli --compute-all`: Compute all RICE + WSJF scores
+     - `flow3_cli --write-scores`: Write per-framework scores back to Central Backlog
+   - **Important**: Flow 3 does NOT activate scores to active fields; Flow 2 must run afterward
+
+### **Framework Switching Workflow**
+
+To change the active scoring framework (e.g., WSJF → RICE):
+
+1. **Edit Central Backlog** – Change `active_scoring_framework` cell
+2. **Run Flow 1** – `backlog_update_cli --sync` (pulls framework change into DB)
+3. **Run Flow 2** – `flow2_scoring_cli --all` (activates RICE scores to active fields)
+4. **Sync Back** – `backlog_sync_cli --log-level INFO` (pushes updated active scores to sheet)
+
+Result: Central Backlog now shows RICE scores in `value_score` / `overall_score` columns.
+
+### **Key Architectural Concepts**
+
+- **Per-Framework Fields**: Each initiative has isolated scoring fields (e.g., `rice_value_score`, `wsjf_value_score`) that preserve framework-specific computation
+- **Active Fields**: `value_score` and `overall_score` are "view" fields that get populated by Flow 2 based on `active_scoring_framework`
+- **Batch Updates**: All sheet writes use Google Sheets API `values().batchUpdate()` (1 API call for N cells) for efficiency
+- **Header Normalization**: Sheet columns support underscore variants (e.g., `active_scoring_framework` or `ACTIVE_SCORING_FRAMEWORK`)
+- **Atomicity**: DB transactions ensure data consistency; sheet updates batched to avoid partial writes
+
+### **Data Propagation Example**
+
+Product Ops enters RICE parameters → Flow 3 `--sync` → DB updated → Flow 3 `--compute-all` → RICE per-framework scores computed → Flow 3 `--write-scores` → Scores written to Central Backlog sheet → Flow 2 activation skipped (scores already for current framework) → Flow 1 backlog_sync reads updated Central Backlog back into DB for next iteration.
+
+---
+
+## 10. Glossary
+
+**Active Scoring Framework**
+- The currently selected scoring framework (RICE, WSJF, etc.) whose per-framework scores are copied to active fields via Flow 2.
+
+**Batch Update**
+- Single Google Sheets API call that updates N cells atomically. Optimizes API quota usage and ensures consistency.
+
+**Flow 1 – Intake Consolidation**
+- Syncs all department intake sheets into central DB and Central Backlog sheet. Source of truth for all initiatives.
+
+**Flow 2 – Score Activation**
+- Copies per-framework scores to active fields based on `active_scoring_framework`. Required bridge for framework switching and active display.
+
+**Flow 3 – Product Ops Multi-Framework Scoring**
+- Reads Product Ops parameters, computes RICE + WSJF scores per initiative, writes isolated per-framework scores to Central Backlog.
+
+**Header Normalization**
+- Sheets support multiple column name variants (e.g., `active_scoring_framework` or `ACTIVE_SCORING_FRAMEWORK`) without breaking parsing.
+
+**Per-Framework Fields**
+- Isolated scoring columns for each framework (e.g., `rice_value_score`, `rice_overall_score`, `wsjf_value_score`, `wsjf_overall_score`). Preserve framework-specific logic.
+
+**Score Activation**
+- Process of copying per-framework scores to active fields. Enables framework switching and prevents score pollution from unused frameworks.
+
+---
+
+## Original Project Structure Notes:
+
 Python is perfect for:
 
 * Data cleaning & consolidation (pandas),
@@ -1149,3 +1284,11 @@ overall_score: composite (e.g. value/effort or weighted sum) used by optimizatio
 20. Sheet IDs / tab names (clarification)  
 Sheet ID: unique Google Sheets document identifier (in URL).  
 Tab name: worksheet title inside that document (e.g. “UK_Intake”, “Central_Backlog”, “Params”). Backend uses (sheet_id, tab_name) to trace original row locations.
+
+
+
+
+
+
+
+
