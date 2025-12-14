@@ -167,6 +167,7 @@ class BacklogService:
 
     @staticmethod
     def _apply_central_update(initiative: Initiative, data: Dict[str, Any]) -> None:
+        """Apply central editable fields from data to the Initiative instance."""
         for field_name, value in data.items():
             if field_name not in CENTRAL_EDITABLE_FIELDS:
                 continue

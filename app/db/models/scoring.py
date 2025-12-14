@@ -16,6 +16,7 @@ class InitiativeMathModel(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
+    framework = Column(String(50), nullable=False, default="MATH_MODEL", index=True)
     formula_text = Column(Text, nullable=False)
     parameters_json = Column(JSON, nullable=True)  # e.g. {"traffic": {...}, "uplift": {...}}
     assumptions_text = Column(Text, nullable=True)
@@ -30,7 +31,6 @@ class InitiativeMathModel(Base):
         "Initiative",
         back_populates="math_model",
         uselist=False,
-        primaryjoin="Initiative.math_model_id==InitiativeMathModel.id",
     )
 
 
@@ -58,3 +58,38 @@ class InitiativeScore(Base):
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     initiative = relationship("Initiative", back_populates="scores")
+
+
+class InitiativeParam(Base):
+    """
+    Normalized parameter table: one row per (initiative, framework, param_name).
+    Supports RICE/WSJF/MATH_MODEL frameworks uniformly.
+    """
+
+    __tablename__ = "initiative_params"
+
+    id = Column(Integer, primary_key=True, index=True)
+    initiative_id = Column(Integer, ForeignKey("initiatives.id"), nullable=False, index=True)
+
+    framework = Column(String(50), nullable=False, index=True)  # e.g., "MATH_MODEL", "RICE"
+    param_name = Column(String(100), nullable=False, index=True)  # internal snake_case
+
+    # Display & metadata
+    param_display = Column(String(150), nullable=True)
+    description = Column(Text, nullable=True)
+    unit = Column(String(50), nullable=True)
+
+    # Values and ranges
+    value = Column(Float, nullable=True)
+    min = Column(Float, nullable=True)
+    max = Column(Float, nullable=True)
+
+    source = Column(String(50), nullable=True)  # PM, Analytics, Finance, Eng, LLM
+    approved = Column(Boolean, nullable=False, default=False)
+    is_auto_seeded = Column(Boolean, nullable=False, default=False)
+    notes = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    initiative = relationship("Initiative", back_populates="params")

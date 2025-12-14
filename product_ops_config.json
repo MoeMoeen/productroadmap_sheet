@@ -1,5 +1,7 @@
 {
 "spreadsheet_id": "1zfxk-qQram2stUWYytiXapOeVh3yNulb32QYVJrOGt8",
 "scoring_inputs_tab": "Scoring_Inputs",
+"mathmodels_tab": "MathModels",
+"params_tab": "Params",
 "config_tab": "Config"
 }

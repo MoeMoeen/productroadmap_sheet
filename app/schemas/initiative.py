@@ -1,3 +1,5 @@
+# productroadmap_sheet_project/app/schemas/initiative.py
+
 from datetime import date, datetime
 from typing import Optional, Any, List
 from pydantic import BaseModel, Field
@@ -56,6 +58,10 @@ class InitiativeBase(BaseModel):
     score_approved_by_user: bool = False
 
     use_math_model: bool = False
+    # Math Model per-framework scores
+    math_value_score: Optional[float] = None
+    math_effort_score: Optional[float] = None
+    math_overall_score: Optional[float] = None
     llm_notes: Optional[str] = None
 
 
@@ -115,6 +121,9 @@ class InitiativeUpdate(BaseModel):
     score_approved_by_user: Optional[bool] = None
 
     use_math_model: Optional[bool] = None
+    math_value_score: Optional[float] = None
+    math_effort_score: Optional[float] = None
+    math_overall_score: Optional[float] = None
     llm_notes: Optional[str] = None
 
 

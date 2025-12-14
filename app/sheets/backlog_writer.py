@@ -25,6 +25,7 @@ CENTRAL_BACKLOG_HEADER: List[str] = [
     "Customer Segment",
     "Initiative Type",
     "Hypothesis",
+    "Problem Statement",
     # Scoring outputs
     "Value Score",
     "Effort Score",
@@ -57,6 +58,7 @@ CENTRAL_HEADER_TO_FIELD: Dict[str, str] = {
     "Customer Segment": "customer_segment",
     "Initiative Type": "initiative_type",
     "Hypothesis": "hypothesis",
+    "Problem Statement": "problem_statement",
     "Value Score": "value_score",
     "Effort Score": "effort_score",
     "Overall Score": "overall_score",
@@ -112,6 +114,7 @@ def initiative_to_backlog_row(initiative: Initiative) -> List[Any]:
         _to_sheet_value(getattr(initiative, "customer_segment", None)),
         _to_sheet_value(getattr(initiative, "initiative_type", None)),
         _to_sheet_value(getattr(initiative, "hypothesis", None)),
+        _to_sheet_value(getattr(initiative, "problem_statement", None)),
         _to_sheet_value(getattr(initiative, "value_score", None)),
         _to_sheet_value(getattr(initiative, "effort_score", None)),
         _to_sheet_value(getattr(initiative, "overall_score", None)),

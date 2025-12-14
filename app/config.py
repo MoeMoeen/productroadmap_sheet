@@ -4,7 +4,7 @@ from typing import List, Optional
 from pathlib import Path
 import json
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import load_dotenv
 
@@ -41,9 +41,22 @@ class BacklogSheetConfig(BaseModel):
     product_org: Optional[str] = None  # optional label for multi-org
 
 class ProductOpsConfig(BaseModel):
+    """Configuration for ProductOps Google Sheet"""
     spreadsheet_id: str
     scoring_inputs_tab: str = "Scoring_Inputs"
-    config_tab: str = "Config"
+    mathmodels_tab: str = "MathModels"
+    params_tab: str = "Params"
+    config_tab: Optional[str] = "Config"
+
+    @field_validator("spreadsheet_id")
+    @classmethod
+    def validate_spreadsheet_id(cls, v: str) -> str:
+        if not v or v == "YOUR_PRODUCT_OPS_SPREADSHEET_ID":
+            raise ValueError(
+                "ProductOps spreadsheet_id not configured. "
+                "Please set it in product_ops_config.json"
+            )
+        return v
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # project root folder
@@ -79,13 +92,7 @@ class Settings(BaseSettings):
 
     # Product Ops workbook (control plane for Product)
     PRODUCT_OPS: Optional[ProductOpsConfig] = None
-    PRODUCT_OPS_CONFIG_FILE: Optional[str] = None
-
-    # Scoring/math/params sheets (global or per org)
-    MATH_MODELS_SHEET_ID: Optional[str] = None
-    MATH_MODELS_TAB: str = "MathModels"
-    PARAMS_SHEET_ID: Optional[str] = None
-    PARAMS_TAB: str = "Params"
+    PRODUCT_OPS_CONFIG_FILE: Optional[str] = None # path to JSON object with spreadsheet_id + tab names
 
     # Intake rules (no hardcoded magic numbers)
     INTAKE_CREATE_MAX_RETRIES: int = 3

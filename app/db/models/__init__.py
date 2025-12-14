@@ -3,7 +3,7 @@
 from .initiative import Initiative
 from .roadmap import Roadmap
 from .roadmap_entry import RoadmapEntry
-from .scoring import InitiativeMathModel, InitiativeScore
+from .scoring import InitiativeMathModel, InitiativeScore, InitiativeParam
 
 __all__ = [
     "Initiative",
@@ -11,5 +11,6 @@ __all__ = [
     "RoadmapEntry",
     "InitiativeMathModel",
     "InitiativeScore",
+    "InitiativeParam",
 ]
 # This file ensures that all models are imported when the models package is imported,
