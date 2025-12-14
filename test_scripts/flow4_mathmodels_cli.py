@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+
+# productroadmap_sheet_project/test_scripts/flow4_mathmodels_cli.py
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from typing import Optional
+
+from app.config import settings
+from app.db.session import SessionLocal
+from app.sheets.client import get_sheets_service, SheetsClient
+from app.services.math_model_service import MathModelSyncService
+from app.services.params_sync_service import ParamsSyncService
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Flow 4: MathModels and Params Sheet → DB sync (no LLM)",
+        epilog="""
+        Examples:
+        # Preview MathModels rows
+        %(prog)s --preview-mathmodels --limit 10 --log-level DEBUG
+
+        # Sync MathModels to DB
+        %(prog)s --sync-mathmodels --batch-size 100
+
+        # Preview Params rows
+        %(prog)s --preview-params --limit 10
+
+        # Sync Params to DB
+        %(prog)s --sync-params --batch-size 200
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--preview-mathmodels", action="store_true", help="Preview MathModels rows (no DB writes)")
+    mode.add_argument("--sync-mathmodels", action="store_true", help="Sync MathModels from sheet → DB")
+    mode.add_argument("--preview-params", action="store_true", help="Preview Params rows (no DB writes)")
+    mode.add_argument("--sync-params", action="store_true", help="Sync Params from sheet → DB")
+
+    parser.add_argument("--spreadsheet-id", type=str, default=None, help="Override Product Ops spreadsheet ID")
+    parser.add_argument("--mathmodels-tab", type=str, default=None, help="Override MathModels tab name")
+    parser.add_argument("--params-tab", type=str, default=None, help="Override Params tab name")
+    parser.add_argument("--limit", type=int, default=None, help="Limit row preview count")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Commit every N upserts on sync (defaults: SCORING_BATCH_COMMIT_EVERY)",
+    )
+    parser.add_argument("--log-level", type=str, default="INFO", help="Log level: DEBUG, INFO, WARNING, ERROR")
+    return parser.parse_args()
+
+
+def configure_logging(level: str) -> None:
+    lvl = getattr(logging, level.upper(), logging.INFO)
+    logging.basicConfig(level=lvl, format="%(asctime)s %(levelname)s %(name)s :: %(message)s")
+
+
+def resolve_sheet_config(
+    spreadsheet_id: Optional[str], mathmodels_tab: Optional[str], params_tab: Optional[str]
+) -> tuple[str, str, str]:
+    cfg = settings.PRODUCT_OPS
+    if not cfg:
+        raise RuntimeError("PRODUCT_OPS not configured; set PRODUCT_OPS_CONFIG_FILE or env settings")
+
+    sid = spreadsheet_id or cfg.spreadsheet_id
+    mtab = mathmodels_tab or cfg.mathmodels_tab
+    ptab = params_tab or cfg.params_tab
+    return sid, mtab, ptab
+
+
+def main() -> int:
+    args = parse_args()
+    configure_logging(args.log_level)
+    logger = logging.getLogger(__name__)
+
+    try:
+        spreadsheet_id, mathmodels_tab, params_tab = resolve_sheet_config(
+            args.spreadsheet_id, args.mathmodels_tab, args.params_tab
+        )
+    except Exception:
+        logging.exception("flow4.cli.config_error")
+        return 1
+
+    service = get_sheets_service()
+    client = SheetsClient(service)
+
+    if args.preview_mathmodels:
+        try:
+            svc = MathModelSyncService(client)
+            rows = svc.preview_rows(spreadsheet_id, mathmodels_tab, max_rows=args.limit)
+            logger.info(
+                "flow4.cli.preview_mathmodels",
+                extra={"rows": len(rows), "sample": rows[: min(len(rows), 3)]},
+            )
+            return 0
+        except Exception:
+            logger.exception("flow4.cli.preview_mathmodels_error")
+            return 1
+
+    if args.preview_params:
+        try:
+            svc = ParamsSyncService(client)
+            rows = svc.preview_rows(spreadsheet_id, params_tab, max_rows=args.limit)
+            logger.info(
+                "flow4.cli.preview_params",
+                extra={"rows": len(rows), "sample": rows[: min(len(rows), 3)]},
+            )
+            return 0
+        except Exception:
+            logger.exception("flow4.cli.preview_params_error")
+            return 1
+
+    db = SessionLocal()
+    try:
+        if args.sync_mathmodels:
+            svc = MathModelSyncService(client)
+            result = svc.sync_sheet_to_db(
+                db,
+                spreadsheet_id=spreadsheet_id,
+                tab_name=mathmodels_tab,
+                commit_every=(args.batch_size or settings.SCORING_BATCH_COMMIT_EVERY),
+            )
+            logger.info("flow4.cli.sync_mathmodels_complete", extra=result)
+            return 0
+
+        if args.sync_params:
+            svc = ParamsSyncService(client)
+            result = svc.sync_sheet_to_db(
+                db,
+                spreadsheet_id=spreadsheet_id,
+                tab_name=params_tab,
+                commit_every=(args.batch_size or settings.SCORING_BATCH_COMMIT_EVERY),
+            )
+            logger.info("flow4.cli.sync_params_complete", extra=result)
+            return 0
+
+        logger.error("flow4.cli.no_mode_selected")
+        return 1
+
+    except KeyboardInterrupt:
+        logger.warning("flow4.cli.interrupted_by_user")
+        return 130
+    except Exception:
+        logger.exception("flow4.cli.error")
+        return 1
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

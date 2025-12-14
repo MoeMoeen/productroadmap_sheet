@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 # Centralized header mapping: canonical field name -> list of accepted aliases
 MATHMODELS_HEADER_MAP = {
-    "initiative_key": ["initiative_key", "initiative_id"],
+    "initiative_key": ["initiative_key"],
     "formula_text": ["formula_text", "formula_text_final", "formula"],
     "parameters_json": ["parameters_json", "parameters"],
     "assumptions_text": ["assumptions_text", "assumptions", "notes"],
@@ -22,16 +22,19 @@ MATHMODELS_HEADER_MAP = {
 }
 
 PARAMS_HEADER_MAP = {
-    "initiative_key": ["initiative_key", "initiative_id"],
+    "initiative_key": ["initiative_key", "Initiative Key", "Initiative_Key", "initiative key"],
     "param_name": ["param_name", "parameter_name", "name"],
     "value": ["value"],
     "unit": ["unit"],
-    "display": ["display", "display_name"],
-    "description": ["description", "notes"],
+    "param_display": ["param_display", "display", "display_name"],
+    "description": ["description"],
     "source": ["source"],
     "approved": ["approved"],
     "is_auto_seeded": ["is_auto_seeded", "auto_seeded"],
     "framework": ["framework"],
+    "min": ["min", "min_value"],
+    "max": ["max", "max_value"],
+    "notes": ["notes", "param_notes"],
 }
 
 
@@ -69,23 +72,28 @@ class ParamRow(BaseModel):
     - param_name (str): Name of parameter
     - value (str/float): Current parameter value
     - unit (str): Unit of measurement
-    - display (str): Display name for UI
+    - param_display (str): Display name for UI
     - description (str): Description/notes
     - source (str): Where value came from (e.g., "analytics", "manual", "ai_suggested")
     - approved (bool): Has user approved this parameter?
     - is_auto_seeded (bool): Was this auto-seeded?
     - framework (str): Framework type (default "MATH_MODEL")
+    - min/max (float): Optional bounds
+    - notes (str): Optional notes
     """
     
     model_config = ConfigDict(extra="ignore")
     
     initiative_key: str
     param_name: str
-    value: Optional[str] = None
+    value: Optional[float | str] = None
     unit: Optional[str] = None
-    display: Optional[str] = None
+    param_display: Optional[str] = None
     description: Optional[str] = None
     source: Optional[str] = None
     approved: Optional[bool] = None
     is_auto_seeded: Optional[bool] = None
     framework: Optional[str] = "MATH_MODEL"
+    min: Optional[float] = None
+    max: Optional[float] = None
+    notes: Optional[str] = None
