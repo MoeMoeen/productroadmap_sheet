@@ -27,3 +27,18 @@ class MathModelSuggestion(BaseModel):
     formula_text: str
     assumptions: List[str]
     notes: Optional[str] = None
+
+
+class ParamSuggestion(BaseModel):
+    key: str  # identifier found in formula_text
+    name: str  # human-friendly name
+    description: Optional[str] = None
+    unit: Optional[str] = None
+    example_value: Optional[str] = None  # keep string to allow ranges or enums
+    source_hint: Optional[str] = None  # where to get data (system/team)
+
+
+class ParamMetadataSuggestion(BaseModel):
+    initiative_key: str
+    identifiers: List[str]
+    params: List[ParamSuggestion]

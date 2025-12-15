@@ -97,6 +97,64 @@ class ParamsWriter:
             
             logger.info(f"Appended {len(rows_to_append)} parameters to {tab_name}")
     
+    def append_new_params(
+        self,
+        spreadsheet_id: str,
+        tab_name: str,
+        params: List[Dict[str, Any]],
+    ) -> None:
+        """Append new parameter rows (Step 8 seeding).
+        
+        Each param dict should have:
+        {
+            "initiative_key": str,
+            "param_name": str,
+            "param_display": Optional[str],
+            "description": Optional[str],
+            "unit": Optional[str],
+            "source": Optional[str],
+            "approved": bool (default False),
+            "is_auto_seeded": bool (default True),
+            "framework": str (default "MATH_MODEL"),
+        }
+        
+        Uses batch append for efficiency.
+        """
+        if not params:
+            logger.info("No params to append")
+            return
+        
+        # Get header
+        header_row = 1
+        range_a1 = f"{tab_name}!{header_row}:{header_row}"
+        header_values = self.client.get_values(spreadsheet_id, range_a1)
+        
+        if not header_values or not header_values[0]:
+            logger.error(f"Could not find header row in {tab_name}")
+            return
+        
+        header = header_values[0]
+        column_indices = self._build_column_indices(header)
+        
+        # Build rows
+        rows_to_append = []
+        for param in params:
+            row = self._build_row(param, column_indices, len(header))
+            rows_to_append.append(row)
+        
+        if not rows_to_append:
+            return
+        
+        # Append via SheetsClient helper (append API determines next row automatically)
+        range_a1 = f"{tab_name}!A:A"
+        self.client.append_values(
+            spreadsheet_id=spreadsheet_id,
+            range_=range_a1,
+            values=rows_to_append,
+            value_input_option="RAW",
+        )
+        logger.info(f"Appended {len(rows_to_append)} params to {tab_name}")
+
     def update_parameter_value(
         self,
         spreadsheet_id: str,
@@ -236,15 +294,18 @@ class ParamsWriter:
         
         field_mapping = {
             "initiative_key": "initiative_key",
+            "framework": "framework",
             "param_name": "param_name",
-            "value": "value",
-            "unit": "unit",
-            "display": "display",
+            "param_display": "param_display",
             "description": "description",
+            "unit": "unit",
+            "min": "min",
+            "max": "max",
             "source": "source",
+            "value": "value",
             "approved": "approved",
             "is_auto_seeded": "is_auto_seeded",
-            "framework": "framework",
+            "notes": "notes",
         }
         
         for normalized_col, param_field in field_mapping.items():

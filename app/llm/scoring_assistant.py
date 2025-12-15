@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.db.models.initiative import Initiative
 from app.llm.client import LLMClient
-from app.llm.models import MathModelPromptInput, MathModelSuggestion
+from app.llm.models import MathModelPromptInput, MathModelSuggestion, ParamMetadataSuggestion
 from app.sheets.models import MathModelRow
 
 
@@ -32,4 +32,18 @@ def suggest_math_model_for_initiative(
 	return llm.suggest_math_model(payload)
 
 
-__all__ = ["suggest_math_model_for_initiative"]
+def suggest_param_metadata_for_model(
+	initiative_key: str,
+	identifiers: list[str],
+	formula_text: str,
+	llm: LLMClient,
+) -> ParamMetadataSuggestion:
+	"""Call LLM to suggest param metadata for formula identifiers.
+
+	Step 8: Use approved formula identifiers + formula context to get param metadata.
+	Includes formula for better LLM quality.
+	"""
+	return llm.suggest_param_metadata(initiative_key, identifiers, formula_text=formula_text)
+
+
+__all__ = ["suggest_math_model_for_initiative", "suggest_param_metadata_for_model"]

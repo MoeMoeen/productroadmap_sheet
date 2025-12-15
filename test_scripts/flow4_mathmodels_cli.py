@@ -16,6 +16,7 @@ from app.services.math_model_service import MathModelSyncService
 from app.services.params_sync_service import ParamsSyncService
 from app.llm.client import LLMClient
 from app.jobs.math_model_generation_job import run_math_model_generation_job
+from app.jobs.param_seeding_job import run_param_seeding_job
 
 
 def parse_args() -> argparse.Namespace:
@@ -53,6 +54,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Generate LLM suggestions for MathModels (formula, assumptions, notes) from Sheet → Sheet",
     )
+    mode.add_argument(
+        "--seed-params",
+        action="store_true",
+        help="Seed Params from approved MathModels formulas (Step 8: extract identifiers, call LLM for metadata, append-only)",
+    )
 
     parser.add_argument("--spreadsheet-id", type=str, default=None, help="Override Product Ops spreadsheet ID")
     parser.add_argument("--mathmodels-tab", type=str, default=None, help="Override MathModels tab name")
@@ -65,6 +71,8 @@ def parse_args() -> argparse.Namespace:
         help="Commit every N upserts on sync (defaults: SCORING_BATCH_COMMIT_EVERY)",
     )
     parser.add_argument("--force", action="store_true", help="Force re-suggestion even if already suggested")
+    parser.add_argument("--max-llm-calls", type=int, default=10, help="Max LLM calls for --seed-params or --suggest-mathmodels")
+    parser.add_argument("--dry-run", action="store_true", help="Preview param seeding without writing (for --seed-params)")
     parser.add_argument("--log-level", type=str, default="INFO", help="Log level: DEBUG, INFO, WARNING, ERROR")
     return parser.parse_args()
 
@@ -168,11 +176,39 @@ def main() -> int:
                     tab_name=mathmodels_tab,
                     max_rows=args.limit,
                     force=args.force,
+                    max_llm_calls=args.max_llm_calls,
                 )
                 logger.info("flow4.cli.suggest_mathmodels_complete", extra=result)
                 return 0
             except Exception:
                 logger.exception("flow4.cli.suggest_mathmodels_error")
+                return 1
+
+        if args.seed_params:
+            try:
+                if not settings.OPENAI_API_KEY:
+                    logger.error("flow4.cli.openai_api_key_missing")
+                    return 1
+
+                if args.dry_run:
+                    logger.warning("flow4.cli.dry_run_mode (param seeding will not write to sheet)")
+                    # TODO: implement dry-run preview logic in param_seeding_job
+                    return 0
+
+                llm = LLMClient()
+                stats = run_param_seeding_job(
+                    sheets_client=client,
+                    spreadsheet_id=spreadsheet_id,
+                    mathmodels_tab=mathmodels_tab,
+                    params_tab=params_tab,
+                    llm_client=llm,
+                    max_llm_calls=args.max_llm_calls,
+                    limit=args.limit,
+                )
+                logger.info("flow4.cli.seed_params_complete", extra=stats.summary())
+                return 0
+            except Exception:
+                logger.exception("flow4.cli.seed_params_error")
                 return 1
 
         logger.error("flow4.cli.no_mode_selected")

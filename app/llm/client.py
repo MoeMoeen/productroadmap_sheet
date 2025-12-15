@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 from openai import OpenAI
 
 from app.config import settings
-from app.llm.models import MathModelPromptInput, MathModelSuggestion
+from app.llm.models import MathModelPromptInput, MathModelSuggestion, ParamMetadataSuggestion
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,56 @@ class LLMClient:
             return MathModelSuggestion.model_validate(data)
         except Exception as exc:  # noqa: BLE001
             logger.exception("llm.suggest_math_model_parse_error", extra={"response": str(resp)})
+            raise RuntimeError(f"Failed to parse LLM response: {exc}") from exc
+
+    def suggest_param_metadata(self, initiative_key: str, identifiers: list[str], formula_text: str = "") -> ParamMetadataSuggestion:
+        """Call OpenAI to suggest parameter metadata for identifiers.
+
+        Uses cheaper model for Step 8. Returns ParamMetadataSuggestion.
+        Includes formula context for better quality.
+        """
+        if not identifiers:
+            raise ValueError("identifiers list is empty")
+
+        system_prompt = (
+            "You help define parameter metadata for product value models. "
+            "Return ONLY a JSON object with keys: initiative_key (string), identifiers (list of strings), params (list of objects). "
+            "Each params item must have: key, name, description, unit, example_value, source_hint. "
+            "Rules: key must match an identifier exactly; provide concise, practical names and descriptions; "
+            "units should be simple (e.g., 'days', 'USD', 'count'); example_value can be a number or short string; "
+            "Do not include any text outside the JSON."
+        )
+        user_prompt_lines = [
+            f"Initiative: {initiative_key}",
+            f"Identifiers needing metadata: {', '.join(identifiers)}",
+        ]
+        if formula_text:
+            user_prompt_lines.append(f"Formula: {formula_text}")
+        user_prompt = "\n".join(user_prompt_lines)
+
+        model = settings.OPENAI_MODEL_PARAMMETA or settings.OPENAI_MODEL
+        temperature = settings.OPENAI_TEMPERATURE
+        max_tokens = settings.OPENAI_MAX_TOKENS
+        timeout = settings.OPENAI_REQUEST_TIMEOUT
+
+        resp = self._client.chat.completions.create(
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+            timeout=timeout,
+        )
+
+        try:
+            content = resp.choices[0].message.content
+            data = json.loads(content or "{}")
+            return ParamMetadataSuggestion.model_validate(data)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("llm.suggest_param_metadata_parse_error", extra={"response": str(resp)})
             raise RuntimeError(f"Failed to parse LLM response: {exc}") from exc
 
 

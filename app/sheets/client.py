@@ -121,6 +121,27 @@ class SheetsClient:
                 return out
         return {}
 
+    def append_values(
+        self,
+        spreadsheet_id: str,
+        range_: str,
+        values: List[List[Any]],
+        value_input_option: str = "USER_ENTERED",
+    ) -> None:
+        """Append rows to a sheet using the Sheets append API."""
+        body = {"values": values}
+        (
+            self.service.spreadsheets()
+            .values()
+            .append(
+                spreadsheetId=spreadsheet_id,
+                range=range_,
+                valueInputOption=value_input_option,
+                body=body,
+            )
+            .execute()
+        )
+
     def batch_update(self, spreadsheet_id: str, requests: list[dict]) -> None:
         """Send a batchUpdate with the provided list of requests."""
         if not requests:
