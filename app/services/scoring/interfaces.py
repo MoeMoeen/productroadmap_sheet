@@ -12,6 +12,7 @@ class ScoringFramework(str, Enum):
     """Supported scoring framework identifiers."""
     RICE = "RICE"
     WSJF = "WSJF"
+    MATH_MODEL = "MATH_MODEL"
     # CUSTOM = "CUSTOM"  # reserved for future custom / AI frameworks
 
 

@@ -2,5 +2,6 @@
 
 from .rice import RiceScoringEngine
 from .wsjf import WsjfScoringEngine
+from .math_model import MathModelScoringEngine
 
-__all__ = ["RiceScoringEngine", "WsjfScoringEngine"]
+__all__ = ["RiceScoringEngine", "WsjfScoringEngine", "MathModelScoringEngine"]

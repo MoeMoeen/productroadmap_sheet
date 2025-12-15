@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Dict, List
 
 from app.services.scoring.interfaces import ScoringFramework, ScoringEngine
-from app.services.scoring.engines import RiceScoringEngine, WsjfScoringEngine
+from app.services.scoring.engines import MathModelScoringEngine, RiceScoringEngine, WsjfScoringEngine
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,13 @@ SCORING_FRAMEWORKS: Dict[ScoringFramework, FrameworkInfo] = {
         description="(Business Value + Time Criticality + Risk Reduction) / Job Size",
         required_fields=["business_value", "time_criticality", "risk_reduction", "job_size"],
         engine=WsjfScoringEngine(),
+    ),
+    ScoringFramework.MATH_MODEL: FrameworkInfo(
+        name=ScoringFramework.MATH_MODEL,
+        label="MATH_MODEL",
+        description="Per-initiative math model evaluated via safe_eval",
+        required_fields=[],
+        engine=MathModelScoringEngine(),
     ),
 }
 
