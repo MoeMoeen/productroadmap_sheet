@@ -14,11 +14,13 @@ from app.db.session import SessionLocal
 from app.sheets.client import get_sheets_service, SheetsClient
 from app.services.math_model_service import MathModelSyncService
 from app.services.params_sync_service import ParamsSyncService
+from app.llm.client import LLMClient
+from app.jobs.math_model_generation_job import run_math_model_generation_job
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Flow 4: MathModels and Params Sheet → DB sync (no LLM)",
+        description="Flow 4: MathModels and Params Sheet ↔ DB sync, plus LLM suggestions",
         epilog="""
         Examples:
         # Preview MathModels rows
@@ -26,6 +28,12 @@ def parse_args() -> argparse.Namespace:
 
         # Sync MathModels to DB
         %(prog)s --sync-mathmodels --batch-size 100
+
+        # Generate LLM suggestions (writes to sheet)
+        %(prog)s --suggest-mathmodels --limit 20
+
+        # Force re-suggestion even if already suggested
+        %(prog)s --suggest-mathmodels --force
 
         # Preview Params rows
         %(prog)s --preview-params --limit 10
@@ -40,6 +48,11 @@ def parse_args() -> argparse.Namespace:
     mode.add_argument("--sync-mathmodels", action="store_true", help="Sync MathModels from sheet → DB")
     mode.add_argument("--preview-params", action="store_true", help="Preview Params rows (no DB writes)")
     mode.add_argument("--sync-params", action="store_true", help="Sync Params from sheet → DB")
+    mode.add_argument(
+        "--suggest-mathmodels",
+        action="store_true",
+        help="Generate LLM suggestions for MathModels (formula, assumptions, notes) from Sheet → Sheet",
+    )
 
     parser.add_argument("--spreadsheet-id", type=str, default=None, help="Override Product Ops spreadsheet ID")
     parser.add_argument("--mathmodels-tab", type=str, default=None, help="Override MathModels tab name")
@@ -51,6 +64,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Commit every N upserts on sync (defaults: SCORING_BATCH_COMMIT_EVERY)",
     )
+    parser.add_argument("--force", action="store_true", help="Force re-suggestion even if already suggested")
     parser.add_argument("--log-level", type=str, default="INFO", help="Log level: DEBUG, INFO, WARNING, ERROR")
     return parser.parse_args()
 
@@ -138,6 +152,28 @@ def main() -> int:
             )
             logger.info("flow4.cli.sync_params_complete", extra=result)
             return 0
+
+        if args.suggest_mathmodels:
+            try:
+                if not settings.OPENAI_API_KEY:
+                    logger.error("flow4.cli.openai_api_key_missing")
+                    return 1
+
+                llm = LLMClient()
+                result = run_math_model_generation_job(
+                    db=db,
+                    sheets_client=client,
+                    llm_client=llm,
+                    spreadsheet_id=spreadsheet_id,
+                    tab_name=mathmodels_tab,
+                    max_rows=args.limit,
+                    force=args.force,
+                )
+                logger.info("flow4.cli.suggest_mathmodels_complete", extra=result)
+                return 0
+            except Exception:
+                logger.exception("flow4.cli.suggest_mathmodels_error")
+                return 1
 
         logger.error("flow4.cli.no_mode_selected")
         return 1

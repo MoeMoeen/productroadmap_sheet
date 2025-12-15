@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     # OpenAI (provider: OPENAI)
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_MODEL_MATHMODEL: str = "gpt-4o"  # Step 7: formula generation (higher quality)
     OPENAI_TEMPERATURE: float = 0.2
     OPENAI_MAX_TOKENS: int = 2048
     OPENAI_REQUEST_TIMEOUT: int = 60  # seconds

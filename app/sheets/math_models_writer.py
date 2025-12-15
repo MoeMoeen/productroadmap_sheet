@@ -88,10 +88,14 @@ class MathModelsWriter:
     ) -> None:
         """Batch write multiple suggestions in a single API call.
         
+        CRITICAL: Re-checks approved_by_user before writing to prevent race conditions
+        where PM approves during job execution.
+        
         Each suggestion dict should have:
         {
             "row_number": int,
             "llm_suggested_formula_text": Optional[str],
+            "assumptions_text": Optional[str],
             "llm_notes": Optional[str],
         }
         """
@@ -100,19 +104,51 @@ class MathModelsWriter:
         
         # Find column indices
         formula_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_suggested_formula_text")
-        assumptions_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_notes")
+        assumptions_col_idx = self._find_column_index(spreadsheet_id, tab_name, "assumptions_text")
+        notes_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_notes")
+        approved_col_idx = self._find_column_index(spreadsheet_id, tab_name, "approved_by_user")
         
-        if not formula_col_idx and not assumptions_col_idx:
+        # Guard: require at least one suggestion column
+        if not (formula_col_idx or assumptions_col_idx or notes_col_idx):
             logger.warning(f"Could not find suggestion columns in {tab_name}")
             return
+        
+        # Race-safety: fetch current approved status before writing
+        row_numbers: List[int] = []
+        for s in suggestions:
+            row_num = s.get("row_number")
+            if isinstance(row_num, int):
+                row_numbers.append(row_num)
+        approved_map = {}
+        if approved_col_idx and row_numbers:
+            approved_map = self._get_approved_status_for_rows(
+                spreadsheet_id,
+                tab_name,
+                row_numbers,
+                approved_col_idx,
+            )
+        elif not approved_col_idx and row_numbers:
+            logger.warning(f"Could not find approved_by_user column in {tab_name}; skipping race-safety check")
         
         # Build batch update data
         batch_data = []
         
         for suggestion in suggestions:
             row_number = suggestion.get("row_number")
+            
+            # Guard: row_number must be int
+            if not isinstance(row_number, int):
+                logger.warning("mathmodels.write.skip_bad_row_number", extra={"row_number": row_number})
+                continue
+            
+            # RACE-SAFETY CHECK: Skip if now approved (staleness guard)
+            if approved_map.get(row_number, False):
+                logger.info("mathmodels.write.skip_approved", extra={"row": row_number})
+                continue
+            
             formula_sugg = suggestion.get("llm_suggested_formula_text")
-            assumptions_sugg = suggestion.get("llm_notes")
+            assumptions_sugg = suggestion.get("assumptions_text")
+            notes_sugg = suggestion.get("llm_notes")
             
             if formula_col_idx and formula_sugg:
                 col_a1 = _col_index_to_a1(formula_col_idx)
@@ -128,6 +164,14 @@ class MathModelsWriter:
                 batch_data.append({
                     "range": cell_a1,
                     "values": [[assumptions_sugg]],
+                })
+
+            if notes_col_idx and notes_sugg:
+                col_a1 = _col_index_to_a1(notes_col_idx)
+                cell_a1 = f"{tab_name}!{col_a1}{row_number}"
+                batch_data.append({
+                    "range": cell_a1,
+                    "values": [[notes_sugg]],
                 })
         
         if batch_data:
@@ -171,6 +215,41 @@ class MathModelsWriter:
         except Exception as e:
             logger.error(f"Error finding column {column_name} in {tab_name}: {e}")
             return None
+    
+    def _get_approved_status_for_rows(
+        self,
+        spreadsheet_id: str,
+        tab_name: str,
+        row_numbers: List[int],
+        approved_col_idx: int,
+    ) -> Dict[int, bool]:
+        """Re-fetch approved_by_user status for rows to detect staleness.
+        
+        Returns dict mapping row_number -> approved_by_user value.
+        Used to prevent race conditions where PM approves during job execution.
+        """
+        if not row_numbers or not approved_col_idx:
+            return {}
+        
+        try:
+            col_a1 = _col_index_to_a1(approved_col_idx)
+            ranges = [f"{tab_name}!{col_a1}{row_num}" for row_num in row_numbers]
+            
+            # Fetch approved status for all rows in one call
+            result = {}
+            for row_num, range_a1 in zip(row_numbers, ranges):
+                values = self.client.get_values(spreadsheet_id, range_a1)
+                if values and values[0]:
+                    # True if cell is "TRUE", "true", "1", etc.
+                    cell_val = str(values[0][0]).strip().lower()
+                    result[row_num] = cell_val in ("true", "1", "yes")
+                else:
+                    result[row_num] = False
+            
+            return result
+        except Exception as e:
+            logger.error(f"Error fetching approved status in {tab_name}: {e}")
+            return {}
 
 
 def _col_index_to_a1(idx: int) -> str:

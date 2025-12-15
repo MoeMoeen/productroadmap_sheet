@@ -19,6 +19,9 @@ MATHMODELS_HEADER_MAP = {
     "approved_by_user": ["approved_by_user", "approved"],
     "llm_suggested_formula_text": ["llm_suggested_formula_text", "formula_suggestion"],
     "llm_notes": ["llm_notes", "assumptions_suggestion", "llm_assumptions"],
+    "model_name": ["model_name"],
+    "model_description_free_text": ["model_description_free_text", "model_description", "description"],
+    "model_prompt_to_llm": ["model_prompt_to_llm", "prompt_to_llm", "llm_prompt"],
 }
 
 PARAMS_HEADER_MAP = {
@@ -62,6 +65,9 @@ class MathModelRow(BaseModel):
     approved_by_user: Optional[bool] = None
     llm_suggested_formula_text: Optional[str] = None
     llm_notes: Optional[str] = None
+    model_name: Optional[str] = None
+    model_description_free_text: Optional[str] = None
+    model_prompt_to_llm: Optional[str] = None
 
 
 class ParamRow(BaseModel):

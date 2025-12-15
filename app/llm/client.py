@@ -1,0 +1,102 @@
+# productroadmap_sheet_project/app/llm/client.py
+
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any, Dict, Optional
+
+from openai import OpenAI
+
+from app.config import settings
+from app.llm.models import MathModelPromptInput, MathModelSuggestion
+
+logger = logging.getLogger(__name__)
+
+
+class LLMClient:
+    """Thin wrapper around OpenAI client for math-model suggestions."""
+
+    def __init__(self, client: Optional[OpenAI] = None) -> None:
+        api_key = settings.OPENAI_API_KEY
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY is not configured")
+        self._client = client or OpenAI(api_key=api_key)
+
+    def suggest_math_model(self, payload: MathModelPromptInput) -> MathModelSuggestion:
+        """Call OpenAI to generate a math model suggestion.
+
+        Returns a MathModelSuggestion parsed from JSON response.
+        """
+
+        system_prompt = _build_system_prompt()
+        user_prompt = _build_user_prompt(payload)
+
+        model = settings.OPENAI_MODEL_MATHMODEL or "gpt-4o"  # Step 7: formula quality requires gpt-4o
+        temperature = settings.OPENAI_TEMPERATURE
+        max_tokens = settings.OPENAI_MAX_TOKENS
+        timeout = settings.OPENAI_REQUEST_TIMEOUT
+
+        resp = self._client.chat.completions.create(
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+            timeout=timeout,
+        )
+
+        try:
+            content = resp.choices[0].message.content
+            data = json.loads(content or "{}")
+            return MathModelSuggestion.model_validate(data)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("llm.suggest_math_model_parse_error", extra={"response": str(resp)})
+            raise RuntimeError(f"Failed to parse LLM response: {exc}") from exc
+
+
+def _build_system_prompt() -> str:
+    return (
+        "You are an expert product & finance analyst. "
+        "Design quantitative value models for product initiatives. "
+        "Return ONLY a JSON object with keys: formula_text (multi-line script), "
+        "assumptions (list of strings), notes (string). "
+        "Rules: formula_text must use only assignment lines 'name = expression'; "
+        "define 'value' as primary metric; optionally define 'effort' (or 'effort_days') and 'overall'; "
+        "use lower_snake_case variable names; allowed operations are +, -, *, /, parentheses, min(), max(); "
+        "no imports, no function definitions, no prose outside JSON. "
+        "Example formula_text: "
+        "ticket_savings = ticket_reduction_per_month * cost_per_ticket * horizon_months\n"
+        "churn_savings = churn_reduction * affected_customers * customer_lifetime_value\n"
+        "total_cost = one_off_cost + monthly_running_cost * horizon_months\n"
+        "value = ticket_savings + churn_savings - total_cost\n"
+        "overall = value / effort_days"
+    )
+
+
+def _build_user_prompt(payload: MathModelPromptInput) -> str:
+    lines = [
+        f"Initiative: {payload.initiative_key} - {payload.title}",
+    ]
+
+    def add(label: str, val: Optional[str]) -> None:
+        if val:
+            lines.append(f"{label}: {val}")
+
+    add("Problem", payload.problem_statement)
+    add("Desired outcome", payload.desired_outcome)
+    add("LLM summary", payload.llm_summary)
+    add("Expected impact", payload.expected_impact_description)
+    add("Impact metric", payload.impact_metric)
+    add("Impact unit", payload.impact_unit)
+    add("Model name", payload.model_name)
+    add("Model description", payload.model_description_free_text)
+    add("Extra prompt", payload.model_prompt_to_llm)
+
+    return "\n".join(lines)
+
+
+__all__ = ["LLMClient"]
