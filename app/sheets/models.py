@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, List
 from datetime import datetime
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 # Centralized header mapping: canonical field name -> list of accepted aliases
@@ -39,6 +39,112 @@ PARAMS_HEADER_MAP = {
     "max": ["max", "max_value"],
     "notes": ["notes", "param_notes"],
 }
+
+# Intake sheet header aliases (centralized)
+# Only include well-known, stable fields here to avoid collisions.
+INTAKE_HEADER_MAP: Dict[str, List[str]] = {
+    "initiative_key": ["Initiative Key", "InitiativeKey", "initiative_key", "initiative key"],
+}
+
+# ProductOps Scoring output columns and header aliases
+# These are written by Flow 3 write-back stage. Keep aliases flexible for namespaced headers.
+PRODUCTOPS_SCORE_OUTPUT_COLUMNS: List[str] = [
+    "rice_value_score",
+    "rice_effort_score",
+    "rice_overall_score",
+    "wsjf_value_score",
+    "wsjf_effort_score",
+    "wsjf_overall_score",
+    "math_value_score",
+    "math_effort_score",
+    "math_overall_score",
+    "math_warnings",
+]
+
+SCORE_FIELD_TO_HEADERS: Dict[str, List[str]] = {
+    "rice_value_score": ["rice_value_score", "rice: value score"],
+    "rice_effort_score": ["rice_effort_score", "rice: effort score"],
+    "rice_overall_score": ["rice_overall_score", "rice: overall score"],
+    "wsjf_value_score": ["wsjf_value_score", "wsjf: value score"],
+    "wsjf_effort_score": ["wsjf_effort_score", "wsjf: effort score"],
+    "wsjf_overall_score": ["wsjf_overall_score", "wsjf: overall score"],
+    "math_value_score": ["math_value_score", "math: value score", "math_model: value score"],
+    "math_effort_score": ["math_effort_score", "math: effort score", "math_model: effort score"],
+    "math_overall_score": ["math_overall_score", "math: overall score", "math_model: overall score"],
+    "math_warnings": ["math_warnings", "math: warnings", "math_model: warnings", "math_error", "math_errors"],
+}
+
+# Central Backlog headers and field mapping used by backlog writer
+CENTRAL_BACKLOG_HEADER: List[str] = [
+    "Initiative Key",
+    "Title",
+    "Requesting Team",
+    "Requester Name",
+    "Requester Email",
+    "Country",
+    "Product Area",
+    "Status",
+    "Strategic Theme",
+    "Customer Segment",
+    "Initiative Type",
+    "Hypothesis",
+    "Problem Statement",
+    # Scoring outputs
+    "Value Score",
+    "Effort Score",
+    "Overall Score",
+    "Active Scoring Framework",
+    "Use Math Model",
+    # Dependencies & LLM
+    "Dependencies Initiatives",
+    "Dependencies Others",
+    "LLM Summary",
+    "LLM Notes",
+    # Strategic coefficient
+    "Strategic Priority Coefficient",
+    # Metadata
+    "Updated At",
+    "Updated Source",
+]
+
+CENTRAL_HEADER_TO_FIELD: Dict[str, str] = {
+    "Initiative Key": "initiative_key",
+    "Title": "title",
+    "Requesting Team": "requesting_team",
+    "Requester Name": "requester_name",
+    "Requester Email": "requester_email",
+    "Country": "country",
+    "Product Area": "product_area",
+    "Status": "status",
+    "Strategic Theme": "strategic_theme",
+    "Customer Segment": "customer_segment",
+    "Initiative Type": "initiative_type",
+    "Hypothesis": "hypothesis",
+    "Problem Statement": "problem_statement",
+    "Value Score": "value_score",
+    "Effort Score": "effort_score",
+    "Overall Score": "overall_score",
+    "Active Scoring Framework": "active_scoring_framework",
+    "Use Math Model": "use_math_model",
+    "Dependencies Initiatives": "dependencies_initiatives",
+    "Dependencies Others": "dependencies_others",
+    "LLM Summary": "llm_summary",
+    "LLM Notes": "llm_notes",
+    "Strategic Priority Coefficient": "strategic_priority_coefficient",
+    "Updated At": "updated_at",
+    "Updated Source": "updated_source",
+}
+
+__all__ = [
+    "MATHMODELS_HEADER_MAP",
+    "PARAMS_HEADER_MAP",
+    "INTAKE_HEADER_MAP",
+    "PRODUCTOPS_SCORE_OUTPUT_COLUMNS",
+    "SCORE_FIELD_TO_HEADERS",
+    "CENTRAL_BACKLOG_HEADER",
+    "CENTRAL_HEADER_TO_FIELD",
+    "CENTRAL_EDITABLE_FIELDS",
+]
 
 
 class MathModelRow(BaseModel):
@@ -95,6 +201,8 @@ class ParamRow(BaseModel):
     value: Optional[float | str] = None
     unit: Optional[str] = None
     param_display: Optional[str] = None
+    # Back-compat alias expected by some tests/readers
+    display: Optional[str] = None
     description: Optional[str] = None
     source: Optional[str] = None
     approved: Optional[bool] = None
@@ -103,3 +211,34 @@ class ParamRow(BaseModel):
     min: Optional[float] = None
     max: Optional[float] = None
     notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _sync_display_aliases(self) -> "ParamRow":
+        # Ensure back-compat: keep display and param_display in sync
+        if self.display and not self.param_display:
+            self.param_display = self.display
+        elif self.param_display and not self.display:
+            self.display = self.param_display
+        return self
+
+
+# Central Backlog editable columns mapping (used by protected ranges logic)
+# Keys are exact header names in CENTRAL_BACKLOG_HEADER that are editable by users.
+CENTRAL_EDITABLE_FIELDS: List[str] = [
+    "Title",
+    "Requesting Team",
+    "Requester Name",
+    "Requester Email",
+    "Country",
+    "Product Area",
+    "Status",
+    "Strategic Theme",
+    "Customer Segment",
+    "Initiative Type",
+    "Hypothesis",
+    "Problem Statement",
+    "Dependencies Initiatives",
+    "Dependencies Others",
+    "LLM Summary",
+    "LLM Notes",
+]

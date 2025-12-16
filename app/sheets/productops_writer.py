@@ -17,30 +17,16 @@ from sqlalchemy.orm import Session
 
 from app.db.models.initiative import Initiative
 from app.sheets.client import SheetsClient
+from app.utils.header_utils import normalize_header as _normalize_header
 
 logger = logging.getLogger(__name__)
+from app.sheets.models import (
+    PRODUCTOPS_SCORE_OUTPUT_COLUMNS,
+    SCORE_FIELD_TO_HEADERS,
+)
 
-# Score output columns (write-back phase)
-# These are the columns that Flow 3.C.2 populates with computed scores
-PRODUCTOPS_SCORE_OUTPUT_COLUMNS: List[str] = [
-    "rice_value_score",
-    "rice_effort_score",
-    "rice_overall_score",
-    "wsjf_value_score",
-    "wsjf_effort_score",
-    "wsjf_overall_score",
-]
-
-# Map score field names to column header variations (for flexible header parsing)
-# Handles both "rice_value_score" (direct) and "RICE: Value Score" (namespaced) formats
-SCORE_FIELD_TO_HEADERS: Dict[str, List[str]] = {
-    "rice_value_score": ["rice_value_score", "rice: value score"],
-    "rice_effort_score": ["rice_effort_score", "rice: effort score"],
-    "rice_overall_score": ["rice_overall_score", "rice: overall score"],
-    "wsjf_value_score": ["wsjf_value_score", "wsjf: value score"],
-    "wsjf_effort_score": ["wsjf_effort_score", "wsjf: effort score"],
-    "wsjf_overall_score": ["wsjf_overall_score", "wsjf: overall score"],
-}
+# Note: PRODUCTOPS_SCORE_OUTPUT_COLUMNS and SCORE_FIELD_TO_HEADERS are imported
+# from app.sheets.models (centralized). Do not redefine locally.
 
 
 def write_scores_to_productops_sheet(
@@ -74,7 +60,8 @@ def write_scores_to_productops_sheet(
         raise ValueError("spreadsheet_id is required")
 
     # Step 1: Read sheet to get header row and find score column indices
-    values = client.get_values(spreadsheet_id, tab_name)
+    # Use explicit A1 range to ensure consistent header + body retrieval
+    values = client.get_values(spreadsheet_id, f"{tab_name}!A1:ZZ")
     if not values or len(values) < 2:
         logger.warning("productops_writer.empty_sheet", extra={"tab": tab_name})
         return 0
@@ -82,13 +69,21 @@ def write_scores_to_productops_sheet(
     headers = values[0]
     norm_headers = [_normalize_header(h) for h in headers]
 
+    # Build alias lookup: normalized alias -> canonical field
+    alias_lookup: Dict[str, str] = {}
+    for field, aliases in SCORE_FIELD_TO_HEADERS.items():
+        for a in aliases:
+            alias_lookup[_normalize_header(a)] = field
+
     # Step 2: Find which columns correspond to each score field + initiative_key
     col_map: Dict[str, int] = {}  # field_name -> column_index (0-based)
     for i, nh in enumerate(norm_headers):
         if nh == "initiative_key":
             col_map["initiative_key"] = i
-        elif nh in PRODUCTOPS_SCORE_OUTPUT_COLUMNS:
-            col_map[nh] = i
+            continue
+        # If header matches any known alias, map to its canonical field
+        if nh in alias_lookup:
+            col_map[alias_lookup[nh]] = i
 
     if "initiative_key" not in col_map:
         logger.warning("productops_writer.no_key_column", extra={"tab": tab_name})
@@ -173,29 +168,7 @@ def write_scores_to_productops_sheet(
     return len(updated_initiatives)
 
 
-def _normalize_header(name: str) -> str:
-    """Normalize sheet header to lowercase field name format.
-
-    Handles both formats:
-    - Direct: "rice_value_score" → "rice_value_score"
-    - Namespaced: "RICE: Value Score" → "rice_value_score"
-
-    Args:
-        name: Raw header string from sheet
-
-    Returns:
-        Normalized lowercase field name
-    """
-    n = (name or "").strip().lower()
-
-    # If it has a colon, it's namespaced format (e.g., "RICE: Value Score")
-    if ":" in n:
-        fw, param = [p.strip() for p in n.split(":", 1)]
-        normalized = f"{fw}_{param.replace(' ', '_')}"
-        return normalized
-
-    # Otherwise, assume direct format (e.g., "rice_value_score")
-    return n.replace(" ", "_")
+# Use shared header normalization from app.utils.header_utils
 
 
 def _cell_range_for_update(tab_name: str, col_idx: int, row_idx: int) -> str:

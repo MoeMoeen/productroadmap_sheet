@@ -9,69 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.db.models.initiative import Initiative
 from app.sheets.client import SheetsClient
-from app.services.backlog_service import CENTRAL_EDITABLE_FIELDS
-
-# Central Backlog header definition (keep single source of truth)
-CENTRAL_BACKLOG_HEADER: List[str] = [
-    "Initiative Key",
-    "Title",
-    "Requesting Team",
-    "Requester Name",
-    "Requester Email",
-    "Country",
-    "Product Area",
-    "Status",
-    "Strategic Theme",
-    "Customer Segment",
-    "Initiative Type",
-    "Hypothesis",
-    "Problem Statement",
-    # Scoring outputs
-    "Value Score",
-    "Effort Score",
-    "Overall Score",
-    "Active Scoring Framework",
-    "Use Math Model",
-    # Dependencies & LLM
-    "Dependencies Initiatives",
-    "Dependencies Others",
-    "LLM Summary",
-    "LLM Notes",
-    # Strategic coefficient
-    "Strategic Priority Coefficient",
-    # Metadata
-    "Updated At",
-    "Updated Source",
-]
-
-# Map header labels to Initiative field names for editability decisions
-CENTRAL_HEADER_TO_FIELD: Dict[str, str] = {
-    "Initiative Key": "initiative_key",
-    "Title": "title",
-    "Requesting Team": "requesting_team",
-    "Requester Name": "requester_name",
-    "Requester Email": "requester_email",
-    "Country": "country",
-    "Product Area": "product_area",
-    "Status": "status",
-    "Strategic Theme": "strategic_theme",
-    "Customer Segment": "customer_segment",
-    "Initiative Type": "initiative_type",
-    "Hypothesis": "hypothesis",
-    "Problem Statement": "problem_statement",
-    "Value Score": "value_score",
-    "Effort Score": "effort_score",
-    "Overall Score": "overall_score",
-    "Active Scoring Framework": "active_scoring_framework",
-    "Use Math Model": "use_math_model",
-    "Dependencies Initiatives": "dependencies_initiatives",
-    "Dependencies Others": "dependencies_others",
-    "LLM Summary": "llm_summary",
-    "LLM Notes": "llm_notes",
-    "Strategic Priority Coefficient": "strategic_priority_coefficient",
-    "Updated At": "updated_at",
-    "Updated Source": "updated_source",
-}
+from app.sheets.models import CENTRAL_EDITABLE_FIELDS
+from app.sheets.models import CENTRAL_BACKLOG_HEADER, CENTRAL_HEADER_TO_FIELD
 
 
 def _to_sheet_value(value: Any):

@@ -9,7 +9,7 @@ Usage examples:
     uv run python -m test_scripts.flow2_scoring_cli --framework RICE --all
 
 Flags:
-    --framework NAME      Override framework for all (RICE, WSJF). Omit for AUTO (per-initiative).
+    --framework NAME      Override framework for all (RICE, WSJF, MATH_MODEL). Omit for AUTO (per-initiative).
     --batch-size N        Commit every N initiatives (default: settings.SCORING_BATCH_COMMIT_EVERY)
     --all                 Score all initiatives (even if already scored)
     --only-missing        Only score initiatives missing scores or with a different framework (default)
@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
         "--framework",
         type=str,
         default=None,
-        help="Override framework for all (RICE, WSJF). Omit for AUTO (per-initiative).",
+        help="Override framework for all (RICE, WSJF, MATH_MODEL). Omit for AUTO (per-initiative).",
     )
     parser.add_argument(
         "--batch-size",

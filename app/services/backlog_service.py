@@ -12,6 +12,7 @@ from app.db.models.initiative import Initiative  # type: ignore
 from app.sheets.backlog_reader import BacklogRow  # type: ignore
 from app.config import settings
 from app.utils.header_utils import get_value_by_header_alias
+from app.sheets.models import INTAKE_HEADER_MAP, CENTRAL_EDITABLE_FIELDS
 
 from .backlog_mapper import backlog_row_to_update_data
 
@@ -19,56 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 # Fields that central product team can update from the central backlog sheet.
-CENTRAL_EDITABLE_FIELDS = {
-    # High-level info Product may refine
-    "title",
-    "requesting_team",
-    "country",
-    "product_area",
-
-    # Strategic alignment
-    "strategic_theme",
-    "customer_segment",
-    "initiative_type",
-    "linked_objectives",
-    "strategic_priority_coefficient",
-
-    # Impact & effort (Product may override/refine intake estimates centrally)
-    "expected_impact_description",
-    "impact_metric",
-    "impact_unit",
-    "impact_low",
-    "impact_expected",
-    "impact_high",
-    "effort_tshirt_size",
-    "effort_engineering_days",
-    "effort_other_teams_days",
-    "infra_cost_estimate",
-    "total_cost_estimate",
-
-    # Dependencies / risk
-    "dependencies_initiatives",
-    "dependencies_others",
-    "is_mandatory",
-    "risk_level",
-    "risk_description",
-    "time_sensitivity",
-    "deadline_date",
-
-    # Lifecycle
-    "status",
-
-    # Scoring & frameworks
-    "active_scoring_framework",
-    "use_math_model",
-    "value_score",
-    "effort_score",
-    "overall_score",
-    "score_approved_by_user",
-
-    # LLM notes / annotations Product may edit or extend
-    "llm_notes",
-}
+# CENTRAL_EDITABLE_FIELDS is now centralized in app.sheets.models
 
 class BacklogService:
     """
@@ -108,10 +60,11 @@ class BacklogService:
     @staticmethod
     def _extract_initiative_key(row: BacklogRow) -> str:
         """Extract the initiative key from a backlog row dict."""
+        aliases = INTAKE_HEADER_MAP.get("initiative_key", ["Initiative Key"]) or ["Initiative Key"]
         val = get_value_by_header_alias(
             row,
-            getattr(settings, "INTAKE_KEY_HEADER_NAME", "Initiative Key"),
-            getattr(settings, "INTAKE_KEY_HEADER_ALIASES", []),
+            aliases[0],
+            aliases[1:],
         )
         return (str(val).strip() if val else "")
 
@@ -176,6 +129,5 @@ class BacklogService:
 
 __all__ = [
     "BacklogService",
-    "CENTRAL_EDITABLE_FIELDS",
     "backlog_row_to_update_data",
 ]

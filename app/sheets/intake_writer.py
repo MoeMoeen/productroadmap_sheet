@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from typing import Optional
 
+import logging
 from app.config import settings
 from app.sheets.client import SheetsClient
 from app.utils.header_utils import normalize_header
+from app.sheets.models import INTAKE_HEADER_MAP
+
+logger = logging.getLogger(__name__)
 
 
 def _col_index_to_a1(idx: int) -> str:
@@ -34,9 +38,9 @@ class GoogleSheetsIntakeWriter:
         range_a1 = f"{tab_name}!{header_row}:{header_row}"
         values = self.client.get_values(sheet_id, range_a1)
         headers = values[0] if values else []
-        target = normalize_header(getattr(settings, "INTAKE_KEY_HEADER_NAME", "Initiative Key") or "")
-        # allow aliases (normalized)
-        alias_set = {normalize_header(h) for h in (getattr(settings, "INTAKE_KEY_HEADER_ALIASES", []) or [])}
+        aliases = INTAKE_HEADER_MAP.get("initiative_key", ["Initiative Key"]) or ["Initiative Key"]
+        target = normalize_header(aliases[0])
+        alias_set = {normalize_header(h) for h in aliases[1:]}
         for i, h in enumerate(headers, start=1):
             if h is None:
                 continue
@@ -49,6 +53,7 @@ class GoogleSheetsIntakeWriter:
         """Write the initiative_key to the specified row in the intake sheet."""
         col_idx = self._find_key_column_index(sheet_id, tab_name)
         if not col_idx:
+            logger.warning("intake_writer.missing_initiative_key_column", extra={"tab": tab_name})
             return
         col_a1 = _col_index_to_a1(col_idx)
         cell_a1 = f"{tab_name}!{col_a1}{row_number}"

@@ -120,6 +120,7 @@ class Initiative(Base):
     math_value_score = Column(Float, nullable=True)
     math_effort_score = Column(Float, nullable=True)
     math_overall_score = Column(Float, nullable=True)
+    math_warnings = Column(Text, nullable=True)  # Joined warning messages from math model scoring
     
     score_llm_suggested = Column(Boolean, nullable=False, default=False)
     score_approved_by_user = Column(Boolean, nullable=False, default=False)

@@ -104,6 +104,12 @@ class ScoringService:
                 },
             )
 
+        # Ensure DB state reflects attribute updates for callers that refresh without commit
+        try:
+            self.db.flush()
+        except Exception:
+            logger.debug("scoring.flush_failed")
+
         # Optional history row
         history_row: Optional[InitiativeScore] = None
         if enable_history:
@@ -168,6 +174,8 @@ class ScoringService:
             initiative.math_value_score = result.value_score  # type: ignore[assignment]
             initiative.math_effort_score = result.effort_score  # type: ignore[assignment]
             initiative.math_overall_score = result.overall_score  # type: ignore[assignment]
+            # Store warnings for ProductOps sheet visibility
+            initiative.math_warnings = "; ".join(result.warnings) if result.warnings else None  # type: ignore[assignment]
 
         for warn in result.warnings:
             logger.warning(
@@ -301,7 +309,9 @@ class ScoringService:
                     )
                     continue
 
-                self.score_initiative(
+                # Flow 2 activates framework by copying per-framework scores to active fields
+                # This avoids recomputation - Flow 3 should have already computed per-framework scores
+                self.activate_initiative_framework(
                     initiative,
                     chosen,
                     enable_history=settings.SCORING_ENABLE_HISTORY,
