@@ -6,7 +6,6 @@ import logging
 from typing import List, Optional, Dict
 
 from sqlalchemy.orm import Session
-from app.db.schema_ensure import ensure_math_scoring_columns
 
 from app.config import settings
 from app.db.models.initiative import Initiative
@@ -123,12 +122,6 @@ def run_flow3_sync_inputs_to_initiatives(
 
     Strong sync: empty cells → None in DB.
     """
-    # Ensure DB has necessary columns before querying/writing
-    try:
-        ensure_math_scoring_columns(db.get_bind())
-    except Exception:
-        pass
-
     batch_size = commit_every or settings.SCORING_BATCH_COMMIT_EVERY
 
     rows = run_flow3_preview_inputs(spreadsheet_id=spreadsheet_id, tab_name=tab_name)

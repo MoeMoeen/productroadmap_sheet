@@ -12,6 +12,7 @@ from typing import Optional
 from app.config import settings
 from app.db.session import SessionLocal
 from app.sheets.client import get_sheets_service, SheetsClient
+from app.sheets.sheet_protection import apply_all_productops_protections
 from app.services.math_model_service import MathModelSyncService
 from app.services.params_sync_service import ParamsSyncService
 from app.llm.client import LLMClient
@@ -59,6 +60,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Seed Params from approved MathModels formulas (Step 8: extract identifiers, call LLM for metadata, append-only)",
     )
+    mode.add_argument(
+        "--protect-sheets",
+        action="store_true",
+        help="Apply warning-only protections to ProductOps system columns (one-time setup)",
+    )
 
     parser.add_argument("--spreadsheet-id", type=str, default=None, help="Override Product Ops spreadsheet ID")
     parser.add_argument("--mathmodels-tab", type=str, default=None, help="Override MathModels tab name")
@@ -84,7 +90,7 @@ def configure_logging(level: str) -> None:
 
 def resolve_sheet_config(
     spreadsheet_id: Optional[str], mathmodels_tab: Optional[str], params_tab: Optional[str]
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, str]:
     cfg = settings.PRODUCT_OPS
     if not cfg:
         raise RuntimeError("PRODUCT_OPS not configured; set PRODUCT_OPS_CONFIG_FILE or env settings")
@@ -92,7 +98,8 @@ def resolve_sheet_config(
     sid = spreadsheet_id or cfg.spreadsheet_id
     mtab = mathmodels_tab or cfg.mathmodels_tab
     ptab = params_tab or cfg.params_tab
-    return sid, mtab, ptab
+    scoring_tab = cfg.scoring_inputs_tab or "Scoring_Inputs"
+    return sid, mtab, ptab, scoring_tab
 
 
 def main() -> int:
@@ -101,7 +108,7 @@ def main() -> int:
     logger = logging.getLogger(__name__)
 
     try:
-        spreadsheet_id, mathmodels_tab, params_tab = resolve_sheet_config(
+        spreadsheet_id, mathmodels_tab, params_tab, scoring_inputs_tab = resolve_sheet_config(
             args.spreadsheet_id, args.mathmodels_tab, args.params_tab
         )
     except Exception:
@@ -110,6 +117,22 @@ def main() -> int:
 
     service = get_sheets_service()
     client = SheetsClient(service)
+
+    # Handle --protect-sheets (no DB needed)
+    if args.protect_sheets:
+        try:
+            apply_all_productops_protections(
+                client=client,
+                spreadsheet_id=spreadsheet_id,
+                math_models_tab=mathmodels_tab,
+                params_tab=params_tab,
+                scoring_inputs_tab=scoring_inputs_tab,
+            )
+            logger.info("flow4.cli.protect_sheets_complete")
+            return 0
+        except Exception:
+            logger.exception("flow4.cli.protect_sheets_error")
+            return 1
 
     if args.preview_mathmodels:
         try:
