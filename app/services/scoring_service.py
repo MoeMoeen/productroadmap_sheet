@@ -187,6 +187,12 @@ class ScoringService:
                 },
             )
 
+        # Ensure DB state reflects attribute updates for callers that refresh without commit
+        try:
+            self.db.flush()
+        except Exception:
+            logger.debug("scoring.flush_failed_per_framework")
+
         history_row: Optional[InitiativeScore] = None
         if enable_history:
             llm_suggested = False
