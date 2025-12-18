@@ -10,6 +10,42 @@ from app.sheets.client import SheetsClient
 from app.sheets.models import ParamRow, PARAMS_HEADER_MAP
 from app.utils.header_utils import normalize_header
 
+
+def _blank_to_none(v: Any) -> Any:
+    if v is None:
+        return None
+    if isinstance(v, str) and v.strip() == "":
+        return None
+    return v
+
+
+def _coerce_bool(v: Any) -> Optional[bool]:
+    v = _blank_to_none(v)
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    if s in ("true", "1", "yes", "y"):
+        return True
+    if s in ("false", "0", "no", "n"):
+        return False
+    # Unknown → treat as None rather than crashing the whole row
+    return None
+
+
+def _coerce_float(v: Any) -> Optional[float]:
+    v = _blank_to_none(v)
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return float(str(v).strip())
+    except ValueError:
+        return None
+
+
 # Pair of (row_number, ParamRow)
 ParamRowPair = Tuple[int, ParamRow]
 
@@ -100,7 +136,18 @@ class ParamsReader:
             # Map to ParamRow field names using header map
             for canonical_field, aliases in PARAMS_HEADER_MAP.items():
                 if normalized_key in [normalize_header(a) for a in aliases]:
-                    row_dict[canonical_field] = value
+                    # Field-specific normalization/coercion
+                    if canonical_field in ("approved", "is_auto_seeded"):
+                        row_dict[canonical_field] = _coerce_bool(value)
+                    elif canonical_field in ("min", "max"):
+                        row_dict[canonical_field] = _coerce_float(value)
+                    elif canonical_field == "value":
+                        # value can be float OR str; keep numeric if parseable, else keep string/non-empty
+                        fv = _coerce_float(value)
+                        row_dict[canonical_field] = fv if fv is not None else (_blank_to_none(value) or "")
+                    else:
+                        row_dict[canonical_field] = _blank_to_none(value)
+
                     break
         
         return row_dict

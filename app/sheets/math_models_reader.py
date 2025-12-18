@@ -10,6 +10,27 @@ from app.sheets.client import SheetsClient
 from app.sheets.models import MathModelRow, MATHMODELS_HEADER_MAP
 from app.utils.header_utils import normalize_header, get_value_by_header_alias
 
+def _blank_to_none(v):
+    if v is None:
+        return None
+    if isinstance(v, str) and v.strip() == "":
+        return None
+    return v
+
+def _coerce_bool(v):
+    v = _blank_to_none(v)
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    if s in ("true", "1", "yes", "y"):
+        return True
+    if s in ("false", "0", "no", "n"):
+        return False
+    return None
+
+
 # Pair of (row_number, MathModelRow)
 MathModelRowPair = Tuple[int, MathModelRow]
 
@@ -98,7 +119,11 @@ class MathModelsReader:
             # Map to MathModelRow field names using header map
             for canonical_field, aliases in MATHMODELS_HEADER_MAP.items():
                 if normalized_key in [normalize_header(a) for a in aliases]:
-                    row_dict[canonical_field] = value
+                    if canonical_field in ("approved_by_user", "suggested_by_llm"):
+                        row_dict[canonical_field] = _coerce_bool(value)
+                    else:
+                        row_dict[canonical_field] = _blank_to_none(value)
+
                     break
         
         return row_dict

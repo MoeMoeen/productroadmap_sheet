@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class MathModelPromptInput(BaseModel):
@@ -34,9 +34,16 @@ class ParamSuggestion(BaseModel):
     name: str  # human-friendly name
     description: Optional[str] = None
     unit: Optional[str] = None
-    example_value: Optional[str] = None  # keep string to allow ranges or enums
+    example_value: Optional[Any] = None  # keep string to allow ranges or enums
     source_hint: Optional[str] = None  # where to get data (system/team)
 
+    @model_validator(mode="after")
+    def _coerce_example_value(self) -> "ParamSuggestion":
+        if self.example_value is None:
+            return self
+        # Convert numbers/bools/etc. to string
+        self.example_value = str(self.example_value)
+        return self
 
 class ParamMetadataSuggestion(BaseModel):
     initiative_key: str
