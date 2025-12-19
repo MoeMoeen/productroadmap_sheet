@@ -32,12 +32,14 @@ from app.services.scoring_service import ScoringService
 
 
 def configure_logging() -> None:
-    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(name)s :: %(message)s")
+    """Configure JSON logging for the app"""
+    from app.config import setup_json_logging
+    setup_json_logging(log_level=logging.DEBUG)
 
 
 def test_flow3_e2e() -> None:
     """Run full Flow 3 pipeline and validate state at each step."""
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger("app.test_flow3_e2e")
 
     db = SessionLocal()
     try:

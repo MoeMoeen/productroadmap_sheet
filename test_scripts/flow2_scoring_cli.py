@@ -62,17 +62,16 @@ def parse_args() -> argparse.Namespace:
 
 
 def configure_logging(level: str) -> None:
+    """Configure JSON logging for the app"""
+    from app.config import setup_json_logging
     lvl = getattr(logging, level.upper(), logging.INFO)
-    logging.basicConfig(
-        level=lvl,
-        format="%(asctime)s %(levelname)s %(name)s :: %(message)s",
-    )
+    setup_json_logging(log_level=lvl)
 
 
 def main() -> int:
     args = parse_args()
     configure_logging(args.log_level)
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger("app.flow2_cli")
     logger.info("scoring.cli.start")
 
     framework = None
