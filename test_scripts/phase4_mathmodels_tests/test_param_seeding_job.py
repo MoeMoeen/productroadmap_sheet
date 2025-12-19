@@ -84,10 +84,10 @@ def test_seed_params_skips_unapproved_mathmodel(mock_llm_client, mock_sheets_cli
             llm_client=mock_llm_client,
         )
         
-        assert stats.rows_scanned == 1
-        assert stats.skipped_unapproved == 1
+        assert stats.rows_scanned_mathmodelstab == 1
+        assert stats.skipped_row_mathmodeltab_unapproved == 1
         assert stats.llm_calls == 0
-        assert stats.seeded_params == 0
+        assert stats.seeded_params_paramsstab == 0
 
 
 def test_seed_params_skips_when_no_missing_identifiers(mock_llm_client, mock_sheets_client):
@@ -123,10 +123,10 @@ def test_seed_params_skips_when_no_missing_identifiers(mock_llm_client, mock_she
             llm_client=mock_llm_client,
         )
         
-        assert stats.rows_scanned == 1
-        assert stats.skipped_no_missing == 1
+        assert stats.rows_scanned_mathmodelstab == 1
+        assert stats.skipped_row_mathmodeltab_no_missing == 1
         assert stats.llm_calls == 0
-        assert stats.seeded_params == 0
+        assert stats.seeded_params_paramsstab == 0
 
 
 def test_seed_params_appends_only_missing_rows(mock_llm_client, mock_sheets_client):
@@ -162,10 +162,10 @@ def test_seed_params_appends_only_missing_rows(mock_llm_client, mock_sheets_clie
             llm_client=mock_llm_client,
         )
         
-        assert stats.rows_scanned == 1
-        assert stats.eligible_rows == 1
+        assert stats.rows_scanned_mathmodelstab == 1
+        assert stats.eligible_rows_mathmodelstab == 1
         assert stats.llm_calls == 1
-        assert stats.seeded_params == 2  # y and z
+        assert stats.seeded_params_paramsstab == 2  # y and z
         
         # Verify append_new_params was called with only missing identifiers
         mock_writer.append_new_params.assert_called_once()
@@ -208,7 +208,7 @@ def test_seed_params_sets_flags_approved_false_auto_seeded_true(mock_llm_client,
             llm_client=mock_llm_client,
         )
         
-        assert stats.seeded_params == 1
+        assert stats.seeded_params_paramsstab == 1
         
         # Verify flags
         call_args = mock_writer.append_new_params.call_args
@@ -251,7 +251,7 @@ def test_seed_params_uses_framework_math_model(mock_llm_client, mock_sheets_clie
             llm_client=mock_llm_client,
         )
         
-        assert stats.seeded_params == 1
+        assert stats.seeded_params_paramsstab == 1
         
         # Verify framework
         call_args = mock_writer.append_new_params.call_args
@@ -295,9 +295,9 @@ def test_seed_params_respects_max_llm_calls(mock_llm_client, mock_sheets_client)
         )
         
         # Job breaks after hitting max_llm_calls, so rows_scanned will be 4 (3 processed + 1 that triggered break)
-        assert stats.rows_scanned >= 3
+        assert stats.rows_scanned_mathmodelstab >= 3
         assert stats.llm_calls == 3  # Should stop at limit
-        assert stats.seeded_params == 3  # Only 3 params seeded
+        assert stats.seeded_params_paramsstab == 3  # Only 3 params seeded
 
 
 def test_seed_params_skips_rows_with_no_identifiers(mock_llm_client, mock_sheets_client):
@@ -331,7 +331,7 @@ def test_seed_params_skips_rows_with_no_identifiers(mock_llm_client, mock_sheets
             llm_client=mock_llm_client,
         )
         
-        assert stats.rows_scanned == 1
-        assert stats.skipped_no_identifiers == 1
+        assert stats.rows_scanned_mathmodelstab == 1
+        assert stats.skipped_row_mathmodeltab_no_identifiers == 1
         assert stats.llm_calls == 0
-        assert stats.seeded_params == 0
+        assert stats.seeded_params_paramsstab == 0

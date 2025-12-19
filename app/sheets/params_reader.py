@@ -4,12 +4,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Iterable, List, Tuple, Optional
 
 from app.sheets.client import SheetsClient
 from app.sheets.models import ParamRow, PARAMS_HEADER_MAP
 from app.utils.header_utils import normalize_header
 
+logger = logging.getLogger("app.sheets.params_reader")
 
 def _blank_to_none(v: Any) -> Any:
     if v is None:
@@ -104,10 +106,20 @@ class ParamsReader:
         
         for row_cells in data_rows:
             if self._is_empty_row(row_cells):
+                logger.warning(f"Skipping empty Param row {current_row_number}")
                 current_row_number += 1
                 continue
             
             row_dict = self._row_to_dict(header, row_cells)
+
+            ik = row_dict.get("initiative_key")
+            pn = row_dict.get("param_name")
+
+            if not (isinstance(ik, str) and ik.strip()) or not (isinstance(pn, str) and pn.strip()):
+                logger.warning(f"Skipping Param row {current_row_number} due to missing initiative_key or param_name")
+                current_row_number += 1
+                continue
+
             try:
                 param_row = ParamRow(**row_dict)
                 rows.append((current_row_number, param_row))
@@ -128,6 +140,7 @@ class ParamsReader:
         for idx, col_name in enumerate(header):
             key = str(col_name).strip()
             if not key:
+                logger.warning(f"Skipping empty header cell at index {idx}")
                 continue
             
             normalized_key = normalize_header(key)

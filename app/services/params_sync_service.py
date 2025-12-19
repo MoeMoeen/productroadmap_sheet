@@ -48,6 +48,15 @@ class ParamsSyncService:
         - unique per (initiative_key, framework, param_name)
         - fields: framework, param_name, param_display, description, unit, value,
               source, approved, is_auto_seeded, min, max, notes
+
+        Returns summary dict:
+        {
+            "row_count": int,
+            "upserts": int,
+            "created_params": int,
+            "skipped_no_initiative": int,
+            "skipped_no_name": int,
+        }
         """
         rows = self.reader.get_rows_for_sheet(spreadsheet_id, tab_name)
         upserts = 0
@@ -143,9 +152,9 @@ class ParamsSyncService:
             db.commit()
 
         return {
-            "rows": len(rows),
+            "row_count": len(rows),
             "upserts": upserts,
-            "created": created,
+            "created_params": created,
             "skipped_no_initiative": skipped_no_initiative,
             "skipped_no_name": skipped_no_name,
         }

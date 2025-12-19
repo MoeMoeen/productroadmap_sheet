@@ -84,8 +84,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def configure_logging(level: str) -> None:
+    """Configure JSON logging for the app"""
+    from app.config import setup_json_logging
     lvl = getattr(logging, level.upper(), logging.INFO)
-    logging.basicConfig(level=lvl, format="%(asctime)s %(levelname)s %(name)s :: %(message)s")
+    setup_json_logging(log_level=lvl)
 
 
 def resolve_sheet_config(
@@ -105,7 +107,7 @@ def resolve_sheet_config(
 def main() -> int:
     args = parse_args()
     configure_logging(args.log_level)
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger("app.flow4_cli")
 
     try:
         spreadsheet_id, mathmodels_tab, params_tab, scoring_inputs_tab = resolve_sheet_config(

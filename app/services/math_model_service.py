@@ -134,7 +134,7 @@ class MathModelSyncService:
             db.commit()
 
         return {
-            "rows": len(rows),
+            "row_count": len(rows),
             "updated": updated,
             "created_models": created_models,
             "skipped_no_initiative": skipped_no_initiative,

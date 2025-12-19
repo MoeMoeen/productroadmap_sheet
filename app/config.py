@@ -3,13 +3,60 @@
 from typing import List, Optional
 from pathlib import Path
 import json
+import logging
+import sys
 
 from pydantic import BaseModel, Field, model_validator, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import load_dotenv
+from pythonjsonlogger.json import JsonFormatter
 
 load_dotenv()
 
+# Custom JSON formatter that excludes null/None fields
+class CustomJsonFormatter(JsonFormatter):
+    """Custom JSON formatter that only includes fields with non-None values."""
+    
+    def add_fields(self, log_record, record, message_dict):
+        """Override to filter out None values before adding to JSON output."""
+        super().add_fields(log_record, record, message_dict)
+        
+        # Remove keys with None values
+        log_record_copy = dict(log_record)
+        for key, value in log_record_copy.items():
+            if value is None:
+                del log_record[key]
+
+def setup_json_logging(log_level: int = logging.INFO) -> None:
+    """Initialize JSON logging configuration for the application."""
+    # Configure JSON logging
+    handler = logging.StreamHandler(sys.stdout)
+
+    # JSON formatter with common fields used across the application
+    formatter = CustomJsonFormatter(
+        "%(asctime)s %(levelname)s %(name)s %(message)s "
+        "%(framework)s %(initiative_key)s %(initiative_id)s "
+        "%(count)s %(total)s %(row_count)s %(scored)s %(processed)s "
+        "%(warning)s %(reason)s %(overall_score)s %(value_score)s "
+        "%(effort_score)s %(updated)s"
+    )
+
+    handler.setFormatter(formatter)
+
+    # Create root logger for the app
+    root_logger = logging.getLogger("app")
+    root_logger.setLevel(log_level)
+    
+    # Remove existing handlers to avoid duplicates
+    root_logger.handlers = []
+    
+    root_logger.addHandler(handler)
+
+    # Prevent propagation to avoid duplicate logs
+    root_logger.propagate = False
+
+# Initialize JSON logging on module import (only if explicitly called)
+# setup_json_logging()
 
 class IntakeTabConfig(BaseModel):
     key: str

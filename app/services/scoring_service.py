@@ -14,7 +14,7 @@ from app.db.models.scoring import InitiativeParam
 from app.db.models.scoring import InitiativeScore
 from app.services.scoring import ScoringFramework, ScoreInputs, get_engine
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app.services.scoring")
 
 
 class ScoringService:
@@ -235,7 +235,7 @@ class ScoringService:
 
         This computes RICE, WSJF, and Math Model scores separately, storing each in its
         own fields (rice_*, wsjf_*, math_*). Useful for:
-        - Product Ops sheet to show all frameworks side-by-side for comparison
+        - Product Ops sheet (the scoring tab) to show all frameworks side-by-side for comparison
         - Multi-framework dashboards
         - Allowing PMs to see all scores regardless of active_scoring_framework
 
@@ -369,7 +369,7 @@ class ScoringService:
         - For each initiative, computes WSJF score and stores in wsjf_* fields
         - For each initiative, computes Math Model score and stores in math_* fields
         - Does NOT change active_scoring_framework or active score fields
-        - Allows Product Ops sheet to display all framework scores for comparison
+        - Allows Product Ops sheet (the scoring tab) to display all framework scores for comparison
 
         Returns:
             Count of initiatives processed (not necessarily scored if errors occurred)

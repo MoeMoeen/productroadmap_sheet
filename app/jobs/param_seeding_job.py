@@ -27,25 +27,25 @@ class ParamSeedingStats:
     """Statistics for param seeding job run."""
 
     def __init__(self) -> None:
-        self.rows_scanned = 0
-        self.eligible_rows = 0
-        self.seeded_params = 0
+        self.rows_scanned_mathmodelstab = 0
+        self.eligible_rows_mathmodelstab = 0
+        self.seeded_params_paramsstab = 0
         self.llm_calls = 0
-        self.skipped_no_missing = 0
-        self.skipped_unapproved = 0
-        self.skipped_no_identifiers = 0
-        self.skipped_invalid_formula = 0
+        self.skipped_row_mathmodeltab_no_missing = 0
+        self.skipped_row_mathmodeltab_unapproved = 0
+        self.skipped_row_mathmodeltab_no_identifiers = 0
+        self.skipped_row_mathmodeltab_invalid_formula = 0
 
     def summary(self) -> Dict[str, int]:
         return {
-            "rows_scanned": self.rows_scanned,
-            "eligible_rows": self.eligible_rows,
-            "seeded_params": self.seeded_params,
+            "rows_scanned_mathmodelstab": self.rows_scanned_mathmodelstab,
+            "eligible_rows_mathmodelstab": self.eligible_rows_mathmodelstab,
+            "seeded_params_paramsstab": self.seeded_params_paramsstab,
             "llm_calls": self.llm_calls,
-            "skipped_no_missing": self.skipped_no_missing,
-            "skipped_unapproved": self.skipped_unapproved,
-            "skipped_no_identifiers": self.skipped_no_identifiers,
-            "skipped_invalid_formula": self.skipped_invalid_formula,
+            "skipped_row_mathmodeltab_no_missing": self.skipped_row_mathmodeltab_no_missing,
+            "skipped_row_mathmodeltab_unapproved": self.skipped_row_mathmodeltab_unapproved,
+            "skipped_row_mathmodeltab_no_identifiers": self.skipped_row_mathmodeltab_no_identifiers,
+            "skipped_row_mathmodeltab_invalid_formula": self.skipped_row_mathmodeltab_invalid_formula,
         }
 
 
@@ -108,22 +108,27 @@ def run_param_seeding_job(
 
     # Process MathModels
     for row_number, math_row in math_rows:
-        stats.rows_scanned += 1
+        stats.rows_scanned_mathmodelstab += 1
 
         # Skip unapproved
         if not math_row.approved_by_user:
-            stats.skipped_unapproved += 1
+            logger.info(f"Skipping unapproved MathModel row {row_number} {math_row.initiative_key}")
+            stats.skipped_row_mathmodeltab_unapproved += 1
             continue
 
         # Skip if no formula
         if not math_row.formula_text:
-            stats.skipped_invalid_formula += 1
+            logger.info(f"Skipping MathModel row {row_number} {math_row.initiative_key} with no formula")
+            stats.skipped_row_mathmodeltab_invalid_formula += 1
             continue
 
         # Validate formula before extraction (avoid seeding junk)
         errors = validate_formula(math_row.formula_text)
         if errors:
-            stats.skipped_invalid_formula += 1
+            logger.info(
+                f"Skipping MathModel row {row_number} {math_row.initiative_key} with invalid formula: {errors}"
+            )
+            stats.skipped_row_mathmodeltab_invalid_formula += 1
             continue
 
         # Extract identifiers from approved formula
@@ -133,11 +138,12 @@ def run_param_seeding_job(
             logger.warning(
                 f"Failed to extract identifiers from formula at row {row_number}: {exc}"
             )
-            stats.skipped_invalid_formula += 1
+            stats.skipped_row_mathmodeltab_invalid_formula += 1
             continue
 
         if not identifiers:
-            stats.skipped_no_identifiers += 1
+            logger.info(f"Skipping MathModel row {row_number} {math_row.initiative_key} with no identifiers")
+            stats.skipped_row_mathmodeltab_no_identifiers += 1
             continue
         # Find missing identifiers (for MATH_MODEL framework only) and dedupe
         missing_identifiers = sorted(
@@ -149,10 +155,13 @@ def run_param_seeding_job(
         )
 
         if not missing_identifiers:
-            stats.skipped_no_missing += 1
+            logger.info(
+                f"No missing identifiers for MathModel row {row_number}, skipping"
+            )
+            stats.skipped_row_mathmodeltab_no_missing += 1
             continue
 
-        stats.eligible_rows += 1
+        stats.eligible_rows_mathmodelstab += 1
 
         # Check LLM call limit
         if stats.llm_calls >= max_llm_calls:
@@ -186,10 +195,17 @@ def run_param_seeding_job(
         for param_sugg in suggestion.params:
             # Only append if identifier was in missing list
             if param_sugg.key not in missing_identifiers:
+                logger.info(
+                    f"LLM returned param '{param_sugg.key}' not in missing identifiers, skipping"
+                )
                 continue
 
             # Avoid duplicates within the same run
             if param_sugg.key in seen_keys:
+                logger.info(
+                    f"Duplicate LLM param suggestion '{param_sugg.key}' for "
+                    f"{math_row.initiative_key}, skipping"
+                )
                 continue
             seen_keys.add(param_sugg.key)
 
@@ -218,7 +234,7 @@ def run_param_seeding_job(
                 tab_name=params_tab,
                 params=params_to_append,
             )
-            stats.seeded_params += len(params_to_append)
+            stats.seeded_params_paramsstab += len(params_to_append)
             logger.info(
                 f"Seeded {len(params_to_append)} params for {math_row.initiative_key}"
             )
