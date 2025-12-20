@@ -80,7 +80,7 @@ In ProductOps **Scoring_Inputs** tab:
 
 ### 5. Activate chosen framework scores
 ```bash
-uv run python -m test_scripts.flow2_scoring_cli --all --log-level INFO
+uv run python -m test_scripts.flow2_scoring_activation_cli --all --log-level INFO
 ```
 **What it does**: Reads `active_scoring_framework` from DB and copies per-framework scores to active fields:
 - `value_score` ← `rice_value_score` OR `wsjf_value_score` OR `math_value_score`
@@ -237,7 +237,7 @@ uv run python -m test_scripts.flow3_product_ops_cli --write-scores --log-level I
 - Run activation flow:
   ```bash
   uv run python -m test_scripts.flow3_product_ops_cli --sync --log-level INFO
-  uv run python -m test_scripts.flow2_scoring_cli --all --log-level INFO
+  uv run python -m test_scripts.flow2_scoring_activation_cli --all --log-level INFO
   uv run python -m test_scripts.backlog_sync_cli --log-level INFO
   ```
 
@@ -306,7 +306,7 @@ uv run python -m test_scripts.flow3_product_ops_cli --write-scores --log-level I
 **Solution**:
 1. Verify `active_scoring_framework = MATH_MODEL` in Scoring_Inputs tab
 2. Run sync: `uv run python -m test_scripts.flow3_product_ops_cli --sync`
-3. Run activation: `uv run python -m test_scripts.flow2_scoring_cli --all`
+3. Run activation: `uv run python -m test_scripts.flow2_scoring_activation_cli --all`
 4. Run backlog sync: `uv run python -m test_scripts.backlog_sync_cli`
 
 ---

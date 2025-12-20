@@ -68,7 +68,7 @@ def test_flow3_e2e() -> None:
         # Step 2: Flow 3.C Phase 1 - Compute all frameworks
         logger.info("Step 2: Flow 3.C Phase 1 - Compute all frameworks (RICE + WSJF)")
         service = ScoringService(db)
-        compute_count = service.score_all_frameworks(commit_every=10)
+        compute_count = service.compute_all_frameworks(commit_every=10)
         logger.info(f"Computed scores for all {compute_count} initiatives")
         db.commit()
 

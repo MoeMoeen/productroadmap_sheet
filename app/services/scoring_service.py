@@ -264,65 +264,68 @@ class ScoringService:
                 )
                 # Continue with other frameworks; don't let one fail the whole pass
 
-    def score_all(
+    def activate_all(
         self,
-        framework: Optional[ScoringFramework],
+        framework: Optional[ScoringFramework] = None,
         commit_every: Optional[int] = None,
-        only_missing_scores: bool = True,
+        only_missing_active: bool = True,
     ) -> int:
-        """Batch score multiple initiatives.
+        """Activate frameworks for multiple initiatives (Flow 2).
+
+        Does NOT compute scores. Assumes per-framework scores already exist (from Flow 3).
+        Copies the chosen framework's scores into active fields (value_score, effort_score, overall_score).
 
         Args:
-            framework: Scoring framework override for all initiatives. If None, use per-initiative selection.
+            framework: Force all initiatives to use this framework. If None, use per-initiative active_scoring_framework.
             commit_every: Commit every N initiatives; defaults to SCORING_BATCH_COMMIT_EVERY
-            only_missing_scores: If True, skip initiatives already scored with this framework
+            only_missing_active: If True, skip initiatives that already have active scores set
 
         Returns:
-            Count of initiatives scored
+            Count of initiatives activated
         """
         batch_size = commit_every or settings.SCORING_BATCH_COMMIT_EVERY
 
         # Build query
         stmt = select(Initiative).order_by(Initiative.id)
         if framework is not None:
-            if only_missing_scores:
+            if only_missing_active:
                 stmt = stmt.where(
                     (Initiative.overall_score.is_(None))
                     | (Initiative.active_scoring_framework != framework.value)
                 )
         else:
             # Per-initiative mode: if only_missing, only pick those lacking an overall score.
-            if only_missing_scores:
+            if only_missing_active:
                 stmt = stmt.where(Initiative.overall_score.is_(None))
 
         initiatives = self.db.execute(stmt).scalars().all()
         total = len(initiatives)
         logger.info(
-            "scoring.batch_start",
+            "flow2.activate_batch_start",
             extra={"framework": (framework.value if framework else "AUTO"), "total": total},
         )
 
-        scored = 0
+        activated = 0
         for idx, initiative in enumerate(initiatives, start=1):
             try:
                 chosen = self._resolve_framework_for_initiative(initiative, framework)
                 if chosen is None:
                     logger.warning(
-                        "scoring.skip_no_framework",
+                        "flow2.skip_no_framework",
                         extra={
                             "initiative_key": getattr(initiative, "initiative_key", None),
                         },
                     )
                     continue
 
-                # Flow 2 activates framework by copying per-framework scores to active fields
-                # This avoids recomputation - Flow 3 should have already computed per-framework scores
+                # Flow 2 activation: copy per-framework scores to active fields
+                # Per-framework scores were already computed by Flow 3
                 self.activate_initiative_framework(
                     initiative,
                     chosen,
                     enable_history=settings.SCORING_ENABLE_HISTORY,
                 )
-                scored += 1
+                activated += 1
             except Exception:
                 logger.exception(
                     "scoring.error",
@@ -337,39 +340,41 @@ class ScoringService:
                 try:
                     self.db.commit()
                     logger.info(
-                        "scoring.batch_commit",
+                        "flow2.activate_batch_commit",
                         extra={"count": idx, "framework": (framework.value if framework else "AUTO")},
                     )
                 except Exception:
                     self.db.rollback()
-                    logger.exception("scoring.batch_commit_failed")
+                    logger.exception("flow2.activate_batch_commit_failed")
 
         # Final commit
         try:
             self.db.commit()
             logger.info(
-                "scoring.batch_done",
-                extra={"scored": scored, "framework": (framework.value if framework else "AUTO")},
+                "flow2.activate_batch_done",
+                extra={"activated": activated, "framework": (framework.value if framework else "AUTO")},
             )
         except Exception:
             self.db.rollback()
-            logger.exception("scoring.final_commit_failed")
+            logger.exception("flow2.activate_final_commit_failed")
 
-        return scored
+        return activated
 
-    def score_all_frameworks(
+    def compute_all_frameworks(
         self,
         commit_every: Optional[int] = None,
     ) -> int:
-        """Score all initiatives using ALL frameworks (RICE, WSJF, Math Model).
+        """Compute scores for all frameworks (Flow 3 Phase 1).
 
-        This is typically called by Flow 3 after syncing Product Ops inputs:
-        - Reads all initiatives from DB
-        - For each initiative, computes RICE score and stores in rice_* fields
-        - For each initiative, computes WSJF score and stores in wsjf_* fields
-        - For each initiative, computes Math Model score and stores in math_* fields
-        - Does NOT change active_scoring_framework or active score fields
-        - Allows Product Ops sheet (the scoring tab) to display all framework scores for comparison
+        For each initiative in the database:
+        - Computes RICE score and stores in rice_* fields
+        - Computes WSJF score and stores in wsjf_* fields
+        - Computes Math Model score and stores in math_* fields
+
+        Does NOT change active_scoring_framework or active score fields. PM chooses active framework
+        in ProductOps sheet; Flow 2 activates them afterward.
+
+        Allows Product Ops sheet (the scoring tab) to display all framework scores for comparison.
 
         Returns:
             Count of initiatives processed (not necessarily scored if errors occurred)
@@ -380,7 +385,7 @@ class ScoringService:
         initiatives = self.db.execute(stmt).scalars().all()
         total = len(initiatives)
         logger.info(
-            "scoring.batch_all_frameworks_start",
+            "flow3.compute_all_frameworks_start",
             extra={"total": total},
         )
 
@@ -405,23 +410,23 @@ class ScoringService:
                 try:
                     self.db.commit()
                     logger.info(
-                        "scoring.batch_all_frameworks_commit",
+                        "flow3.compute_all_frameworks_commit",
                         extra={"count": idx},
                     )
                 except Exception:
                     self.db.rollback()
-                    logger.exception("scoring.batch_all_frameworks_commit_failed")
+                    logger.exception("flow3.compute_all_frameworks_commit_failed")
 
         # Final commit
         try:
             self.db.commit()
             logger.info(
-                "scoring.batch_all_frameworks_done",
+                "flow3.compute_all_frameworks_done",
                 extra={"processed": processed},
             )
         except Exception:
             self.db.rollback()
-            logger.exception("scoring.batch_all_frameworks_final_commit_failed")
+            logger.exception("flow3.compute_all_frameworks_final_commit_failed")
 
         return processed
 

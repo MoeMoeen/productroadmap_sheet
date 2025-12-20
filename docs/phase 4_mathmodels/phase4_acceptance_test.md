@@ -185,7 +185,7 @@ uv run python -m test_scripts.flow3_product_ops_cli --sync --log-level INFO
 #### 4.3 Activate Chosen Framework Scores
 **Command**:
 ```bash
-uv run python -m test_scripts.flow2_scoring_cli --all --log-level INFO
+uv run python -m test_scripts.flow2_scoring_activation_cli --all --log-level INFO
 ```
 
 **Actions**:
@@ -320,7 +320,7 @@ uv run python -m test_scripts.backlog_sync_cli --log-level INFO
 
 4. **Backlog not updating**:
    - Verify `active_scoring_framework=MATH_MODEL` in DB
-   - Re-run activation: `flow2_scoring_cli --all`
+  - Re-run activation: `flow2_scoring_activation_cli --all`
    - Check Central Backlog config in settings
 
 ---

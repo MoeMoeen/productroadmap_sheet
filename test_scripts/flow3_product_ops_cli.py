@@ -129,7 +129,7 @@ def main() -> int:
             # Stores results in rice_*_score and wsjf_*_score fields
             # Does NOT change active_scoring_framework or active score fields
             service = ScoringService(db)
-            count = service.score_all_frameworks(commit_every=args.batch_size)
+            count = service.compute_all_frameworks(commit_every=args.batch_size)
             logger.info(
                 "flow3.cli.compute_all_complete",
                 extra={"initiatives_processed": count, "frameworks": "RICE, WSJF"},

@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-CLI entrypoint for Flow 2 scoring.
+CLI entrypoint for Flow 2 activation.
 
 Usage examples:
     # Auto (per-initiative) selection
-    uv run python -m test_scripts.flow2_scoring_cli --only-missing
+    uv run python -m test_scripts.flow2_scoring_activation_cli --only-missing
     # Force a single framework for all initiatives
-    uv run python -m test_scripts.flow2_scoring_cli --framework RICE --all
+    uv run python -m test_scripts.flow2_scoring_activation_cli --framework RICE --all
 
 Flags:
     --framework NAME      Override framework for all (RICE, WSJF, MATH_MODEL). Omit for AUTO (per-initiative).
     --batch-size N        Commit every N initiatives (default: settings.SCORING_BATCH_COMMIT_EVERY)
-    --all                 Score all initiatives (even if already scored)
-    --only-missing        Only score initiatives missing scores or with a different framework (default)
+    --all                 Activate all initiatives (even if already activated)
+    --only-missing        Only activate initiatives missing active scores or using a different framework (default)
     --log-level LEVEL     Logging level (INFO, DEBUG, etc.)
 """
 
@@ -24,11 +24,11 @@ import sys
 
 from app.db.session import SessionLocal
 from app.services.scoring import ScoringFramework
-from app.jobs.flow2_scoring_job import run_scoring_batch
+from app.jobs.flow2_scoring_activation_job import run_scoring_batch
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run Flow 2 scoring batch.")
+    parser = argparse.ArgumentParser(description="Activate chosen scoring framework scores (Flow 2).")
     parser.add_argument(
         "--framework",
         type=str,
@@ -45,12 +45,12 @@ def parse_args() -> argparse.Namespace:
     group.add_argument(
         "--all",
         action="store_true",
-        help="Score all initiatives, even if already scored with this framework.",
+        help="Activate all initiatives, even if already activated with this framework.",
     )
     group.add_argument(
         "--only-missing",
         action="store_true",
-        help="Only score initiatives missing scores or using a different framework (default).",
+        help="Only activate initiatives missing active scores or using a different framework (default).",
     )
     parser.add_argument(
         "--log-level",
@@ -71,8 +71,8 @@ def configure_logging(level: str) -> None:
 def main() -> int:
     args = parse_args()
     configure_logging(args.log_level)
-    logger = logging.getLogger("app.flow2_cli")
-    logger.info("scoring.cli.start")
+    logger = logging.getLogger("app.flow2_scoring_activation_cli")
+    logger.info("activation.cli.start")
 
     framework = None
     if args.framework:
@@ -86,22 +86,22 @@ def main() -> int:
 
     db = SessionLocal()
     try:
-        scored = run_scoring_batch(
+        activated = run_scoring_batch(
             db=db,
             framework=framework,
             commit_every=args.batch_size,
             only_missing_scores=only_missing,
         )
         logger.info(
-            "scoring.cli.done",
-            extra={"framework": (framework.value if framework else "AUTO"), "scored": scored},
+            "activation.cli.done",
+            extra={"framework": (framework.value if framework else "AUTO"), "activated": activated},
         )
         return 0
     except KeyboardInterrupt:
-        logger.warning("scoring.cli.interrupted")
+        logger.warning("activation.cli.interrupted")
         return 130
     except Exception:
-        logger.exception("scoring.cli.error")
+        logger.exception("activation.cli.error")
         return 1
     finally:
         db.close()
