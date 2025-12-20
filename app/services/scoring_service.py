@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import logging
 from typing import Dict, Optional, cast
 
@@ -13,6 +14,7 @@ from app.db.models.initiative import Initiative
 from app.db.models.scoring import InitiativeParam
 from app.db.models.scoring import InitiativeScore
 from app.services.scoring import ScoringFramework, ScoreInputs, get_engine
+from app.utils.provenance import Provenance, token
 
 logger = logging.getLogger("app.services.scoring")
 
@@ -66,7 +68,11 @@ class ScoringService:
         result = engine.compute(inputs)
 
         # Always mark source when we run scoring
-        initiative.updated_source = "scoring"  # type: ignore[assignment]
+        prov = Provenance.FLOW2_ACTIVATE if activate else Provenance.FLOW3_COMPUTE_ALL_FRAMEWORKS
+        now = datetime.now(timezone.utc)
+        initiative.updated_source = token(prov)  # type: ignore[assignment]
+        initiative.scoring_updated_source = token(prov)  # type: ignore[assignment]
+        initiative.scoring_updated_at = now  # type: ignore[assignment]
 
         # Also store per-framework scores (for multi-framework comparison and Product Ops sheet)
         if framework == ScoringFramework.RICE:
@@ -161,6 +167,11 @@ class ScoringService:
         inputs = self._build_score_inputs(initiative, framework)
         engine = get_engine(framework)
         result = engine.compute(inputs)
+
+        now = datetime.now(timezone.utc)
+        initiative.updated_source = token(Provenance.FLOW3_COMPUTE_ALL_FRAMEWORKS)  # type: ignore[assignment]
+        initiative.scoring_updated_source = token(Provenance.FLOW3_COMPUTE_ALL_FRAMEWORKS)  # type: ignore[assignment]
+        initiative.scoring_updated_at = now  # type: ignore[assignment]
 
         if framework == ScoringFramework.RICE:
             initiative.rice_value_score = result.value_score  # type: ignore[assignment]
@@ -506,8 +517,11 @@ class ScoringService:
             initiative.score_llm_suggested = bool(getattr(model, "suggested_by_llm", False))  # type: ignore[assignment]
             initiative.score_approved_by_user = bool(getattr(model, "approved_by_user", False))  # type: ignore[assignment]
 
+        now = datetime.now(timezone.utc)
         initiative.active_scoring_framework = framework.value  # type: ignore[assignment]
-        initiative.updated_source = "scoring"  # type: ignore[assignment]
+        initiative.updated_source = token(Provenance.FLOW2_ACTIVATE)  # type: ignore[assignment]
+        initiative.scoring_updated_source = token(Provenance.FLOW2_ACTIVATE)  # type: ignore[assignment]
+        initiative.scoring_updated_at = now  # type: ignore[assignment]
 
         logger.debug(
             "scoring.activated",

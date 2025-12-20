@@ -95,7 +95,9 @@ class Initiative(Base):
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     # Source that last updated this row (e.g., "intake", "backlog", "system")
-    updated_source = Column(String(20), nullable=True)
+    updated_source = Column(String(100), nullable=True)
+    scoring_updated_source = Column(String(50), nullable=True)
+    scoring_updated_at = Column(DateTime(timezone=True), nullable=True)
     created_by_user_id = Column(String(100), nullable=True)
 
     # I. Scoring summary (framework-agnostic & per-framework)

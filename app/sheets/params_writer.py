@@ -16,6 +16,7 @@ import logging
 from app.sheets.client import SheetsClient
 from app.sheets.models import PARAMS_HEADER_MAP
 from app.utils.header_utils import normalize_header
+from app.utils.provenance import Provenance, token
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,24 @@ class ParamsWriter:
                 value_input_option="RAW",
             )
             
+            # Stamp provenance for each appended row if Updated Source column exists
+            us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
+            if us_col_idx:
+                batch_data = []
+                for i in range(len(rows_to_append)):
+                    row_num = start_append_row + i
+                    us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_num}"
+                    batch_data.append({
+                        "range": us_a1,
+                        "values": [[token(Provenance.FLOW4_SYNC_PARAMS)]],
+                    })
+                if batch_data:
+                    self.client.batch_update_values(
+                        spreadsheet_id=spreadsheet_id,
+                        data=batch_data,
+                        value_input_option="RAW",
+                    )
+            
             logger.info(f"Appended {len(rows_to_append)} parameters to {tab_name}")
     
     def append_new_params(
@@ -153,6 +172,28 @@ class ParamsWriter:
             values=rows_to_append,
             value_input_option="RAW",
         )
+        
+        # Stamp provenance for each appended row if Updated Source column exists
+        us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
+        if us_col_idx:
+            # Determine starting row by reading grid size
+            grid_rows, _ = self.client.get_sheet_grid_size(spreadsheet_id, tab_name)
+            # Last appended rows occupy positions (grid_rows - len(rows_to_append) + 1) .. grid_rows
+            start_row = grid_rows - len(rows_to_append) + 1
+            batch_data = []
+            for i in range(len(rows_to_append)):
+                row_num = start_row + i
+                us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_num}"
+                batch_data.append({
+                    "range": us_a1,
+                    "values": [[token(Provenance.FLOW4_SYNC_PARAMS)]],
+                })
+            if batch_data:
+                self.client.batch_update_values(
+                    spreadsheet_id=spreadsheet_id,
+                    data=batch_data,
+                    value_input_option="RAW",
+                )
         logger.info(f"Appended {len(rows_to_append)} params to {tab_name}")
 
     def update_parameter_value(
@@ -195,6 +236,17 @@ class ParamsWriter:
             values=[[value]],
             value_input_option="RAW",
         )
+        
+        # Stamp provenance if Updated Source column exists
+        us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
+        if us_col_idx:
+            us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}"
+            self.client.update_values(
+                spreadsheet_id=spreadsheet_id,
+                range_=us_a1,
+                values=[[token(Provenance.FLOW4_SYNC_PARAMS)]],
+                value_input_option="RAW",
+            )
         
         # Update is_auto_seeded if column exists
         auto_seeded_col_idx = self._find_column_index(spreadsheet_id, tab_name, "is_auto_seeded")
@@ -269,6 +321,17 @@ class ParamsWriter:
                 })
         
         if batch_data:
+            # Add provenance token for all updated rows if Updated Source column exists
+            us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
+            if us_col_idx:
+                for update in updates:
+                    row_number = update.get("row_number")
+                    if isinstance(row_number, int):
+                        us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}"
+                        batch_data.append({
+                            "range": us_a1,
+                            "values": [[token(Provenance.FLOW4_SYNC_PARAMS)]],
+                        })
             self.client.batch_update_values(
                 spreadsheet_id=spreadsheet_id,
                 data=batch_data,

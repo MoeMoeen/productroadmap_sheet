@@ -12,6 +12,7 @@ from app.db.models.initiative import Initiative
 from app.sheets.client import SheetsClient, get_sheets_service
 from app.sheets.scoring_inputs_reader import ScoringInputsReader, ScoringInputsRow
 from app.sheets.productops_writer import write_scores_to_productops_sheet
+from app.utils.provenance import Provenance, token
 
 
 class ScoringInputsFormatter(logging.Formatter):
@@ -184,7 +185,7 @@ def run_flow3_sync_inputs_to_initiatives(
             if wsjf.get("wsjf_job_size") is not None:
                 ini.effort_engineering_days = wsjf.get("wsjf_job_size")  # type: ignore[assignment]
 
-        ini.updated_source = "product_ops"  # type: ignore[assignment]
+        ini.updated_source = token(Provenance.FLOW3_PRODUCTOPSSHEET_READ_INPUTS)  # type: ignore[assignment]
         updated += 1
 
         if batch_size and (idx % batch_size == 0):

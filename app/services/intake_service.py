@@ -27,6 +27,7 @@ from app.services.initiative_key import generate_initiative_key  # type: ignore
 from app.services.intake_mapper import map_sheet_row_to_initiative_create  # type: ignore
 from app.sheets.intake_reader import IntakeRow  # type: ignore
 from app.utils.header_utils import get_value_by_header_alias
+from app.utils.provenance import Provenance, token
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +133,7 @@ class IntakeService:
                 source_row_number=source_row_number,
             )
             try:
-                setattr(initiative, "updated_source", "intake")
+                setattr(initiative, "updated_source", token(Provenance.FLOW0_INTAKE_SYNC))
             except Exception:
                 logger.debug("intake.updated_source_set_failed_on_create")
             logger.info(
@@ -147,7 +148,7 @@ class IntakeService:
         else:
             self._apply_intake_update(initiative, dto, allow_status_override=allow_status_override)
             try:
-                setattr(initiative, "updated_source", "intake")
+                setattr(initiative, "updated_source", token(Provenance.FLOW0_INTAKE_SYNC))
             except Exception:
                 logger.debug("intake.updated_source_set_failed_on_update")
             logger.debug(

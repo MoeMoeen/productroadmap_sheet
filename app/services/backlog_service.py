@@ -13,6 +13,7 @@ from app.sheets.backlog_reader import BacklogRow  # type: ignore
 from app.config import settings
 from app.utils.header_utils import get_value_by_header_alias
 from app.sheets.models import INTAKE_HEADER_MAP, CENTRAL_EDITABLE_FIELDS
+from app.utils.provenance import Provenance, token
 
 from .backlog_mapper import backlog_row_to_update_data
 
@@ -49,7 +50,7 @@ class BacklogService:
 
         # Stamp source of update
         try:
-            setattr(initiative, "updated_source", "backlog")
+            setattr(initiative, "updated_source", token(Provenance.FLOW1_BACKLOGSHEET_READ))
         except Exception:
             logger.debug("backlog.updated_source_set_failed_on_update")
 
@@ -99,7 +100,7 @@ class BacklogService:
             update_data = backlog_row_to_update_data(row)
             self._apply_central_update(initiative, update_data)
             try:
-                setattr(initiative, "updated_source", "backlog")
+                setattr(initiative, "updated_source", token(Provenance.FLOW1_BACKLOGSHEET_READ))
             except Exception:
                 logger.debug("backlog.updated_source_set_failed_on_update_many")
             updated += 1

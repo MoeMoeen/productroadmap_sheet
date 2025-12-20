@@ -11,6 +11,7 @@ from app.db.models.initiative import Initiative
 from app.db.models.scoring import InitiativeParam
 from app.sheets.client import SheetsClient
 from app.sheets.params_reader import ParamsReader, ParamRowPair
+from app.utils.provenance import Provenance, token
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +141,8 @@ class ParamsSyncService:
                 setattr(param, "approved", bool(pr.approved))
             if pr.is_auto_seeded is not None:
                 setattr(param, "is_auto_seeded", bool(pr.is_auto_seeded))
+
+            setattr(initiative, "updated_source", token(Provenance.FLOW4_SYNC_PARAMS))
 
             upserts += 1
             created += 1 if created_now else 0

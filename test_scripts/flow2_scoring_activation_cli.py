@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# productroadmap_sheet_project/test_scripts/flow2_scoring_activation_cli.py
 """
 CLI entrypoint for Flow 2 activation.
 

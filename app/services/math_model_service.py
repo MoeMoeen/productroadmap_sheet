@@ -12,6 +12,7 @@ from app.db.models.initiative import Initiative
 from app.db.models.scoring import InitiativeMathModel
 from app.sheets.client import SheetsClient
 from app.sheets.math_models_reader import MathModelsReader, MathModelRowPair
+from app.utils.provenance import Provenance, token
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,7 @@ class MathModelSyncService:
             # Link initiative to model
             db.flush()  # assign id if new
             initiative.math_model = math_model
+            setattr(initiative, "updated_source", token(Provenance.FLOW4_SYNC_MATHMODELS))
 
             updated += 1
             created_models += 1 if created_now else 0

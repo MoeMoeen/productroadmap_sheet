@@ -639,7 +639,7 @@ Same pattern as before:
    - Behavior:
      - Non-empty cell in sheet → explicit value in Initiative
      - Empty cell in sheet → `None` in Initiative (clears old values)
-     - Sets `updated_source = 'product_ops'` for audit trail
+     - Sets `updated_source = 'flow3.productopssheet_read_inputs'` for audit trail (per `app/utils/provenance.py`)
    - Batch commit support for performance
 
 3. ✅ **Tested and validated**

@@ -22,6 +22,9 @@ MATHMODELS_HEADER_MAP = {
     "model_name": ["model_name"],
     "model_description_free_text": ["model_description_free_text", "model_description", "description"],
     "model_prompt_to_llm": ["model_prompt_to_llm", "prompt_to_llm", "llm_prompt"],
+    # Metadata/provenance (optional columns)
+    "updated_source": ["updated_source", "Updated Source"],
+    "updated_at": ["updated_at", "Updated At"],
 }
 
 PARAMS_HEADER_MAP = {
@@ -38,6 +41,9 @@ PARAMS_HEADER_MAP = {
     "min": ["min", "min_value"],
     "max": ["max", "max_value"],
     "notes": ["notes", "param_notes"],
+    # Metadata/provenance (optional columns)
+    "updated_source": ["updated_source", "Updated Source"],
+    "updated_at": ["updated_at", "Updated At"],
 }
 
 # Intake sheet header aliases (centralized)

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.db.models.initiative import Initiative
 from app.sheets.client import SheetsClient
 from app.utils.header_utils import normalize_header as _normalize_header
+from app.utils.provenance import Provenance, token
 
 logger = logging.getLogger(__name__)
 from app.sheets.models import (
@@ -81,6 +82,9 @@ def write_scores_to_productops_sheet(
         if nh == "initiative_key":
             col_map["initiative_key"] = i
             continue
+        if nh in {"updated_source", "updated source"}:
+            col_map["updated_source"] = i
+            continue
         # If header matches any known alias, map to its canonical field
         if nh in alias_lookup:
             col_map[alias_lookup[nh]] = i
@@ -123,9 +127,13 @@ def write_scores_to_productops_sheet(
             )
             continue
 
+        row_updated = False
+
         # For each score column, collect update if value exists
         for field, col_idx in col_map.items():
             if field == "initiative_key":
+                continue
+            if field == "updated_source":
                 continue
 
             # Get value from DB
@@ -140,6 +148,16 @@ def write_scores_to_productops_sheet(
                 "values": [[score_value]]
             })
             updated_initiatives.add(key)
+            row_updated = True
+
+        # If row had score updates and sheet has an Updated Source column, set it
+        if row_updated and "updated_source" in col_map:
+            us_col_idx = col_map["updated_source"]
+            cell_range = _cell_range_for_update(tab_name, us_col_idx, row_idx)
+            batch_updates.append({
+                "range": cell_range,
+                "values": [[token(Provenance.FLOW3_PRODUCTOPSSHEET_WRITE_SCORES)]],
+            })
 
     # Step 5: Execute single batch update if we have any updates
     if batch_updates:

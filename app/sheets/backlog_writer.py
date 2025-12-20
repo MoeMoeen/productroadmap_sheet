@@ -11,6 +11,7 @@ from app.db.models.initiative import Initiative
 from app.sheets.client import SheetsClient
 from app.sheets.models import CENTRAL_EDITABLE_FIELDS
 from app.sheets.models import CENTRAL_BACKLOG_HEADER, CENTRAL_HEADER_TO_FIELD
+from app.utils.provenance import Provenance, token
 
 
 def _to_sheet_value(value: Any):
@@ -65,7 +66,7 @@ def initiative_to_backlog_row(initiative: Initiative) -> List[Any]:
         _to_sheet_value(getattr(initiative, "llm_notes", None)),
         _to_sheet_value(getattr(initiative, "strategic_priority_coefficient", None)),
         _to_sheet_value(getattr(initiative, "updated_at", None)),
-        _to_sheet_value(getattr(initiative, "updated_source", None)),
+        token(Provenance.FLOW1_BACKLOGSHEET_WRITE),
     ]
 
 

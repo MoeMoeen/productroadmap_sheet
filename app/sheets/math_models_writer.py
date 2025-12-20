@@ -14,6 +14,7 @@ import logging
 from app.sheets.client import SheetsClient
 from app.sheets.models import MATHMODELS_HEADER_MAP
 from app.utils.header_utils import normalize_header
+from app.utils.provenance import Provenance, token
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,17 @@ class MathModelsWriter:
             values=[[llm_suggested_formula_text]],
             value_input_option="RAW",
         )
+
+        # Stamp provenance if Updated Source column exists
+        us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
+        if us_col_idx:
+            us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}"
+            self.client.update_values(
+                spreadsheet_id=spreadsheet_id,
+                range_=us_a1,
+                values=[[token(Provenance.FLOW4_SYNC_MATHMODELS)]],
+                value_input_option="RAW",
+            )
     
     def write_llm_notes(
         self,
@@ -79,6 +91,17 @@ class MathModelsWriter:
             values=[[llm_notes]],
             value_input_option="RAW",
         )
+
+        # Stamp provenance if Updated Source column exists
+        us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
+        if us_col_idx:
+            us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}"
+            self.client.update_values(
+                spreadsheet_id=spreadsheet_id,
+                range_=us_a1,
+                values=[[token(Provenance.FLOW4_SYNC_MATHMODELS)]],
+                value_input_option="RAW",
+            )
     
     def write_suggestions_batch(
         self,
@@ -175,6 +198,18 @@ class MathModelsWriter:
                 })
         
         if batch_data:
+            # If Updated Source column exists, add provenance token for each updated row
+            us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
+            if us_col_idx:
+                for suggestion in suggestions:
+                    row_number = suggestion.get("row_number")
+                    if isinstance(row_number, int):
+                        us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}"
+                        batch_data.append({
+                            "range": us_a1,
+                            "values": [[token(Provenance.FLOW4_SYNC_MATHMODELS)]],
+                        })
+
             self.client.batch_update_values(
                 spreadsheet_id=spreadsheet_id,
                 data=batch_data,
