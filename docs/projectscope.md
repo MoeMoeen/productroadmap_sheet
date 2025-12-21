@@ -21,6 +21,7 @@ The system transforms scattered requests into a **clean, dynamic, mathematically
 * Parameterized mathematical formulas
 * Portfolio optimization & resource allocation
 * Normalized, clean data structures across the whole organization
+* **Sheet-native execution & control plane** (PM-driven triggers from Google Sheets)
 
 Ultimately, the platform becomes the **single source of truth** for product decisions.
 
@@ -34,6 +35,7 @@ Ultimately, the platform becomes the **single source of truth** for product deci
 * Standardize initiative intake across departments.
 * Ensure data completeness through automated validation and LLM-assisted checks.
 * Provide transparent status tracking and collaboration workflows.
+* **Enable PMs to trigger all scoring/activation flows from Google Sheets without terminal access.** *(Phase 4.5)*
 
 ### **3.2 Analytical & AI Goals**
 
@@ -53,6 +55,7 @@ Ultimately, the platform becomes the **single source of truth** for product deci
 * Link initiatives to business objectives and strategic priorities.
 * Provide PMs with powerful analysis while keeping Sheets as the day-to-day UI.
 * Scale with organization growth without data chaos.
+* **Establish sheet-native execution as a hard prerequisite before optimization.** *(Phase 4.5)*
 
 ---
 
@@ -77,6 +80,12 @@ Ultimately, the platform becomes the **single source of truth** for product deci
 
 * **Sheets Integration Layer** (Google Sheets API)
 * **Data model & DB** (SQLAlchemy ORM)
+* **Action API** *(New in Phase 4.5)*
+
+  * Single entry point: `POST /actions/run`
+  * Validates action + scope, enqueues async job, returns `run_id`
+  * Status polling: `GET /actions/run/{run_id}`
+  * Backed by ActionRun execution ledger
 * **Scoring Engine**
 
   * Framework factory (RICE, WSJF, MathModel, Custom frameworks)
@@ -97,6 +106,8 @@ Ultimately, the platform becomes the **single source of truth** for product deci
 
 ## **5. High-Level Workflow**
 
+### **Phase 0–3: Scoring Setup** (Existing)
+
 1. **Departments submit initiatives** → Intake to central backlog.
 2. **Validation service** flags missing fields + auto-suggests improvements.
 3. **PM chooses scoring framework** (e.g., RICE, WSJF, MathModel) in Central Backlog.
@@ -107,9 +118,66 @@ Ultimately, the platform becomes the **single source of truth** for product deci
    - Backend copies per-framework scores to active fields based on `active_scoring_framework`.
    - Active scores ready for optimization and Central Backlog sync.
 6. **PM and stakeholders review/override scores** if needed.
-7. **Backend computes scores** (value, effort, overall).
-8. **Portfolio optimization** selects the best initiative set given constraints.
-9. **Roadmap entries** are generated, versioned, and published.
+
+### **Phase 4.5: Sheet-Native Execution & Control Plane** *(New)*
+
+All flows (0–4) are now **triggerable from Google Sheets** via a custom menu:
+
+#### **UI Layer (Apps Script)**
+
+* Custom menu in ProductOps & Intake sheets: **"Roadmap AI"**
+* Menu actions (examples):
+  * Compute scores (all frameworks)
+  * Write scores back to ProductOps
+  * Activate framework (AUTO / forced)
+  * Sync Central Backlog
+  * Suggest Math Models (selected rows)
+  * Seed Params (approved models)
+  * Sync MathModels → DB
+  * Sync Params → DB
+  * Sync Intake → DB
+
+* Flow per menu item:
+  1. Collect scope (selected rows / all rows / filtered)
+  2. Send `POST /actions/run` with action + scope
+  3. Write run row to Control tab
+  4. Poll `GET /actions/run/{run_id}` for status updates
+  5. Display results (updated counts, errors)
+
+#### **Backend Layer (Action API)**
+
+* **Endpoint:** `POST /actions/run`
+  * **Input:** `action`, `scope`, `sheet_context`, `options`, `requested_by`
+  * **Output:** `{run_id, status: "queued"}`
+
+* **Endpoint:** `GET /actions/run/{run_id}`
+  * **Output:** `{run_id, status, started_at, finished_at, result, error}`
+
+* **Action → Implementation Mapping:**
+
+  | Action | Backend Callable |
+  |--------|------------------|
+  | `flow3.compute_all_frameworks` | `ScoringService.compute_all_frameworks()` |
+  | `flow3.write_scores` | `write_flow3_scores_to_sheet()` |
+  | `flow2.activate` | `run_scoring_activation()` |
+  | `flow1.backlog_sync` | `run_all_backlog_sync()` |
+  | `flow4.suggest_mathmodels` | `run_math_model_generation_job()` |
+  | `flow4.seed_params` | `run_param_seeding_job()` |
+  | `flow4.sync_mathmodels` | `MathModelSyncService.sync_sheet_to_db()` |
+  | `flow4.sync_params` | `ParamsSyncService.sync_sheet_to_db()` |
+  | `flow0.intake_sync` | `run_sync_all_intake_sheets()` |
+
+#### **Status Surface (Control / RunLog Tab)**
+
+* Dedicated tab in ProductOps (and optionally Intake)
+* Columns: timestamp, run_id, action, scope_summary, status, started_at, finished_at, result_summary, error_snippet
+* Live updates as job progresses
+* Enables PM confidence, auditability, "did it run?" clarity
+
+### **Phase 5+: Portfolio Optimization & Roadmap Generation**
+
+7. **Backend computes optimized portfolio** based on constraints (capacity, dependencies, strategic themes)
+8. **Roadmap entries** are generated, versioned, and published.
 
 ---
 
@@ -140,6 +208,47 @@ Ultimately, the platform becomes the **single source of truth** for product deci
 * **Analytics/Finance** — Provide parameter values, validate assumptions.
 * **All Departments** — Submit ideas through intake sheets.
 * **AI/Backend Owner (You)** — Build, maintain, and evolve the system.
+
+---
+
+## **8. Rollout (Phase 4.5)**
+
+### **Step 1: Backend Plumbing**
+1. Add `ActionRun` ORM + migration
+2. Build `app/api/actions.py` + `app/schemas/actions.py`
+3. Build `app/services/action_runner.py`
+4. Wire all 7 actions to their callables
+
+### **Step 2: Apps Script UI**
+1. Deploy custom menu in ProductOps sheet
+2. Implement menu items → HTTP calls → `POST /actions/run`
+3. Add Control tab with headers
+4. Add polling logic → `GET /actions/run/{run_id}`
+5. Live-update Control tab with results
+
+### **Step 3: E2E Testing & Refinement**
+1. Test each action (selected rows, all rows, filtered scope)
+2. Test error handling (missing fields, invalid scopes)
+3. Verify Control tab shows correct counts/status
+4. Security validation (secret header, no data leaks)
+
+### **Step 4: Documentation**
+1. Update runbook: "How to trigger actions from Sheets"
+2. Add Control tab interpretation guide
+3. Document each action (scope options, expected results, error codes)
+
+---
+
+## **9. Phase 5 Preview (After Phase 4.5)**
+
+Once Phase 4.5 is stable:
+
+* **Optimization Engine**: Linear/nonlinear solver for portfolio selection
+* **Roadmap Generation**: Produce quarterly roadmap from optimization results
+* **Scenario Simulation**: "What-if" weightings (revenue-heavy, risk-avoidance, etc.)
+* **Monte Carlo**: Uncertainty modeling for robust portfolio selection
+
+All triggered via Phase 4.5 control plane menu → `flow5.run_optimization`.
 
 ---
 
@@ -493,7 +602,25 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
 
 ### **📋 PLANNED (Future):**
 
-4. **Phase 4 – MathModel Framework & LLM-Assisted Scoring**
+**Phase 4.5 – Sheet-Native Execution & Control Plane** *(PRE-OPTIMIZATION PREREQUISITE)*
+   * **Action API** – Single entry point (`POST /actions/run`, `GET /actions/run/{run_id}`)
+   * **Async Job Runner** – Enqueue & execute long-running operations without Apps Script timeout
+   * **ActionRun DB Ledger** – Tracks every action execution with run_id, status, results, errors
+   * **Control/RunLog Tab** – Live dashboard in ProductOps sheet showing execution history
+   * **Apps Script Custom Menu** – "Roadmap AI" menu in Sheets with 7 minimum actions:
+     - `flow3.compute_all_frameworks` – Compute RICE + WSJF + Math Model scores
+     - `flow3.write_scores` – Write per-framework scores to ProductOps sheet
+     - `flow2.activate` – Activate chosen framework scores to active fields
+     - `flow1.backlog_sync` – Sync Central Backlog (DB → Sheet)
+     - `flow4.suggest_mathmodels` – LLM suggests formulas for selected rows
+     - `flow4.seed_params` – Auto-create Params rows from framework/formula
+     - `flow0.intake_sync` – Sync all department intake sheets to DB
+   * **Shared Secret Security** – v1 security model with X-ROADMAP-AI-SECRET header
+   * **Scope Selection** – Selected rows / All rows / Filtered scope patterns
+   * **Provenance Integration** – ActionRun table + Control tab + DB tokens + logs
+   * **PM-Driven Workflows** – Zero terminal access required for all flows
+
+**Phase 4 – MathModel Framework & LLM-Assisted Scoring** *(Post-4.5)*
    * **MathModels Sheet** – Dedicated sheet for custom quantitative formulas per initiative
    * **InitiativeMathModel** – DB model persistence and versioning
    * **LLM Integration for MathModels**:
@@ -507,25 +634,25 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
    * **Parameter Seeding** – Auto-create Params rows from parsed formula variables
    * **Formula Approval Workflow** – LLM suggestions → PM review → approved formula
 
-5. **Phase 5 – Portfolio Optimization & Roadmap Generation**
+**Phase 5 – Portfolio Optimization & Roadmap Generation** *(ENABLED BY 4.5)*
    * Linear / mixed-integer optimization solver (pulp, ortools)
    * Multi-objective weighted-sum scenarios
    * Capacity-constrained roadmap generation
    * Roadmap sheet generation with selected initiatives
 
-6. **Phase 6 – LLM Enrichment for General Operations**
+**Phase 6 – LLM Enrichment for General Operations**
    * Initiative summaries and classification
    * Strategic theme tagging
    * General context enrichment (non-MathModel)
    * Automated hypothesis generation
 
-7. **Phase 7 – Advanced Simulation & Uncertainty Modeling**
+**Phase 7 – Advanced Simulation & Uncertainty Modeling**
    * Monte Carlo uncertainty modeling
    * Robustness scoring and risk indicators
    * Sensitivity analysis for key parameters
    * Portfolio risk assessment
 
-8. **Phase 8 – UX & Governance Refinements**
+**Phase 8 – UX & Governance Refinements**
    * Notifications, dashboards, scenario comparison views
    * Access control & workflows
    * Audit trails and decision history
