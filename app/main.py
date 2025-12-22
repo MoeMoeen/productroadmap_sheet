@@ -1,3 +1,5 @@
+# productroadmap_sheet_project/app/main.py
+
 from __future__ import annotations
 
 import logging
@@ -12,7 +14,7 @@ def create_app() -> FastAPI:
     setup_json_logging(log_level=getattr(logging, str(settings.LOG_LEVEL).upper(), logging.INFO))
 
     app = FastAPI(
-        title="PRIP Action API",
+        title="PRODUCT ROADMAP SHEET - Action API",
         version="0.1.0",
     )
 
