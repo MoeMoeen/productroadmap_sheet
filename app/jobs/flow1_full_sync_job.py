@@ -9,7 +9,7 @@ It consists of three main steps:
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Optional, TypedDict
 
 from sqlalchemy.orm import Session
 
@@ -28,13 +28,22 @@ from app.jobs.backlog_sync_job import run_all_backlog_sync
 logger = logging.getLogger(__name__)
 
 
+class Flow1SyncResult(TypedDict):
+    """Result of Flow 1 full sync execution."""
+    intake_sync_completed: bool
+    backlog_update_completed: bool
+    backlog_update_error: Optional[str]
+    backlog_sync_completed: bool
+    substeps: list[str]
+
+
 def run_flow1_full_sync(
     db: Session,
     *,
     allow_status_override_global: bool = False,
     backlog_commit_every: Optional[int] = None,
     product_org: Optional[str] = None,
-) -> None:
+) -> Flow1SyncResult:
     """Run the full Flow 1 cycle.
 
     Args:
@@ -42,12 +51,25 @@ def run_flow1_full_sync(
         allow_status_override_global: pass-through to intake sync
         backlog_commit_every: batch commit frequency for backlog update
         product_org: optional org filter for backlog target resolution
+        
+    Returns:
+        Flow1SyncResult with completion status for each substep
     """
     logger.info("flow1.start")
+    
+    result: Flow1SyncResult = {
+        "intake_sync_completed": False,
+        "backlog_update_completed": False,
+        "backlog_update_error": None,
+        "backlog_sync_completed": False,
+        "substeps": [],
+    }
 
     # 1) Intake sync: department sheets -> DB (+ initiative key backfill)
     logger.info("flow1.intake_sync.start")
     run_sync_all_intake_sheets(db=db, allow_status_override_global=allow_status_override_global)
+    result["intake_sync_completed"] = True
+    result["substeps"].append("flow0.intake_sync")
     logger.info("flow1.intake_sync.done")
 
     # 2) Backlog update: central edits -> DB (use configured backlog sheet(s))
@@ -55,17 +77,23 @@ def run_flow1_full_sync(
     # product_org can narrow to a specific configured backlog; if None, default resolution applies
     try:
         run_backlog_update(db=db, product_org=product_org, commit_every=backlog_commit_every)
-    except Exception:
+        result["backlog_update_completed"] = True
+        result["substeps"].append("flow1.backlogsheet_read")
+    except Exception as exc:
         logger.exception("flow1.backlog_update.error")
+        result["backlog_update_error"] = str(exc)[:500]  # Truncate for safety
         # Keep going to ensure DB -> sheet sync runs with whatever is in DB
     logger.info("flow1.backlog_update.done")
 
     # 3) Backlog sync: DB -> central backlog sheet(s)
     logger.info("flow1.backlog_sync.start")
     run_all_backlog_sync(db=db)
+    result["backlog_sync_completed"] = True
+    result["substeps"].append("flow1.backlogsheet_write")
     logger.info("flow1.backlog_sync.done")
 
     logger.info("flow1.done")
+    return result
 
 
 __all__ = ["run_flow1_full_sync"]

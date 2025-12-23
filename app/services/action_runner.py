@@ -1,5 +1,6 @@
 # productroadmap_sheet_project/app/services/action_runner.py
 """ 
+Action runner service for enqueuing and executing sheet-triggered actions.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from app.services.scoring import ScoringFramework
 from app.services.scoring_service import ScoringService
 
 from app.jobs.backlog_sync_job import run_all_backlog_sync
+from app.jobs.flow1_full_sync_job import run_flow1_full_sync
 from app.jobs.flow3_product_ops_job import run_flow3_write_scores_to_sheet
 from app.jobs.flow2_scoring_activation_job import run_scoring_batch
 from app.jobs.sync_intake_job import run_sync_all_intake_sheets
@@ -127,6 +129,98 @@ def _build_scope_summary(scope: Any) -> Optional[str]:
     return str(t) if t else None
 
 
+def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract standardized summary from action-specific result for UI display.
+    
+    Returns a normalized dict with common fields:
+    - total: total items processed/considered
+    - success: items successfully processed
+    - skipped: items skipped
+    - failed: items failed (if applicable)
+    """
+    summary = {
+        "total": 0,
+        "success": 0,
+        "skipped": 0,
+        "failed": 0,
+    }
+    
+    # Flow 3 actions
+    if action == "flow3.compute_all_frameworks":
+        summary["total"] = result.get("processed", 0)
+        summary["success"] = result.get("processed", 0)
+    
+    elif action == "flow3.write_scores":
+        summary["total"] = result.get("updated_initiatives", 0)
+        summary["success"] = result.get("updated_initiatives", 0)
+    
+    # Flow 2 actions
+    elif action == "flow2.activate":
+        summary["total"] = result.get("activated", 0)
+        summary["success"] = result.get("activated", 0)
+    
+    # Flow 1 actions
+    elif action == "flow1.backlog_sync":
+        # Boolean flag, treat as single-unit task for UX clarity
+        synced = bool(result.get("synced"))
+        summary["total"] = 1
+        summary["success"] = 1 if synced else 0
+        summary["failed"] = 0 if synced else 1
+    
+    elif action == "flow1.full_sync":
+        # Count completed substeps
+        substeps = result.get("substeps", [])
+        summary["total"] = 3  # Expected substeps
+        summary["success"] = len(substeps)
+        # Check for partial failure
+        if not result.get("backlog_update_completed", True):
+            summary["failed"] = 1
+    
+    # Flow 4 actions
+    elif action == "flow4.suggest_mathmodels":
+        # Stats from run_math_model_generation_job
+        summary["total"] = result.get("rows", 0)
+        summary["success"] = result.get("suggested", 0)
+        summary["skipped"] = (
+            result.get("skipped_approved", 0)
+            + result.get("skipped_no_desc", 0)
+            + result.get("skipped_has_suggestion", 0)
+            + result.get("skipped_missing_initiative", 0)
+        )
+    
+    elif action == "flow4.seed_params":
+        summary["total"] = result.get("rows_scanned_mathmodelstab", 0)
+        summary["success"] = result.get("seeded_params_paramsstab", 0)
+        summary["skipped"] = (
+            result.get("skipped_row_mathmodeltab_no_missing", 0) +
+            result.get("skipped_row_mathmodeltab_unapproved", 0) +
+            result.get("skipped_row_mathmodeltab_no_identifiers", 0) +
+            result.get("skipped_row_mathmodeltab_invalid_formula", 0)
+        )
+    
+    elif action == "flow4.sync_mathmodels":
+        # Stats from MathModelSyncService.sync_sheet_to_db
+        summary["total"] = result.get("row_count", 0)
+        summary["success"] = result.get("updated", 0)
+        summary["skipped"] = result.get("skipped_no_initiative", 0) + result.get("skipped_no_formula", 0)
+
+    elif action == "flow4.sync_params":
+        # Stats from ParamsSyncService.sync_sheet_to_db
+        summary["total"] = result.get("row_count", 0)
+        summary["success"] = result.get("upserts", 0)
+        summary["skipped"] = result.get("skipped_no_initiative", 0) + result.get("skipped_no_name", 0)
+    
+    # Flow 0 actions
+    elif action == "flow0.intake_sync":
+        # Boolean flag, treat as single-unit task for UX clarity
+        synced = bool(result.get("synced"))
+        summary["total"] = 1
+        summary["success"] = 1 if synced else 0
+        summary["failed"] = 0 if synced else 1
+    
+    return summary
+
+
 # ----------------------------
 # Claim + execute
 # ----------------------------
@@ -147,9 +241,16 @@ def execute_next_queued_run(db: Session) -> Optional[ActionRun]:
         ctx = _build_action_context(run.payload_json)  # type: ignore[arg-type]
         fn = _resolve_action(run.action)  # type: ignore[arg-type]
         result = fn(db, ctx)
+        
+        # Wrap result with normalized summary for UI consistency
+        summary = _extract_summary(run.action, result)  # type: ignore[arg-type]
+        wrapped_result = {
+            "raw": result,
+            "summary": summary,
+        }
 
         run.status = STATUS_SUCCESS  # type: ignore[assignment]
-        run.result_json = result  # type: ignore[assignment]
+        run.result_json = wrapped_result  # type: ignore[assignment]
         run.error_text = None  # type: ignore[assignment]
         run.finished_at = _now()  # type: ignore[assignment]
 
@@ -300,9 +401,33 @@ def _action_flow2_activate(db: Session, ctx: ActionContext) -> Dict[str, Any]:
 # ---------- Flow 1 actions ----------
 
 def _action_flow1_backlog_sync(db: Session, ctx: ActionContext) -> Dict[str, Any]:
-    # v1: run all configured backlog sync targets
+    # v1: run all configured backlog sync targets (DB → sheet only)
     run_all_backlog_sync(db)
     return {"synced": True}
+
+
+def _action_flow1_full_sync(db: Session, ctx: ActionContext) -> Dict[str, Any]:
+    # Full Flow 1 cycle: intake sync → backlog update → backlog sync
+    options = (ctx.payload.get("options") or {}) if isinstance(ctx.payload.get("options"), dict) else {}
+    allow_status_override = bool(options.get("allow_status_override_global", False))
+    backlog_commit_every = options.get("backlog_commit_every")
+    product_org = options.get("product_org")
+
+    result = run_flow1_full_sync(
+        db=db,
+        allow_status_override_global=allow_status_override,
+        backlog_commit_every=backlog_commit_every,
+        product_org=product_org,
+    )
+    
+    return {
+        "completed": True,
+        "intake_sync_completed": result["intake_sync_completed"],
+        "backlog_update_completed": result["backlog_update_completed"],
+        "backlog_update_error": result["backlog_update_error"],
+        "backlog_sync_completed": result["backlog_sync_completed"],
+        "substeps": result["substeps"],
+    }
 
 
 # ---------- Flow 4 actions ----------
@@ -434,6 +559,7 @@ _ACTION_REGISTRY: Dict[str, ActionFn] = {
 
     # Flow 1
     "flow1.backlog_sync": _action_flow1_backlog_sync,
+    "flow1.full_sync": _action_flow1_full_sync,
 
     # Flow 4
     "flow4.suggest_mathmodels": _action_flow4_suggest_mathmodels,

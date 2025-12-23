@@ -113,6 +113,7 @@ class Settings(BaseSettings):
     # App
     ENV: str = "dev"
     LOG_LEVEL: str = "INFO"
+    ROADMAP_AI_SECRET: str = ""
 
     # Database
     DATABASE_URL: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/prip"
