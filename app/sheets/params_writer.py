@@ -186,7 +186,7 @@ class ParamsWriter:
                 us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_num}"
                 batch_data.append({
                     "range": us_a1,
-                    "values": [[token(Provenance.FLOW4_SYNC_PARAMS)]],
+                    "values": [[token(Provenance.FLOW4_SEED_PARAMS)]],
                 })
             if batch_data:
                 self.client.batch_update_values(
@@ -338,6 +338,93 @@ class ParamsWriter:
                 value_input_option="RAW",
             )
     
+    def backfill_seeded_provenance(
+        self,
+        spreadsheet_id: str,
+        tab_name: str,
+    ) -> int:
+        """Backfill Updated Source and is_auto_seeded for existing AI-seeded rows.
+        
+        Finds rows where source matches AI indicators (e.g., "ai_suggested") and
+        either updated_source or is_auto_seeded is blank/missing, then sets:
+        - updated_source = flow4.seed_params
+        - is_auto_seeded = TRUE
+        
+        Returns number of rows updated.
+        """
+        # Get all rows
+        range_a1 = f"{tab_name}!A:Z"
+        try:
+            all_values = self.client.get_values(spreadsheet_id, range_a1)
+        except Exception as e:
+            logger.error(f"Could not read {tab_name} for backfill: {e}")
+            return 0
+        
+        if not all_values or len(all_values) < 2:
+            return 0
+        
+        header = all_values[0]
+        column_indices = self._build_column_indices(header)
+        
+        # Find relevant columns
+        notes_col_idx = self._find_column_index(spreadsheet_id, tab_name, "notes")
+        updated_source_col_idx = self._find_column_index(spreadsheet_id, tab_name, "Updated_Source")
+        is_auto_seeded_col_idx = self._find_column_index(spreadsheet_id, tab_name, "is_auto_seeded")
+        
+        if not (notes_col_idx or updated_source_col_idx or is_auto_seeded_col_idx):
+            logger.warning(f"Could not find required columns in {tab_name} for backfill")
+            return 0
+        
+        batch_data = []
+        updated_count = 0
+        
+        # Scan rows starting from row 2 (skip header)
+        for row_idx, row in enumerate(all_values[1:], start=2):
+            notes_val = row[notes_col_idx - 1] if notes_col_idx and notes_col_idx <= len(row) else None
+            updated_source_val = row[updated_source_col_idx - 1] if updated_source_col_idx and updated_source_col_idx <= len(row) else None
+            is_auto_seeded_val = row[is_auto_seeded_col_idx - 1] if is_auto_seeded_col_idx and is_auto_seeded_col_idx <= len(row) else None
+            
+            # Check if this row looks AI-seeded (check notes column)
+            is_ai_seeded = (
+                notes_val and 
+                isinstance(notes_val, str) and 
+                ("ai_suggested" in notes_val.lower() or "llm" in notes_val.lower())
+            )
+            
+            if not is_ai_seeded:
+                logger.info(f"Skipping row {row_idx} in {tab_name}: not AI-seeded")
+                continue
+            
+            # Check if backfill needed
+            needs_updated_source = not updated_source_val or updated_source_val == ""
+            needs_is_auto_seeded = not is_auto_seeded_val or is_auto_seeded_val == "" or is_auto_seeded_val == False
+            
+            if needs_updated_source and updated_source_col_idx:
+                us_a1 = f"{tab_name}!{_col_index_to_a1(updated_source_col_idx)}{row_idx}"
+                batch_data.append({
+                    "range": us_a1,
+                    "values": [[token(Provenance.FLOW4_SEED_PARAMS)]],
+                })
+                updated_count += 1
+            
+            if needs_is_auto_seeded and is_auto_seeded_col_idx:
+                auto_a1 = f"{tab_name}!{_col_index_to_a1(is_auto_seeded_col_idx)}{row_idx}"
+                batch_data.append({
+                    "range": auto_a1,
+                    "values": [[True]],
+                })
+                updated_count += 1
+        
+        if batch_data:
+            self.client.batch_update_values(
+                spreadsheet_id=spreadsheet_id,
+                data=batch_data,
+                value_input_option="RAW",
+            )
+            logger.info(f"Backfilled {updated_count} cells in {tab_name}")
+        
+        return updated_count
+
     def _build_column_indices(self, header: List[str]) -> Dict[str, int]:
         """Build a mapping of normalized column names to 1-based indices."""
         indices = {}
