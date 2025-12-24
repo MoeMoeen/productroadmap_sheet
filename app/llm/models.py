@@ -12,6 +12,7 @@ class MathModelPromptInput(BaseModel):
     title: str
     problem_statement: Optional[str] = None
     desired_outcome: Optional[str] = None
+    hypothesis: Optional[str] = None
     llm_summary: Optional[str] = None
 
     expected_impact_description: Optional[str] = None

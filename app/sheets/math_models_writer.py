@@ -65,7 +65,7 @@ class MathModelsWriter:
             self.client.update_values(
                 spreadsheet_id=spreadsheet_id,
                 range_=us_a1,
-                values=[[token(Provenance.FLOW4_SYNC_MATHMODELS)]],
+                values=[[token(Provenance.FLOW4_SUGGEST_MATHMODELS)]],
                 value_input_option="RAW",
             )
     
@@ -99,7 +99,7 @@ class MathModelsWriter:
             self.client.update_values(
                 spreadsheet_id=spreadsheet_id,
                 range_=us_a1,
-                values=[[token(Provenance.FLOW4_SYNC_MATHMODELS)]],
+                values=[[token(Provenance.FLOW4_SUGGEST_MATHMODELS)]],
                 value_input_option="RAW",
             )
     
@@ -130,6 +130,7 @@ class MathModelsWriter:
         assumptions_col_idx = self._find_column_index(spreadsheet_id, tab_name, "assumptions_text")
         notes_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_notes")
         approved_col_idx = self._find_column_index(spreadsheet_id, tab_name, "approved_by_user")
+        suggested_by_llm_col_idx = self._find_column_index(spreadsheet_id, tab_name, "suggested_by_llm")
         
         # Guard: require at least one suggestion column
         if not (formula_col_idx or assumptions_col_idx or notes_col_idx):
@@ -196,6 +197,15 @@ class MathModelsWriter:
                     "range": cell_a1,
                     "values": [[notes_sugg]],
                 })
+
+            # Mark as suggested by LLM if any suggestion was provided
+            if suggested_by_llm_col_idx and (formula_sugg or assumptions_sugg or notes_sugg):
+                col_a1 = _col_index_to_a1(suggested_by_llm_col_idx)
+                cell_a1 = f"{tab_name}!{col_a1}{row_number}"
+                batch_data.append({
+                    "range": cell_a1,
+                    "values": [[True]],
+                })
         
         if batch_data:
             # If Updated Source column exists, add provenance token for each updated row
@@ -207,7 +217,7 @@ class MathModelsWriter:
                         us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}"
                         batch_data.append({
                             "range": us_a1,
-                            "values": [[token(Provenance.FLOW4_SYNC_MATHMODELS)]],
+                            "values": [[token(Provenance.FLOW4_SUGGEST_MATHMODELS)]],
                         })
 
             self.client.batch_update_values(

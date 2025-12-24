@@ -138,6 +138,7 @@ def _build_user_prompt(payload: MathModelPromptInput) -> str:
 
     add("Problem", payload.problem_statement)
     add("Desired outcome", payload.desired_outcome)
+    add("Hypothesis", payload.hypothesis)
     add("LLM summary", payload.llm_summary)
     add("Expected impact", payload.expected_impact_description)
     add("Impact metric", payload.impact_metric)

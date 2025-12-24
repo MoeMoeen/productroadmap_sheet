@@ -20,6 +20,7 @@ def suggest_math_model_for_initiative(
 		title=str(initiative.title),
 		problem_statement=getattr(initiative, "problem_statement", None),
 		desired_outcome=getattr(initiative, "desired_outcome", None),
+		hypothesis=getattr(initiative, "hypothesis", None),
 		llm_summary=getattr(initiative, "llm_summary", None),
 		expected_impact_description=getattr(initiative, "expected_impact_description", None),
 		impact_metric=getattr(initiative, "impact_metric", None),

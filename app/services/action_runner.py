@@ -22,7 +22,7 @@ from app.services.scoring_service import ScoringService
 
 from app.jobs.backlog_sync_job import run_all_backlog_sync
 from app.jobs.flow1_full_sync_job import run_flow1_full_sync
-from app.jobs.flow3_product_ops_job import run_flow3_write_scores_to_sheet
+from app.jobs.flow3_product_ops_job import run_flow3_write_scores_to_sheet, run_flow3_sync_inputs_to_initiatives
 from app.jobs.flow2_scoring_activation_job import run_scoring_batch
 from app.jobs.sync_intake_job import run_sync_all_intake_sheets
 
@@ -153,6 +153,10 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
     elif action == "flow3.write_scores":
         summary["total"] = result.get("updated_initiatives", 0)
         summary["success"] = result.get("updated_initiatives", 0)
+    
+    elif action == "flow3.sync_inputs":
+        summary["total"] = result.get("updated", 0)
+        summary["success"] = result.get("updated", 0)
     
     # Flow 2 actions
     elif action == "flow2.activate":
@@ -377,6 +381,25 @@ def _action_flow3_write_scores(db: Session, ctx: ActionContext) -> Dict[str, Any
     return {"updated_initiatives": updated}
 
 
+def _action_flow3_sync_inputs(db: Session, ctx: ActionContext) -> Dict[str, Any]:
+    sheet_ctx = ctx.payload.get("sheet_context") or {}
+    options = (ctx.payload.get("options") or {}) if isinstance(ctx.payload.get("options"), dict) else {}
+    if not isinstance(sheet_ctx, dict):
+        sheet_ctx = {}
+    if not isinstance(options, dict):
+        options = {}
+
+    spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (settings.PRODUCT_OPS.spreadsheet_id if settings.PRODUCT_OPS else None)
+    tab = sheet_ctx.get("tab") or (settings.PRODUCT_OPS.scoring_inputs_tab if settings.PRODUCT_OPS else "Scoring_Inputs")
+    commit_every = options.get("commit_every")
+
+    if not spreadsheet_id:
+        raise ValueError("sheet_context.spreadsheet_id missing and PRODUCT_OPS not configured")
+
+    updated = run_flow3_sync_inputs_to_initiatives(db, spreadsheet_id=spreadsheet_id, tab_name=tab, commit_every=commit_every)
+    return {"updated": updated}
+
+
 # ---------- Flow 2 actions ----------
 
 def _action_flow2_activate(db: Session, ctx: ActionContext) -> Dict[str, Any]:
@@ -553,6 +576,7 @@ _ACTION_REGISTRY: Dict[str, ActionFn] = {
     # Flow 3
     "flow3.compute_all_frameworks": _action_flow3_compute_all,
     "flow3.write_scores": _action_flow3_write_scores,
+    "flow3.sync_inputs": _action_flow3_sync_inputs,
 
     # Flow 2
     "flow2.activate": _action_flow2_activate,
