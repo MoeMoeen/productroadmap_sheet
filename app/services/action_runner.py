@@ -21,6 +21,7 @@ from app.services.scoring import ScoringFramework
 from app.services.scoring_service import ScoringService
 
 from app.jobs.backlog_sync_job import run_all_backlog_sync
+from app.jobs.backlog_update_job import run_backlog_update
 from app.jobs.flow1_full_sync_job import run_flow1_full_sync
 from app.jobs.flow3_product_ops_job import run_flow3_write_scores_to_sheet, run_flow3_sync_inputs_to_initiatives
 from app.jobs.flow2_scoring_activation_job import run_scoring_batch
@@ -231,6 +232,26 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         # Check for partial failure
         if not result.get("backlog_update_completed", True):
             summary["failed"] = 1
+    
+    elif action == "pm.score_selected":
+        # Initiative-level counting using actual selection count
+        selected_count = result.get("selected_count", 0)
+        skipped = result.get("skipped_no_key", 0)
+        failed = result.get("failed_count", 0)
+        summary["total"] = selected_count + skipped
+        summary["success"] = selected_count - failed
+        summary["skipped"] = skipped
+        summary["failed"] = failed
+    
+    elif action == "pm.switch_framework":
+        # Initiative-level counting using actual selection count
+        selected_count = result.get("selected_count", 0)
+        skipped = result.get("skipped_no_key", 0)
+        failed = result.get("failed_count", 0)
+        summary["total"] = selected_count + skipped
+        summary["success"] = selected_count - failed
+        summary["skipped"] = skipped
+        summary["failed"] = failed
     
     return summary
 
@@ -658,12 +679,25 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
         logger.exception("pm.score_selected.sync_inputs_failed")
         for k in keys:
             status_by_key[k] = "FAILED: sync failed"
+        # Best-effort status write before returning
+        try:
+            from app.sheets.productops_writer import write_status_to_productops_sheet
+            write_status_to_productops_sheet(
+                ctx.sheets_client,
+                str(spreadsheet_id),
+                str(tab),
+                {k: v for k, v in status_by_key.items() if v is not None},
+            )
+        except Exception:
+            logger.warning("pm.score_selected.status_write_failed_on_sync_error")
         return {
             "pm_job": "pm.score_selected",
+            "selected_count": len(keys),
             "updated_inputs": 0,
             "computed": 0,
             "written": 0,
             "skipped_no_key": skipped_no_key,
+            "failed_count": len(keys),
             "substeps": [
                 {"step": "flow3.sync_inputs", "status": "failed", "error": str(e)[:50]},
             ],
@@ -677,12 +711,25 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
         logger.exception("pm.score_selected.compute_failed")
         for k in keys:
             status_by_key[k] = "FAILED: compute failed"
+        # Best-effort status write before returning
+        try:
+            from app.sheets.productops_writer import write_status_to_productops_sheet
+            write_status_to_productops_sheet(
+                ctx.sheets_client,
+                str(spreadsheet_id),
+                str(tab),
+                {k: v for k, v in status_by_key.items() if v is not None},
+            )
+        except Exception:
+            logger.warning("pm.score_selected.status_write_failed_on_compute_error")
         return {
             "pm_job": "pm.score_selected",
+            "selected_count": len(keys),
             "updated_inputs": updated_inputs,
             "computed": 0,
             "written": 0,
             "skipped_no_key": skipped_no_key,
+            "failed_count": len(keys),
             "substeps": [
                 {"step": "flow3.sync_inputs", "status": "ok", "count": updated_inputs},
                 {"step": "flow3.compute_selected", "status": "failed", "error": str(e)[:50]},
@@ -701,12 +748,25 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
         logger.exception("pm.score_selected.write_scores_failed")
         for k in keys:
             status_by_key[k] = "FAILED: write failed"
+        # Best-effort status write before returning
+        try:
+            from app.sheets.productops_writer import write_status_to_productops_sheet
+            write_status_to_productops_sheet(
+                ctx.sheets_client,
+                str(spreadsheet_id),
+                str(tab),
+                {k: v for k, v in status_by_key.items() if v is not None},
+            )
+        except Exception:
+            logger.warning("pm.score_selected.status_write_failed_on_write_error")
         return {
             "pm_job": "pm.score_selected",
+            "selected_count": len(keys),
             "updated_inputs": updated_inputs,
             "computed": computed,
             "written": 0,
             "skipped_no_key": skipped_no_key,
+            "failed_count": len(keys),
             "substeps": [
                 {"step": "flow3.sync_inputs", "status": "ok", "count": updated_inputs},
                 {"step": "flow3.compute_selected", "status": "ok", "count": computed},
@@ -732,10 +792,12 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
 
     return {
         "pm_job": "pm.score_selected",
+        "selected_count": len(keys),
         "updated_inputs": updated_inputs,
         "computed": computed,
         "written": written,
         "skipped_no_key": skipped_no_key,
+        "failed_count": 0,
         "substeps": [
             {"step": "flow3.sync_inputs", "status": "ok", "count": updated_inputs},
             {"step": "flow3.compute_selected", "status": "ok", "count": computed},
@@ -743,6 +805,308 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
             {"step": "status_write", "status": "ok"},
         ],
     }
+
+
+def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, Any]:
+    """PM Job #3: Switch active scoring framework for selected initiatives.
+
+    Local-only update: changes only the current sheet (Scoring_Inputs or Central_Backlog).
+    No cross-sheet propagation. Branches based on sheet_context.tab.
+
+    Orchestration (Branch A — Scoring_Inputs):
+      1. Sync inputs from sheet to DB (ensures DB has latest active_scoring_framework)
+      2. Activate chosen framework for selected initiatives (best-effort compute on missing)
+      3. Write updated scores back to Scoring_Inputs
+      4. Per-row status write
+
+    Orchestration (Branch B — Central_Backlog):
+      1. Save selected rows from Backlog into DB
+      2. Activate chosen framework for selected initiatives
+      3. Sync Central_Backlog view from DB
+      4. Per-row status write (optional if Backlog has Status column)
+    """
+    sheet_ctx = ctx.payload.get("sheet_context") or {}
+    options = ctx.payload.get("options") or {}
+    scope = ctx.payload.get("scope") or {}
+    if not isinstance(sheet_ctx, dict):
+        sheet_ctx = {}
+    if not isinstance(options, dict):
+        options = {}
+    if not isinstance(scope, dict):
+        scope = {}
+
+    spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (settings.PRODUCT_OPS.spreadsheet_id if settings.PRODUCT_OPS else None)
+    tab = sheet_ctx.get("tab") or (settings.PRODUCT_OPS.scoring_inputs_tab if settings.PRODUCT_OPS else "Scoring_Inputs")
+    commit_every = int(options.get("commit_every", settings.SCORING_BATCH_COMMIT_EVERY))
+
+    keys = scope.get("initiative_keys") or []
+    if not isinstance(keys, list):
+        keys = []
+    # Sanitize: skip blanks, dedupe
+    keys = [k for k in keys if isinstance(k, str) and k.strip()]
+    keys = list(dict.fromkeys(keys))
+    original_keys = scope.get("initiative_keys")
+    skipped_no_key = (len(original_keys) - len(keys)) if isinstance(original_keys, list) else 0
+
+    if not spreadsheet_id:
+        raise ValueError("sheet_context.spreadsheet_id missing and PRODUCT_OPS not configured")
+
+    # Early bail if no selected keys
+    if not keys:
+        logger.info("pm.switch_framework.no_keys_selected", extra={"skipped_no_key": skipped_no_key})
+        return {
+            "pm_job": "pm.switch_framework",
+            "tab": tab,
+            "activated": 0,
+            "written": 0,
+            "skipped_no_key": skipped_no_key,
+            "substeps": [
+                {"step": "sync_or_backlog_update", "status": "skipped", "reason": "no keys selected"},
+                {"step": "activate_framework", "status": "skipped", "reason": "no keys selected"},
+                {"step": "write_or_sync_view", "status": "skipped", "reason": "no keys selected"},
+            ],
+        }
+
+    status_by_key: Dict[str, Optional[str]] = {k: None for k in keys}
+
+    # Detect branch based on tab
+    is_backlog_tab = "backlog" in str(tab).lower()
+
+    if is_backlog_tab:
+        # ========== BRANCH B: Central_Backlog ==========
+
+        # Step B1: Save selected rows from Backlog into DB
+        try:
+            run_backlog_update(db, initiative_keys=keys, product_org=options.get("product_org"))
+        except Exception as e:
+            logger.exception("pm.switch_framework.backlog_update_failed")
+            for k in keys:
+                status_by_key[k] = "FAILED: backlog update failed"
+            return {
+                "pm_job": "pm.switch_framework",
+                "tab": tab,
+                "selected_count": len(keys),
+                "activated": 0,
+                "written": 0,
+                "skipped_no_key": skipped_no_key,
+                "failed_count": len(keys),
+                "substeps": [
+                    {"step": "sync_or_backlog_update", "status": "failed", "error": str(e)[:50]},
+                ],
+            }
+
+        # Step B2: Activate for selected initiatives
+        svc = ScoringService(db)
+        try:
+            activated = svc.activate_for_initiatives(keys, commit_every=commit_every)
+        except Exception as e:
+            logger.exception("pm.switch_framework.activate_failed")
+            for k in keys:
+                status_by_key[k] = "FAILED: activate failed"
+            return {
+                "pm_job": "pm.switch_framework",
+                "tab": tab,
+                "selected_count": len(keys),
+                "activated": 0,
+                "written": 0,
+                "skipped_no_key": skipped_no_key,
+                "failed_count": len(keys),
+                "substeps": [
+                    {"step": "sync_or_backlog_update", "status": "ok"},
+                    {"step": "activate_framework", "status": "failed", "error": str(e)[:50]},
+                ],
+            }
+
+        # Step B3: Sync Central_Backlog view from DB (full sync v1)
+        try:
+            run_all_backlog_sync(db)
+        except Exception as e:
+            logger.exception("pm.switch_framework.backlog_sync_failed")
+            for k in keys:
+                status_by_key[k] = "FAILED: backlog sync failed"
+            return {
+                "pm_job": "pm.switch_framework",
+                "tab": tab,
+                "selected_count": len(keys),
+                "activated": activated,
+                "written": 0,
+                "skipped_no_key": skipped_no_key,
+                "failed_count": len(keys),
+                "substeps": [
+                    {"step": "sync_or_backlog_update", "status": "ok"},
+                    {"step": "activate_framework", "status": "ok", "count": activated},
+                    {"step": "write_or_sync_view", "status": "failed", "error": str(e)[:50]},
+                ],
+            }
+
+        # All steps succeeded
+        for k in keys:
+            status_by_key[k] = "OK"
+
+        # Step B4: Status write (best-effort, optional)
+        try:
+            # Only attempt if Backlog sheet has Status column (we don't know for sure, so skip for now)
+            pass
+        except Exception:
+            logger.warning("pm.switch_framework.status_write_failed")
+
+        return {
+            "pm_job": "pm.switch_framework",
+            "tab": tab,
+            "selected_count": len(keys),
+            "activated": activated,
+            "written": 1,  # Backlog full sync counts as 1 write operation
+            "skipped_no_key": skipped_no_key,
+            "failed_count": 0,
+            "substeps": [
+                {"step": "sync_or_backlog_update", "status": "ok"},
+                {"step": "activate_framework", "status": "ok", "count": activated},
+                {"step": "write_or_sync_view", "status": "ok"},
+            ],
+        }
+
+    else:
+        # ========== BRANCH A: Scoring_Inputs ==========
+
+        # Step A1: Sync inputs from sheet to DB
+        try:
+            updated_inputs = run_flow3_sync_inputs_to_initiatives(
+                db=db,
+                commit_every=commit_every,
+                spreadsheet_id=str(spreadsheet_id),
+                tab_name=str(tab),
+                initiative_keys=keys,
+            )
+        except Exception as e:
+            logger.exception("pm.switch_framework.sync_inputs_failed")
+            for k in keys:
+                status_by_key[k] = "FAILED: sync failed"
+            # Best-effort status write before returning
+            try:
+                from app.sheets.productops_writer import write_status_to_productops_sheet
+                write_status_to_productops_sheet(
+                    ctx.sheets_client,
+                    str(spreadsheet_id),
+                    str(tab),
+                    {k: v for k, v in status_by_key.items() if v is not None},
+                )
+            except Exception:
+                logger.warning("pm.switch_framework.status_write_failed_on_sync_error")
+            return {
+                "pm_job": "pm.switch_framework",
+                "tab": tab,
+                "selected_count": len(keys),
+                "activated": 0,
+                "written": 0,
+                "skipped_no_key": skipped_no_key,
+                "failed_count": len(keys),
+                "substeps": [
+                    {"step": "sync_or_backlog_update", "status": "failed", "error": str(e)[:50]},
+                ],
+            }
+
+        # Step A2: Activate for selected initiatives
+        svc = ScoringService(db)
+        try:
+            activated = svc.activate_for_initiatives(keys, commit_every=commit_every)
+        except Exception as e:
+            logger.exception("pm.switch_framework.activate_failed")
+            for k in keys:
+                status_by_key[k] = "FAILED: activate failed"
+            # Best-effort status write before returning
+            try:
+                from app.sheets.productops_writer import write_status_to_productops_sheet
+                write_status_to_productops_sheet(
+                    ctx.sheets_client,
+                    str(spreadsheet_id),
+                    str(tab),
+                    {k: v for k, v in status_by_key.items() if v is not None},
+                )
+            except Exception:
+                logger.warning("pm.switch_framework.status_write_failed_on_activate_error")
+            return {
+                "pm_job": "pm.switch_framework",
+                "tab": tab,
+                "selected_count": len(keys),
+                "activated": 0,
+                "written": 0,
+                "skipped_no_key": skipped_no_key,
+                "failed_count": len(keys),
+                "substeps": [
+                    {"step": "sync_or_backlog_update", "status": "ok", "count": updated_inputs},
+                    {"step": "activate_framework", "status": "failed", "error": str(e)[:50]},
+                ],
+            }
+
+        # Step A3: Write updated scores back to Scoring_Inputs
+        try:
+            written = run_flow3_write_scores_to_sheet(
+                db=db,
+                spreadsheet_id=str(spreadsheet_id),
+                tab_name=str(tab),
+                initiative_keys=keys,
+            )
+        except Exception as e:
+            logger.exception("pm.switch_framework.write_scores_failed")
+            for k in keys:
+                status_by_key[k] = "FAILED: write failed"
+            # Best-effort status write before returning
+            try:
+                from app.sheets.productops_writer import write_status_to_productops_sheet
+                write_status_to_productops_sheet(
+                    ctx.sheets_client,
+                    str(spreadsheet_id),
+                    str(tab),
+                    {k: v for k, v in status_by_key.items() if v is not None},
+                )
+            except Exception:
+                logger.warning("pm.switch_framework.status_write_failed_on_write_error")
+            return {
+                "pm_job": "pm.switch_framework",
+                "tab": tab,
+                "selected_count": len(keys),
+                "activated": activated,
+                "written": 0,
+                "skipped_no_key": skipped_no_key,
+                "failed_count": len(keys),
+                "substeps": [
+                    {"step": "sync_or_backlog_update", "status": "ok", "count": updated_inputs},
+                    {"step": "activate_framework", "status": "ok", "count": activated},
+                    {"step": "write_or_sync_view", "status": "failed", "error": str(e)[:50]},
+                ],
+            }
+
+        # All steps succeeded
+        for k in keys:
+            status_by_key[k] = "OK"
+
+        # Step A4: Per-row status write (best-effort)
+        try:
+            from app.sheets.productops_writer import write_status_to_productops_sheet
+            write_status_to_productops_sheet(
+                ctx.sheets_client,
+                str(spreadsheet_id),
+                str(tab),
+                {k: v for k, v in status_by_key.items() if v is not None},
+            )
+        except Exception:
+            logger.warning("pm.switch_framework.status_write_failed")
+
+        return {
+            "pm_job": "pm.switch_framework",
+            "tab": tab,
+            "selected_count": len(keys),
+            "activated": activated,
+            "written": written,
+            "skipped_no_key": skipped_no_key,
+            "failed_count": 0,
+            "substeps": [
+                {"step": "sync_or_backlog_update", "status": "ok", "count": updated_inputs},
+                {"step": "activate_framework", "status": "ok", "count": activated},
+                {"step": "write_or_sync_view", "status": "ok", "count": written},
+                {"step": "status_write", "status": "ok"},
+            ],
+        }
 
 
 # ----------------------------
@@ -774,4 +1138,5 @@ _ACTION_REGISTRY: Dict[str, ActionFn] = {
     # PM Jobs (V1)
     "pm.backlog_sync": _action_pm_backlog_sync,
     "pm.score_selected": _action_pm_score_selected,
+    "pm.switch_framework": _action_pm_switch_framework,
 }

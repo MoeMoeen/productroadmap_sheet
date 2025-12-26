@@ -98,8 +98,12 @@ def write_scores_to_productops_sheet(
 
     key_col = col_map["initiative_key"]
 
-    # Step 3: Load all initiatives from DB into memory (keyed by initiative_key)
-    initiatives_list = db.query(Initiative).all()
+    # Step 3: Load initiatives from DB into memory (keyed by initiative_key)
+    # Optimize: if initiative_keys provided, query only those keys
+    if initiative_keys is not None and initiative_keys:
+        initiatives_list = db.query(Initiative).filter(Initiative.initiative_key.in_(initiative_keys)).all()
+    else:
+        initiatives_list = db.query(Initiative).all()
     initiatives: Dict[str, Any] = cast(Dict[str, Any], {i.initiative_key: i for i in initiatives_list})
 
     logger.debug(
@@ -220,7 +224,7 @@ def write_status_to_productops_sheet(
     for i, nh in enumerate(norm_headers):
         if nh == "initiative_key":
             key_col = i
-        elif nh in {"status", "last_run_status"}:
+        elif nh in {"status", "last_run_status", "run_status"}:
             status_col = i
 
     if key_col is None:

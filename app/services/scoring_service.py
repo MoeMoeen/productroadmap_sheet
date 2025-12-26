@@ -597,6 +597,111 @@ class ScoringService:
 
         return history_row
 
+    def activate_for_initiatives(
+        self,
+        initiative_keys: list[str],
+        commit_every: Optional[int] = None,
+    ) -> int:
+        """Activate chosen framework for selected initiatives (PM Job #3).
+
+        For each selected initiative:
+        - Query its active_scoring_framework from DB
+        - Validate it's a valid ScoringFramework enum value
+        - Call activate_initiative_framework (which handles missing scores via best-effort compute)
+        - Log warnings (not errors) for invalid/missing frameworks
+        - Continue with other initiatives on per-key errors
+
+        Returns:
+            Count of successfully activated initiatives.
+
+        Side effects:
+            - Commits per batch (batch_size = commit_every or settings.SCORING_BATCH_COMMIT_EVERY)
+            - Logs warnings for invalid/missing frameworks
+        """
+        if not initiative_keys:
+            return 0
+
+        batch_size = commit_every or settings.SCORING_BATCH_COMMIT_EVERY
+
+        stmt = select(Initiative).where(Initiative.initiative_key.in_(initiative_keys)).order_by(Initiative.id)
+        initiatives = self.db.execute(stmt).scalars().all()
+        total = len(initiatives)
+        logger.info(
+            "pm.switch_framework.activate_for_initiatives_start",
+            extra={"total": total},
+        )
+
+        activated_count = 0
+        for idx, initiative in enumerate(initiatives, start=1):
+            # Validate framework is set
+            framework_raw = getattr(initiative, "active_scoring_framework", None)
+            if not framework_raw:
+                logger.warning(
+                    "pm.switch_framework.no_active_framework",
+                    extra={
+                        "initiative_key": getattr(initiative, "initiative_key", None),
+                    },
+                )
+                continue
+
+            # Validate framework is valid enum
+            try:
+                framework = ScoringFramework(str(framework_raw).upper())
+            except ValueError:
+                logger.warning(
+                    "pm.switch_framework.invalid_framework",
+                    extra={
+                        "initiative_key": getattr(initiative, "initiative_key", None),
+                        "framework": framework_raw,
+                    },
+                )
+                continue
+
+            # Activate (best-effort; handles missing scores)
+            try:
+                self.activate_initiative_framework(initiative, framework)
+                activated_count += 1
+                logger.debug(
+                    "pm.switch_framework.activated_initiative",
+                    extra={
+                        "initiative_key": getattr(initiative, "initiative_key", None),
+                        "framework": framework.value,
+                    },
+                )
+            except Exception:
+                logger.exception(
+                    "pm.switch_framework.activate_failed",
+                    extra={
+                        "initiative_key": getattr(initiative, "initiative_key", None),
+                        "framework": framework_raw,
+                    },
+                )
+                continue
+
+            # Batch commit with error handling
+            if batch_size and idx % batch_size == 0:
+                try:
+                    self.db.commit()
+                except Exception:
+                    logger.exception("pm.switch_framework.commit_failed")
+                    self.db.rollback()
+                    raise  # Abort on commit failure to avoid partial activation
+
+        # Final commit with error handling
+        if activated_count > 0:
+            try:
+                self.db.commit()
+            except Exception:
+                logger.exception("pm.switch_framework.final_commit_failed")
+                self.db.rollback()
+                raise
+
+        logger.info(
+            "pm.switch_framework.activate_for_initiatives_done",
+            extra={"activated": activated_count, "total": total},
+        )
+        return activated_count
+
     def _resolve_framework_for_initiative(
         self,
         initiative: Initiative,
