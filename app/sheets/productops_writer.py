@@ -265,6 +265,19 @@ def write_status_to_productops_sheet(
     return written
 
 
+def write_status_to_sheet(
+    client: SheetsClient,
+    spreadsheet_id: str,
+    tab_name: str,
+    status_by_key: Dict[str, str],
+) -> int:
+    """Generic alias for per-row status writes.
+
+    Delegates to write_status_to_productops_sheet; kept for clarity across tabs.
+    """
+    return write_status_to_productops_sheet(client, spreadsheet_id, tab_name, status_by_key)
+
+
 # Use shared header normalization from app.utils.header_utils
 
 
@@ -304,6 +317,7 @@ def _col_index_to_a1(idx: int) -> str:
 __all__ = [
     "write_scores_to_productops_sheet",
     "write_status_to_productops_sheet",
+    "write_status_to_sheet",
     "PRODUCTOPS_SCORE_OUTPUT_COLUMNS",
     "SCORE_FIELD_TO_HEADERS",
 ]

@@ -234,7 +234,6 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
             summary["failed"] = 1
     
     elif action == "pm.score_selected":
-        # Initiative-level counting using actual selection count
         selected_count = result.get("selected_count", 0)
         skipped = result.get("skipped_no_key", 0)
         failed = result.get("failed_count", 0)
@@ -244,12 +243,21 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         summary["failed"] = failed
     
     elif action == "pm.switch_framework":
-        # Initiative-level counting using actual selection count
         selected_count = result.get("selected_count", 0)
         skipped = result.get("skipped_no_key", 0)
         failed = result.get("failed_count", 0)
         summary["total"] = selected_count + skipped
         summary["success"] = selected_count - failed
+        summary["skipped"] = skipped
+        summary["failed"] = failed
+
+    elif action == "pm.save_selected":
+        selected_count = result.get("selected_count", 0)
+        skipped = result.get("skipped_no_key", 0)
+        failed = result.get("failed_count", 0)
+        saved = result.get("saved_count", 0)
+        summary["total"] = selected_count + skipped
+        summary["success"] = saved
         summary["skipped"] = skipped
         summary["failed"] = failed
     
@@ -653,10 +661,12 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
         logger.info("pm.score_selected.no_keys_selected", extra={"skipped_no_key": skipped_no_key})
         return {
             "pm_job": "pm.score_selected",
+            "selected_count": 0,
             "updated_inputs": 0,
             "computed": 0,
             "written": 0,
             "skipped_no_key": skipped_no_key,
+            "failed_count": 0,
             "substeps": [
                 {"step": "flow3.sync_inputs", "status": "skipped", "reason": "no keys selected"},
                 {"step": "flow3.compute_selected", "status": "skipped", "reason": "no keys selected"},
@@ -681,8 +691,8 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
             status_by_key[k] = "FAILED: sync failed"
         # Best-effort status write before returning
         try:
-            from app.sheets.productops_writer import write_status_to_productops_sheet
-            write_status_to_productops_sheet(
+            from app.sheets.productops_writer import write_status_to_sheet
+            write_status_to_sheet(
                 ctx.sheets_client,
                 str(spreadsheet_id),
                 str(tab),
@@ -713,8 +723,8 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
             status_by_key[k] = "FAILED: compute failed"
         # Best-effort status write before returning
         try:
-            from app.sheets.productops_writer import write_status_to_productops_sheet
-            write_status_to_productops_sheet(
+            from app.sheets.productops_writer import write_status_to_sheet
+            write_status_to_sheet(
                 ctx.sheets_client,
                 str(spreadsheet_id),
                 str(tab),
@@ -750,8 +760,8 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
             status_by_key[k] = "FAILED: write failed"
         # Best-effort status write before returning
         try:
-            from app.sheets.productops_writer import write_status_to_productops_sheet
-            write_status_to_productops_sheet(
+            from app.sheets.productops_writer import write_status_to_sheet
+            write_status_to_sheet(
                 ctx.sheets_client,
                 str(spreadsheet_id),
                 str(tab),
@@ -780,8 +790,8 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
 
     # 4) Per-row Status write (best-effort)
     try:
-        from app.sheets.productops_writer import write_status_to_productops_sheet
-        write_status_to_productops_sheet(
+        from app.sheets.productops_writer import write_status_to_sheet
+        write_status_to_sheet(
             ctx.sheets_client,
             str(spreadsheet_id),
             str(tab),
@@ -857,6 +867,7 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
         return {
             "pm_job": "pm.switch_framework",
             "tab": tab,
+            "selected_count": 0,
             "activated": 0,
             "written": 0,
             "skipped_no_key": skipped_no_key,
@@ -983,8 +994,8 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
                 status_by_key[k] = "FAILED: sync failed"
             # Best-effort status write before returning
             try:
-                from app.sheets.productops_writer import write_status_to_productops_sheet
-                write_status_to_productops_sheet(
+                from app.sheets.productops_writer import write_status_to_sheet
+                write_status_to_sheet(
                     ctx.sheets_client,
                     str(spreadsheet_id),
                     str(tab),
@@ -1015,8 +1026,8 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
                 status_by_key[k] = "FAILED: activate failed"
             # Best-effort status write before returning
             try:
-                from app.sheets.productops_writer import write_status_to_productops_sheet
-                write_status_to_productops_sheet(
+                from app.sheets.productops_writer import write_status_to_sheet
+                write_status_to_sheet(
                     ctx.sheets_client,
                     str(spreadsheet_id),
                     str(tab),
@@ -1052,8 +1063,8 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
                 status_by_key[k] = "FAILED: write failed"
             # Best-effort status write before returning
             try:
-                from app.sheets.productops_writer import write_status_to_productops_sheet
-                write_status_to_productops_sheet(
+                from app.sheets.productops_writer import write_status_to_sheet
+                write_status_to_sheet(
                     ctx.sheets_client,
                     str(spreadsheet_id),
                     str(tab),
@@ -1082,8 +1093,8 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
 
         # Step A4: Per-row status write (best-effort)
         try:
-            from app.sheets.productops_writer import write_status_to_productops_sheet
-            write_status_to_productops_sheet(
+            from app.sheets.productops_writer import write_status_to_sheet
+            write_status_to_sheet(
                 ctx.sheets_client,
                 str(spreadsheet_id),
                 str(tab),
@@ -1109,9 +1120,326 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
         }
 
 
-# ----------------------------
-# Action registry (module-level constant)
-# ----------------------------
+# ---------- PM Job #4 ----------
+
+def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
+    """PM Job #4: Save selected rows from current tab into DB (selection-scoped).
+
+    Tab-aware behavior:
+    - Scoring_Inputs: save editable input fields via Flow3 sync (no scoring compute/write)
+    - MathModels: save math model fields via Flow4 sync
+    - Params: save parameter rows via Flow4 sync
+    - Central Backlog: save editable backlog fields via Flow1 backlog_update (no activate/sync)
+
+    Always local-only (no cross-sheet propagation). Best-effort per-row Status write when supported.
+    """
+    sheet_ctx = ctx.payload.get("sheet_context") or {}
+    options = ctx.payload.get("options") or {}
+    scope = ctx.payload.get("scope") or {}
+    if not isinstance(sheet_ctx, dict):
+        sheet_ctx = {}
+    if not isinstance(options, dict):
+        options = {}
+    if not isinstance(scope, dict):
+        scope = {}
+
+    spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (settings.PRODUCT_OPS.spreadsheet_id if settings.PRODUCT_OPS else None)
+    tab = sheet_ctx.get("tab") or (settings.PRODUCT_OPS.scoring_inputs_tab if settings.PRODUCT_OPS else "Scoring_Inputs")
+    commit_every = int(options.get("commit_every", settings.SCORING_BATCH_COMMIT_EVERY))
+
+    keys = scope.get("initiative_keys") or []
+    if not isinstance(keys, list):
+        keys = []
+    # Sanitize: skip blanks, dedupe
+    keys = [k for k in keys if isinstance(k, str) and k.strip()]
+    keys = list(dict.fromkeys(keys))
+    original_keys = scope.get("initiative_keys")
+    skipped_no_key = (len(original_keys) - len(keys)) if isinstance(original_keys, list) else 0
+
+    if not spreadsheet_id:
+        raise ValueError("sheet_context.spreadsheet_id missing and PRODUCT_OPS not configured")
+
+    # Early bail if no selected keys
+    if not keys:
+        logger.info("pm.save_selected.no_keys_selected", extra={"skipped_no_key": skipped_no_key})
+        return {
+            "pm_job": "pm.save_selected",
+            "tab": tab,
+            "selected_count": 0,
+            "saved_count": 0,
+            "skipped_no_key": skipped_no_key,
+            "failed_count": 0,
+            "substeps": [
+                {"step": "save", "status": "skipped", "reason": "no keys selected"},
+                {"step": "status_write", "status": "skipped", "reason": "no keys selected"},
+            ],
+        }
+
+    status_by_key: Dict[str, Optional[str]] = {k: None for k in keys}
+
+    # Safer tab detection: prefer exact config matches, fallback to substring for Backlog
+    cfg = settings.PRODUCT_OPS
+    tab_lc = str(tab).lower()
+
+    if cfg and tab == cfg.mathmodels_tab:
+        # ---------- Branch B: MathModels ----------
+        try:
+            svc = MathModelSyncService(ctx.sheets_client)
+            result = svc.sync_sheet_to_db(
+                db=db,
+                spreadsheet_id=str(spreadsheet_id),
+                tab_name=str(tab),
+                commit_every=commit_every,
+                initiative_keys=keys,
+            )
+            saved = int(result.get("updated", 0))
+        except Exception as e:
+            logger.exception("pm.save_selected.mathmodels_sync_failed")
+            for k in keys:
+                status_by_key[k] = "FAILED: save failed"
+            try:
+                from app.sheets.productops_writer import write_status_to_productops_sheet as write_status_to_sheet
+                write_status_to_sheet(
+                    ctx.sheets_client,
+                    str(spreadsheet_id),
+                    str(tab),
+                    {k: v for k, v in status_by_key.items() if v is not None},
+                )
+            except Exception:
+                logger.warning("pm.save_selected.status_write_failed_on_mathmodels_error")
+            return {
+                "pm_job": "pm.save_selected",
+                "tab": tab,
+                "selected_count": len(keys),
+                "saved_count": 0,
+                "skipped_no_key": skipped_no_key,
+                "failed_count": len(keys),
+                "substeps": [
+                    {"step": "save", "status": "failed", "error": str(e)[:50]},
+                ],
+            }
+
+        for k in keys:
+            status_by_key[k] = "OK"
+        try:
+            from app.sheets.productops_writer import write_status_to_productops_sheet as write_status_to_sheet
+            write_status_to_sheet(
+                ctx.sheets_client,
+                str(spreadsheet_id),
+                str(tab),
+                {k: v for k, v in status_by_key.items() if v is not None},
+            )
+        except Exception:
+            logger.warning("pm.save_selected.status_write_failed_mathmodels")
+
+        return {
+            "pm_job": "pm.save_selected",
+            "tab": tab,
+            "selected_count": len(keys),
+            "saved_count": saved,
+            "skipped_no_key": skipped_no_key,
+            "failed_count": max(0, len(keys) - saved),
+            "substeps": [
+                {"step": "save", "status": "ok", "count": saved},
+                {"step": "status_write", "status": "ok"},
+            ],
+        }
+
+    if cfg and tab == cfg.params_tab:
+        # ---------- Branch C: Params ----------
+        try:
+            svc = ParamsSyncService(ctx.sheets_client)
+            result = svc.sync_sheet_to_db(
+                db=db,
+                spreadsheet_id=str(spreadsheet_id),
+                tab_name=str(tab),
+                commit_every=commit_every,
+                initiative_keys=keys,
+            )
+            saved = int(result.get("upserts", 0))
+        except Exception as e:
+            logger.exception("pm.save_selected.params_sync_failed")
+            for k in keys:
+                status_by_key[k] = "FAILED: save failed"
+            try:
+                from app.sheets.productops_writer import write_status_to_productops_sheet as write_status_to_sheet
+                write_status_to_sheet(
+                    ctx.sheets_client,
+                    str(spreadsheet_id),
+                    str(tab),
+                    {k: v for k, v in status_by_key.items() if v is not None},
+                )
+            except Exception:
+                logger.warning("pm.save_selected.status_write_failed_on_params_error")
+            return {
+                "pm_job": "pm.save_selected",
+                "tab": tab,
+                "selected_count": len(keys),
+                "saved_count": 0,
+                "skipped_no_key": skipped_no_key,
+                "failed_count": len(keys),
+                "substeps": [
+                    {"step": "save", "status": "failed", "error": str(e)[:50]},
+                ],
+            }
+
+        for k in keys:
+            status_by_key[k] = "OK"
+        try:
+            from app.sheets.productops_writer import write_status_to_productops_sheet as write_status_to_sheet
+            write_status_to_sheet(
+                ctx.sheets_client,
+                str(spreadsheet_id),
+                str(tab),
+                {k: v for k, v in status_by_key.items() if v is not None},
+            )
+        except Exception:
+            logger.warning("pm.save_selected.status_write_failed_params")
+
+        return {
+            "pm_job": "pm.save_selected",
+            "tab": tab,
+            "selected_count": len(keys),
+            "saved_count": saved,
+            "skipped_no_key": skipped_no_key,
+            "failed_count": max(0, len(keys) - saved),
+            "substeps": [
+                {"step": "save", "status": "ok", "count": saved},
+                {"step": "status_write", "status": "ok"},
+            ],
+        }
+
+    if "backlog" in tab_lc:
+        # ---------- Branch D: Central Backlog ----------
+        try:
+            saved = run_backlog_update(
+                db,
+                spreadsheet_id=str(spreadsheet_id),
+                tab_name=str(tab),
+                product_org=options.get("product_org"),
+                commit_every=commit_every,
+                initiative_keys=keys,
+            )
+        except Exception as e:
+            logger.exception("pm.save_selected.backlog_update_failed")
+            for k in keys:
+                status_by_key[k] = "FAILED: save failed"
+            # Best-effort status write (only if Backlog has a Status column; skip if not present)
+            try:
+                from app.sheets.productops_writer import write_status_to_productops_sheet as write_status_to_sheet
+                write_status_to_sheet(
+                    ctx.sheets_client,
+                    str(spreadsheet_id),
+                    str(tab),
+                    {k: v for k, v in status_by_key.items() if v is not None},
+                )
+            except Exception:
+                logger.warning("pm.save_selected.status_write_failed_on_backlog_error")
+            return {
+                "pm_job": "pm.save_selected",
+                "tab": tab,
+                "selected_count": len(keys),
+                "saved_count": 0,
+                "skipped_no_key": skipped_no_key,
+                "failed_count": len(keys),
+                "substeps": [
+                    {"step": "save", "status": "failed", "error": str(e)[:50]},
+                ],
+            }
+
+        for k in keys:
+            status_by_key[k] = "OK"
+        try:
+            from app.sheets.productops_writer import write_status_to_productops_sheet as write_status_to_sheet
+            write_status_to_sheet(
+                ctx.sheets_client,
+                str(spreadsheet_id),
+                str(tab),
+                {k: v for k, v in status_by_key.items() if v is not None},
+            )
+        except Exception:
+            logger.warning("pm.save_selected.status_write_failed_backlog")
+
+        saved_i = int(saved)
+        return {
+            "pm_job": "pm.save_selected",
+            "tab": tab,
+            "selected_count": len(keys),
+            "saved_count": saved_i,
+            "skipped_no_key": skipped_no_key,
+            "failed_count": max(0, len(keys) - saved_i),
+            "substeps": [
+                {"step": "save", "status": "ok", "count": saved_i},
+                {"step": "status_write", "status": "ok"},
+            ],
+        }
+
+    # ---------- Branch A: Scoring_Inputs (default) ----------
+    try:
+        saved = run_flow3_sync_inputs_to_initiatives(
+            db=db,
+            commit_every=commit_every,
+            spreadsheet_id=str(spreadsheet_id),
+            tab_name=str(tab),
+            initiative_keys=keys,
+        )
+    except Exception as e:
+        logger.exception("pm.save_selected.inputs_sync_failed")
+        for k in keys:
+            status_by_key[k] = "FAILED: save failed"
+        try:
+            from app.sheets.productops_writer import write_status_to_productops_sheet as write_status_to_sheet
+            write_status_to_sheet(
+                ctx.sheets_client,
+                str(spreadsheet_id),
+                str(tab),
+                {k: v for k, v in status_by_key.items() if v is not None},
+            )
+        except Exception:
+            logger.warning("pm.save_selected.status_write_failed_on_inputs_error")
+        return {
+            "pm_job": "pm.save_selected",
+            "tab": tab,
+            "selected_count": len(keys),
+            "saved_count": 0,
+            "skipped_no_key": skipped_no_key,
+            "failed_count": len(keys),
+            "substeps": [
+                {"step": "save", "status": "failed", "error": str(e)[:50]},
+            ],
+        }
+
+    for k in keys:
+        status_by_key[k] = "OK"
+    try:
+        from app.sheets.productops_writer import write_status_to_productops_sheet as write_status_to_sheet
+        write_status_to_sheet(
+            ctx.sheets_client,
+            str(spreadsheet_id),
+            str(tab),
+            {k: v for k, v in status_by_key.items() if v is not None},
+        )
+    except Exception:
+        logger.warning("pm.save_selected.status_write_failed_inputs")
+
+    saved_i = int(saved)
+    return {
+        "pm_job": "pm.save_selected",
+        "tab": tab,
+        "selected_count": len(keys),
+        "saved_count": saved_i,
+        "skipped_no_key": skipped_no_key,
+        "failed_count": max(0, len(keys) - saved_i),
+        "substeps": [
+            {"step": "save", "status": "ok", "count": saved_i},
+            {"step": "status_write", "status": "ok"},
+        ],
+    }
+
+    # (No fallback needed; all branches return above)
+
+
+## ---------- Action Registry ----------
 
 _ACTION_REGISTRY: Dict[str, ActionFn] = {
     # Flow 3
@@ -1139,4 +1467,5 @@ _ACTION_REGISTRY: Dict[str, ActionFn] = {
     "pm.backlog_sync": _action_pm_backlog_sync,
     "pm.score_selected": _action_pm_score_selected,
     "pm.switch_framework": _action_pm_switch_framework,
+    "pm.save_selected": _action_pm_save_selected,
 }
