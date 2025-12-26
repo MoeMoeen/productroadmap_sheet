@@ -41,6 +41,7 @@ class ParamsSyncService:
         spreadsheet_id: str,
         tab_name: str,
         commit_every: int = 200,
+        initiative_keys: Optional[List[str]] = None,
     ) -> dict:
         """Upsert InitiativeParam per initiative_key + framework + param_name.
 
@@ -49,6 +50,10 @@ class ParamsSyncService:
         - unique per (initiative_key, framework, param_name)
         - fields: framework, param_name, param_display, description, unit, value,
               source, approved, is_auto_seeded, min, max, notes
+
+        Args:
+            initiative_keys: Optional list of initiative_keys to filter rows. If provided, only rows
+                            with matching initiative_keys are synced. If None, all rows are synced.
 
         Returns summary dict:
         {
@@ -60,6 +65,11 @@ class ParamsSyncService:
         }
         """
         rows = self.reader.get_rows_for_sheet(spreadsheet_id, tab_name)
+        
+        # Filter to selected initiative_keys if provided
+        if initiative_keys is not None:
+            allowed_keys = set(initiative_keys)
+            rows = [(row_num, pr) for row_num, pr in rows if pr.initiative_key in allowed_keys]
         upserts = 0
         created = 0
         skipped_no_initiative = 0

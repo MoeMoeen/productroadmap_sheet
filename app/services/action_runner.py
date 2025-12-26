@@ -222,6 +222,16 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         summary["success"] = 1 if synced else 0
         summary["failed"] = 0 if synced else 1
     
+    # PM jobs
+    elif action == "pm.backlog_sync":
+        # Reuses flow1.full_sync summary
+        substeps = result.get("substeps", [])
+        summary["total"] = 3  # Expected substeps
+        summary["success"] = len(substeps)
+        # Check for partial failure
+        if not result.get("backlog_update_completed", True):
+            summary["failed"] = 1
+    
     return summary
 
 
@@ -568,6 +578,23 @@ def _action_flow0_intake_sync(db: Session, ctx: ActionContext) -> Dict[str, Any]
     return {"synced": True}
 
 
+# ---------- PM Jobs ----------
+
+def _action_pm_backlog_sync(db: Session, ctx: ActionContext) -> Dict[str, Any]:
+    """PM Job #1: Sync intake to backlog.
+    
+    Thin wrapper around flow1.full_sync (which includes flow0.intake_sync + backlog update + backlog sync).
+    Reuses the Flow1 action implementation directly; returns structured result with pm_job metadata.
+    
+    Single ActionRun, server-side orchestration, no nested enqueues.
+    """
+    result = _action_flow1_full_sync(db, ctx)
+    
+    # Wrap with PM job metadata
+    result["pm_job"] = "pm.backlog_sync"
+    return result
+
+
 # ----------------------------
 # Action registry (module-level constant)
 # ----------------------------
@@ -593,4 +620,7 @@ _ACTION_REGISTRY: Dict[str, ActionFn] = {
 
     # Flow 0
     "flow0.intake_sync": _action_flow0_intake_sync,
+
+    # PM Jobs (V1)
+    "pm.backlog_sync": _action_pm_backlog_sync,
 }

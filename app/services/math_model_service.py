@@ -42,6 +42,7 @@ class MathModelSyncService:
         spreadsheet_id: str,
         tab_name: str,
         commit_every: int = 100,
+        initiative_keys: Optional[List[str]] = None,
     ) -> dict:
         """Upsert InitiativeMathModel from Sheet → DB.
 
@@ -51,8 +52,17 @@ class MathModelSyncService:
         - Map fields: formula_text (required to create), parameters_json, assumptions_text,
                       suggested_by_llm, approved_by_user
         - If row provides llm_notes, store on Initiative.llm_notes
+        
+        Args:
+            initiative_keys: Optional list of initiative_keys to filter rows. If provided, only rows
+                            with matching initiative_keys are synced. If None, all rows are synced.
         """
         rows = self.reader.get_rows_for_sheet(spreadsheet_id, tab_name)
+        
+        # Filter to selected initiative_keys if provided
+        if initiative_keys is not None:
+            allowed_keys = set(initiative_keys)
+            rows = [(row_num, mm) for row_num, mm in rows if mm.initiative_key in allowed_keys]
         updated = 0
         skipped_no_initiative = 0
         skipped_no_formula = 0
