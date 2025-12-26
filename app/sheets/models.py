@@ -65,6 +65,9 @@ PRODUCTOPS_SCORE_OUTPUT_COLUMNS: List[str] = [
     "math_effort_score",
     "math_overall_score",
     "math_warnings",
+    "active_value_score",
+    "active_effort_score",
+    "active_overall_score",
 ]
 
 SCORE_FIELD_TO_HEADERS: Dict[str, List[str]] = {
@@ -78,6 +81,9 @@ SCORE_FIELD_TO_HEADERS: Dict[str, List[str]] = {
     "math_effort_score": ["math_effort_score", "math: effort score", "math_model: effort score"],
     "math_overall_score": ["math_overall_score", "math: overall score", "math_model: overall score"],
     "math_warnings": ["math_warnings", "math: warnings", "math_model: warnings", "math_error", "math_errors"],
+    "active_value_score": ["active_value_score", "active: value score"],
+    "active_effort_score": ["active_effort_score", "active: effort score"],
+    "active_overall_score": ["active_overall_score", "active: overall score"],
 }
 
 # Central Backlog headers and field mapping used by backlog writer

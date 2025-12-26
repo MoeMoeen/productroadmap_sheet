@@ -441,6 +441,69 @@ class ScoringService:
 
         return processed
 
+    def compute_for_initiatives(
+        self,
+        initiative_keys: list[str],
+        commit_every: Optional[int] = None,
+    ) -> int:
+        """Compute scores for all frameworks for selected initiatives only.
+
+        Mirrors compute_all_frameworks but filters the DB query to the provided keys.
+        Does not change active fields; only per-framework scores are updated.
+        """
+        if not initiative_keys:
+            return 0
+        batch_size = commit_every or settings.SCORING_BATCH_COMMIT_EVERY
+
+        stmt = select(Initiative).where(Initiative.initiative_key.in_(initiative_keys)).order_by(Initiative.id)
+        initiatives = self.db.execute(stmt).scalars().all()
+        total = len(initiatives)
+        logger.info(
+            "flow3.compute_selected_start",
+            extra={"total": total},
+        )
+
+        processed = 0
+        for idx, initiative in enumerate(initiatives, start=1):
+            try:
+                self.score_initiative_all_frameworks(
+                    initiative,
+                    enable_history=settings.SCORING_ENABLE_HISTORY,
+                )
+                processed += 1
+            except Exception:
+                logger.exception(
+                    "scoring.selected_all_frameworks_error",
+                    extra={
+                        "initiative_key": getattr(initiative, "initiative_key", None),
+                    },
+                )
+                # Continue processing
+
+            if batch_size and (idx % batch_size == 0):
+                try:
+                    self.db.commit()
+                    logger.info(
+                        "flow3.compute_selected_commit",
+                        extra={"count": idx},
+                    )
+                except Exception:
+                    self.db.rollback()
+                    logger.exception("flow3.compute_selected_commit_failed")
+
+        # Final commit
+        try:
+            self.db.commit()
+            logger.info(
+                "flow3.compute_selected_done",
+                extra={"processed": processed},
+            )
+        except Exception:
+            self.db.rollback()
+            logger.exception("flow3.compute_selected_final_commit_failed")
+
+        return processed
+
     def activate_initiative_framework(
         self,
         initiative: Initiative,

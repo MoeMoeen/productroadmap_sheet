@@ -20,11 +20,12 @@ from app.sheets.client import SheetsClient
 from app.utils.header_utils import normalize_header as _normalize_header
 from app.utils.provenance import Provenance, token
 
-logger = logging.getLogger(__name__)
 from app.sheets.models import (
     PRODUCTOPS_SCORE_OUTPUT_COLUMNS,
     SCORE_FIELD_TO_HEADERS,
 )
+
+logger = logging.getLogger(__name__)
 
 # Note: PRODUCTOPS_SCORE_OUTPUT_COLUMNS and SCORE_FIELD_TO_HEADERS are imported
 # from app.sheets.models (centralized). Do not redefine locally.
@@ -35,6 +36,8 @@ def write_scores_to_productops_sheet(
     client: SheetsClient,
     spreadsheet_id: str,
     tab_name: str = "Scoring_Inputs",
+    *,
+    initiative_keys: List[str] | None = None,
 ) -> int:
     """Write per-framework scores from DB to Product Ops sheet using targeted cell updates.
 
@@ -109,6 +112,10 @@ def write_scores_to_productops_sheet(
     batch_updates: List[Dict[str, Any]] = []
     updated_initiatives: set = set()
 
+    allowed: set[str] | None = None
+    if initiative_keys is not None:
+        allowed = set(k for k in initiative_keys if k)
+
     for row_idx, row_data in enumerate(values[1:], start=2):  # Start at row 2 (row 1 = headers)
         # Extract initiative key from this row
         key = (
@@ -117,6 +124,8 @@ def write_scores_to_productops_sheet(
             else ""
         )
         if not key:
+            continue
+        if allowed is not None and key not in allowed:
             continue
 
         ini = initiatives.get(key)
@@ -186,6 +195,72 @@ def write_scores_to_productops_sheet(
     return len(updated_initiatives)
 
 
+def write_status_to_productops_sheet(
+    client: SheetsClient,
+    spreadsheet_id: str,
+    tab_name: str,
+    status_by_key: Dict[str, str],
+) -> int:
+    """Write per-row Status messages for selected initiatives.
+
+    Finds the initiative_key and Status columns, and writes short messages for keys present
+    in status_by_key. If Status column is missing, logs a warning and returns 0.
+    """
+    values = client.get_values(spreadsheet_id, f"{tab_name}!A1:ZZ")
+    if not values or len(values) < 2:
+        logger.warning("productops_writer.status.empty_sheet", extra={"tab": tab_name})
+        return 0
+
+    headers = values[0]
+    norm_headers = [_normalize_header(h) for h in headers]
+
+    # Locate initiative_key and Status columns
+    key_col = None
+    status_col = None
+    for i, nh in enumerate(norm_headers):
+        if nh == "initiative_key":
+            key_col = i
+        elif nh in {"status", "last_run_status"}:
+            status_col = i
+
+    if key_col is None:
+        logger.warning("productops_writer.status.no_key_column", extra={"tab": tab_name})
+        return 0
+    if status_col is None:
+        logger.warning("productops_writer.status.no_status_column", extra={"tab": tab_name})
+        return 0
+
+    # Build batch updates only for keys we have messages for
+    batch_updates: List[Dict[str, Any]] = []
+    written = 0
+    for row_idx, row_data in enumerate(values[1:], start=2):
+        key = (
+            (row_data[key_col] if key_col < len(row_data) else "").strip()
+            if key_col < len(row_data)
+            else ""
+        )
+        if not key:
+            continue
+        msg = status_by_key.get(key)
+        if msg is None:
+            continue
+        cell_range = _cell_range_for_update(tab_name, status_col, row_idx)
+        batch_updates.append({
+            "range": cell_range,
+            "values": [[msg]],
+        })
+        written += 1
+
+    if batch_updates:
+        try:
+            client.batch_update_values(spreadsheet_id, batch_updates)
+        except Exception:
+            logger.exception("productops_writer.status.batch_update_failed", extra={"num_updates": len(batch_updates)})
+            return 0
+
+    return written
+
+
 # Use shared header normalization from app.utils.header_utils
 
 
@@ -224,6 +299,7 @@ def _col_index_to_a1(idx: int) -> str:
 
 __all__ = [
     "write_scores_to_productops_sheet",
+    "write_status_to_productops_sheet",
     "PRODUCTOPS_SCORE_OUTPUT_COLUMNS",
     "SCORE_FIELD_TO_HEADERS",
 ]

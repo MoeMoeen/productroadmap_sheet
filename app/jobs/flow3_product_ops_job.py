@@ -92,6 +92,7 @@ def run_flow3_sync_inputs_to_initiatives(
     commit_every: Optional[int] = None,
     spreadsheet_id: Optional[str] = None,
     tab_name: Optional[str] = None,
+    initiative_keys: Optional[List[str]] = None,
 ) -> int:
     """Strong sync: write Scoring_Inputs values into Initiative fields.
 
@@ -126,6 +127,10 @@ def run_flow3_sync_inputs_to_initiatives(
     batch_size = commit_every or settings.SCORING_BATCH_COMMIT_EVERY
 
     rows = run_flow3_preview_inputs(spreadsheet_id=spreadsheet_id, tab_name=tab_name)
+    # Filter to selected initiatives if provided
+    if initiative_keys is not None:
+        allowed = set(k for k in initiative_keys if k)
+        rows = [r for r in rows if r.initiative_key in allowed]
     total = len(rows)
     updated = 0
     logger.info("flow3.sync.start", extra={"rows": total})
@@ -211,6 +216,7 @@ def run_flow3_write_scores_to_sheet(
     *,
     spreadsheet_id: Optional[str] = None,
     tab_name: Optional[str] = None,
+    initiative_keys: Optional[List[str]] = None,
 ) -> int:
     """Flow 3.C Phase 2: Write per-framework scores from DB back to Product Ops sheet.
 
@@ -246,7 +252,7 @@ def run_flow3_write_scores_to_sheet(
     client = SheetsClient(service)
 
     try:
-        count = write_scores_to_productops_sheet(db, client, sheet_id, tab)
+        count = write_scores_to_productops_sheet(db, client, sheet_id, tab, initiative_keys=initiative_keys)
         logger.info("flow3.write_scores.done", extra={"updated": count})
         return count
     except Exception:
