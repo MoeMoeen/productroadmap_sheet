@@ -600,25 +600,37 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
 - **Phase 3.D (Config Tab)** ⏳ **Deferred**
   * Config-driven system behaviors planned for future
 
+### **✅ COMPLETED:**
+
+**Phase 4.5 – Sheet-Native Execution & Control Plane (Backend)** *(PRE-OPTIMIZATION PREREQUISITE)*
+   * **Action API** – Single entry point (`POST /actions/enqueue`, `GET /actions/status/{run_id}`)
+   * **ActionRun Ledger** – DB-backed execution tracking with job state, payloads, results
+   * **PM Jobs Implemented**:
+     - `pm.backlog_sync` – See latest intake initiatives in Central Backlog
+     - `pm.score_selected` – Deep-dive and score selected initiatives
+     - `pm.switch_framework` – Change active scoring framework (local only)
+     - `pm.save_selected` – Save changes from tab (selection-based, tab-aware)
+   * **Consistent Patterns**:
+     - Server-side orchestration with single ActionRun per job
+     - Selection-scoped operations via initiative_keys
+     - Per-row Status column writes (separate from Updated Source provenance)
+     - Accurate summary fields: selected_count, saved_count, failed_count, skipped_no_key
+   * **Status Writer Abstraction** – Generic `write_status_to_sheet` alias for cross-tab compatibility
+   * **Tab Detection** – Exact config matches with substring fallback for robustness
+   * **Action Registry** – 15 total actions (Flow 0-4 + 4 PM Jobs)
+
 ### **📋 PLANNED (Future):**
 
-**Phase 4.5 – Sheet-Native Execution & Control Plane** *(PRE-OPTIMIZATION PREREQUISITE)*
-   * **Action API** – Single entry point (`POST /actions/run`, `GET /actions/run/{run_id}`)
-   * **Async Job Runner** – Enqueue & execute long-running operations without Apps Script timeout
-   * **ActionRun DB Ledger** – Tracks every action execution with run_id, status, results, errors
-   * **Control/RunLog Tab** – Live dashboard in ProductOps sheet showing execution history
-   * **Apps Script Custom Menu** – "Roadmap AI" menu in Sheets with 7 minimum actions:
-     - `flow3.compute_all_frameworks` – Compute RICE + WSJF + Math Model scores
-     - `flow3.write_scores` – Write per-framework scores to ProductOps sheet
-     - `flow2.activate` – Activate chosen framework scores to active fields
-     - `flow1.backlog_sync` – Sync Central Backlog (DB → Sheet)
-     - `flow4.suggest_mathmodels` – LLM suggests formulas for selected rows
-     - `flow4.seed_params` – Auto-create Params rows from framework/formula
-     - `flow0.intake_sync` – Sync all department intake sheets to DB
-   * **Shared Secret Security** – v1 security model with X-ROADMAP-AI-SECRET header
-   * **Scope Selection** – Selected rows / All rows / Filtered scope patterns
-   * **Provenance Integration** – ActionRun table + Control tab + DB tokens + logs
+**Phase 4.5.B – Apps Script UI Layer**
+   * **Custom Menu** – "Roadmap AI" menu in ProductOps and Intake sheets
+   * **Control Tab** – Live status surface showing run history, results, errors
+   * **Polling Logic** – Apps Script polls backend for job completion
    * **PM-Driven Workflows** – Zero terminal access required for all flows
+   * **Flow Actions** – Implement remaining flow actions:
+     - `flow3.compute_all_frameworks`, `flow3.write_scores`
+     - `flow2.activate`, `flow1.backlog_sync`
+     - `flow4.suggest_mathmodels`, `flow4.seed_params`
+     - `flow0.intake_sync`
 
 **Phase 4 – MathModel Framework & LLM-Assisted Scoring** *(Post-4.5)*
    * **MathModels Sheet** – Dedicated sheet for custom quantitative formulas per initiative

@@ -342,19 +342,42 @@ This becomes your **execution audit log**.
 
 ---
 
-## 8) Minimum Lovable Action Set (v1)
+## 8) Implementation Status
 
-Implement these first:
+### ✅ Completed (Backend PM Jobs)
 
-1. `flow3.compute_all_frameworks`
-2. `flow3.write_scores`
-3. `flow2.activate`
-4. `flow1.backlog_sync`
-5. `flow4.suggest_mathmodels`
-6. `flow4.seed_params`
-7. `flow0.intake_sync`
+**4 PM Jobs fully implemented:**
 
-Everything else is optional later.
+1. ✅ `pm.backlog_sync` – See latest intake initiatives in Central Backlog
+2. ✅ `pm.score_selected` – Deep-dive and score selected initiatives
+3. ✅ `pm.switch_framework` – Change active scoring framework (local only)
+4. ✅ `pm.save_selected` – Save changes from tab (tab-aware, selection-based)
+
+**Technical implementation complete:**
+- Action registry with 15 actions (Flow 0-4 + 4 PM Jobs)
+- ActionRun ledger for execution tracking
+- Consistent summary semantics across all PM jobs
+- Generic status writer abstraction (`write_status_to_sheet`)
+- Tab-aware branching in `pm.save_selected`
+- Selection-scoped operations with blank-key handling
+
+### 📋 Remaining (Apps Script UI Layer)
+
+**To complete Phase 4.5:**
+
+1. ⏳ Custom menu in ProductOps/Intake sheets
+2. ⏳ Control tab rendering with live updates
+3. ⏳ Apps Script → backend HTTP calls
+4. ⏳ Polling logic for job completion
+5. ⏳ End-to-end testing from Sheets UI
+
+**Flow actions for future implementation:**
+- `flow3.compute_all_frameworks`
+- `flow3.write_scores`
+- `flow2.activate`
+- `flow4.suggest_mathmodels`
+- `flow4.seed_params`
+- `flow0.intake_sync`
 
 ---
 
@@ -372,13 +395,19 @@ This makes the **optimization engine viable**.
 
 ## Next Execution Step
 
-We proceed in this order:
+**Current Status: Backend PM Jobs Complete ✅**
 
-**→ Implement Option 3: Job table + async runner first**
+**→ Next: Apps Script UI Layer**
 
-Then:
+1. Create custom menu in ProductOps sheet ("Roadmap AI")
+2. Implement menu items for 4 PM jobs:
+   - "See Latest Intake" → `pm.backlog_sync`
+   - "Score Selected Initiatives" → `pm.score_selected`
+   - "Switch Framework" → `pm.switch_framework`
+   - "Save Selected Changes" → `pm.save_selected`
+3. Add Control tab with status columns
+4. Implement polling logic (`GET /actions/status/{run_id}`)
+5. Live-update Control tab with results
+6. End-to-end testing from Sheets
 
-1. Backend Action API
-2. Apps Script UI
-3. Control tab rendering
 

@@ -126,6 +126,16 @@ Each job is described in:
 * No destructive updates
 * No scoring, activation, or prioritization implied
 
+### Implementation Status (V1) ✅
+
+- **Action**: `pm.backlog_sync`
+- **Orchestration**: Single ActionRun enqueued via worker
+- **Backend flow**: Executes `run_all_backlog_sync()` (Flow 1)
+- **Scope**: Always operates on all initiatives (no selection)
+- **Status writes**: Per-row Status column updates in Central Backlog
+- **Summary fields**: `updated_count`, `cells_updated` returned in ActionRun result
+- **Provenance**: ActionRun uses `pm.backlog_sync` token; sheet Updated Source reflects flow token
+
 ---
 
 ## PM Job #2 — Deep-dive and score selected initiatives (Product Ops)
@@ -184,13 +194,17 @@ Each job is described in:
 * All operations are **selection-based**
 * This job is exploratory, not publishing
 
-### Implementation Conclusions (V1)
+### Implementation Status (V1) ✅
 
-- **Server-side orchestration:** A single PM job action `pm.score_selected` runs sync → compute → write on the backend (no Apps Script client-side chaining).
-- **Selection scope:** Operates only on selected `initiative_keys`. Blank keys are skipped and counted as `skipped_no_key` in ActionRun summary.
-- **Auto-sync before compute:** Latest sheet inputs are synced to DB first, then `flow3.compute_all_frameworks` runs, followed by `flow3.write_scores` to Scoring Inputs.
-- **Per-row status:** Write short, row-scoped messages to a dedicated `Status` column (e.g., `OK`, `FAILED: <reason>`, `SKIPPED: missing key`). Do not use `Updated Source` for status.
-- **Sheet context defaults:** If Apps Script omits `sheet_context`, backend uses settings-based defaults (preferred that Apps Script still sends it in production).
+- **Action**: `pm.score_selected`
+- **Orchestration**: Single ActionRun with server-side flow coordination
+- **Backend flows**: Executes sync → `flow3.compute_all_frameworks` → `flow3.write_scores`
+- **Selection scope**: Operates only on selected `initiative_keys`; blank keys skipped and counted as `skipped_no_key`
+- **Tab-aware**: Defaults to Scoring_Inputs; can target other Product Ops tabs
+- **Per-row status**: Uses `write_status_to_sheet` for Status column writes (sync errors, compute errors, write errors, success)
+- **Summary fields**: Returns `selected_count: 0`, `failed_count: 0` on early bail; accurate counts on success
+- **Error handling**: Best-effort status writes; captures errors in ActionRun result
+- **Sheet context**: Backend uses settings-based defaults if omitted
 
 ---
 
@@ -236,12 +250,17 @@ Examples:
 
 Publishing to Central Backlog is a **separate explicit job**.
 
-### Implementation Conclusions (V1)
+### Implementation Status (V1) ✅
 
-- **Local-only switch:** Changing the Active Scoring Framework updates only the current sheet (Scoring Inputs or Central Backlog). No cross-sheet propagation.
-- **Activated scores in Backlog:** Central Backlog shows only the activated framework’s scores as native columns. Other framework scores appear via formulas referencing Scoring Inputs.
-- **No recompute:** Switching framework fetches already-computed and approved scores; it does not trigger recomputation.
-- **ActionRun orchestration:** Even though lightweight, this PM job enqueues an ActionRun for consistency and audit. Per-row `Status` may be written on failures only.
+- **Action**: `pm.switch_framework`
+- **Orchestration**: Single ActionRun enqueued via worker
+- **Backend flows**: Executes Flow3 sync → `activate_scoring_frameworks` → write scores
+- **Selection scope**: Operates on selected `initiative_keys`; skips blank keys
+- **Local-only behavior**: Updates only the current sheet (no cross-sheet propagation)
+- **Per-row status**: Uses `write_status_to_sheet` for Status column writes (sync errors, activate errors, write errors, success)
+- **Summary fields**: Returns `selected_count: 0` on early bail; accurate `selected_count`, `saved_count`, `failed_count` on success
+- **No recompute**: Fetches already-computed scores; does not trigger new scoring computation
+- **Tab-aware**: Works with both Scoring_Inputs and Central Backlog
 
 ---
 
@@ -295,22 +314,43 @@ The same Save button exists everywhere, but meaning differs:
   * Last save wins for that row
 * Patch-based (cell-level) saving deferred to later versions
 
-### Implementation Conclusions (V1)
+### Implementation Status (V1) ✅
 
-- **Direct DB writes:** Saves from Central Backlog write directly to the Initiative table.
-- **Audit:** Use `ActionRun.requested_by` (best-effort `reported_by_email` via Apps Script in V1). Later versions can adopt OAuth for stronger identity.
-- **Per-row status:** Write short results to the tab’s `Status` column; keep `Updated Source` strictly for provenance.
-- **Provenance model:** ActionRun uses PM job tokens (e.g., `pm.save_selected`). DB row-level provenance remains flow-based (e.g., `flow3.compute_all_frameworks`). Sheet `Updated Source` may include PM job tokens when the PM job writes rows.
+- **Action**: `pm.save_selected`
+- **Orchestration**: Single ActionRun with tab-aware branching logic
+- **Tab detection**: Exact config matches (`settings.PRODUCT_OPS.mathmodels_tab`, `params_tab`, `scoring_inputs_tab`) with substring fallback for backlog
+- **Branch logic**:
+  - **MathModels tab**: Syncs via `MathModelSyncService.sync_sheet_to_db()`
+  - **Params tab**: Syncs via `ParamsSyncService.sync_sheet_to_db()`
+  - **Central Backlog**: Updates via `backlog_update_with_keys()` (Flow 1)
+  - **Scoring_Inputs**: Syncs via `run_flow3_sync_productops_to_db()`
+- **Selection scope**: Operates only on selected `initiative_keys`; skips blank keys (counted as `skipped_no_key`)
+- **Per-row status**: Uses `write_status_to_sheet` for Status column writes across all branches
+- **Summary fields**: Returns `selected_count`, `saved_count`, `failed_count: max(0, selected - saved)`, `skipped_no_key`
+- **Early bail**: Includes `selected_count: 0`, `failed_count: 0` when no valid keys selected
+- **Direct DB writes**: Central Backlog saves write directly to Initiative table
+- **Audit**: Uses `ActionRun.requested_by` for execution tracking
 
 ---
 
-## 5.1 Global Implementation Conclusions (V1)
+## 5.1 Global Implementation Status (V1) ✅
 
-- **ActionRun/Worker for all PM jobs:** Every PM job enqueues an ActionRun and executes via the worker for consistent UX, audit, and to avoid Apps Script timeouts.
-- **Selection payload:** Apps Script passes `initiative_keys` from sheet selection. Backend skips blanks, annotates per-row `Status`, and records `skipped_no_key` in summary.
-- **Status column:** Use a dedicated `Status` (or `Last Run Status`) column per tab for outcome messages. Do not overload `Updated Source`.
-- **Sheet context defaults:** Backend provides sensible defaults when `sheet_context` is missing; Apps Script should still send it in production.
-- **Provenance tokens:** Add PM job tokens (`pm.backlog_sync`, `pm.score_selected`, `pm.switch_framework`, `pm.save_selected`) for ActionRun and (optionally) sheet-level `Updated Source`. Keep DB row provenance tied to underlying flow tokens.
+**All 4 PM jobs fully implemented in `app/services/action_runner.py`:**
+
+- **Consistent architecture**: All PM jobs use ActionRun/Worker pattern for execution, audit, and async handling
+- **Selection-based operations**: Apps Script passes `initiative_keys`; backend skips blanks and tracks `skipped_no_key`
+- **Status abstraction**: All jobs use generic `write_status_to_sheet` alias (delegates to `write_status_to_productops_sheet`)
+- **Tab-aware branching**: `pm.save_selected` detects tab via exact config matches with substring fallback
+- **Summary semantics**: All jobs return consistent fields:
+  - Early bail: `selected_count: 0`, `failed_count: 0`, `skipped_no_key: 0`
+  - Success: accurate `selected_count`, `saved_count`, `failed_count: max(0, selected - saved)`, `skipped_no_key`
+- **Error handling**: Best-effort per-row Status writes; errors captured in ActionRun result
+- **Provenance model**:
+  - ActionRun: PM job tokens (`pm.*`)
+  - DB rows: Flow tokens (`flow1.*`, `flow3.*`, etc.)
+  - Sheet Updated Source: May use PM job tokens when PM job writes sheet
+- **Action registry**: 15 total actions (Flow 0-4 + 4 PM Jobs)
+- **Validation**: Static checks pass; imports verified; no Pylance errors
 
 ---
 
