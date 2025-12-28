@@ -344,32 +344,47 @@ This becomes your **execution audit log**.
 
 ## 8) Implementation Status
 
-### ✅ Completed (Backend PM Jobs)
+### ✅ COMPLETE (Backend + Apps Script UI)
 
-**4 PM Jobs fully implemented:**
+**Phase 4.5 is feature-complete.**
+
+**4 PM Jobs fully implemented (end-to-end):**
 
 1. ✅ `pm.backlog_sync` – See latest intake initiatives in Central Backlog
+   - Backend: Orchestrates Flow1 full sync
+   - UI: Central Backlog sheet menu item
+
 2. ✅ `pm.score_selected` – Deep-dive and score selected initiatives
+   - Backend: Selection-scoped sync → compute → write
+   - UI: ProductOps Scoring_Inputs menu item
+
 3. ✅ `pm.switch_framework` – Change active scoring framework (local only)
+   - Backend: Tab-aware activation (Scoring_Inputs + Backlog branches)
+   - UI: ProductOps Scoring_Inputs menu item
+
 4. ✅ `pm.save_selected` – Save changes from tab (tab-aware, selection-based)
+   - Backend: Tab detection + branch routing (all 4 tabs supported)
+   - UI: ProductOps menus (handles all tabs dynamically)
 
 **Technical implementation complete:**
-- Action registry with 15 actions (Flow 0-4 + 4 PM Jobs)
-- ActionRun ledger for execution tracking
+- Action registry: 15 actions (Flow 0-4 + 4 PM Jobs)
+- ActionRun ledger with full audit trail
 - Consistent summary semantics across all PM jobs
 - Generic status writer abstraction (`write_status_to_sheet`)
 - Tab-aware branching in `pm.save_selected`
 - Selection-scoped operations with blank-key handling
+- Apps Script menus with shared-secret authentication
+- Error handling + optional polling
 
-### 📋 Remaining (Apps Script UI Layer)
+**Checkpoint document:** See [PHASE_4.5_CHECKPOINT.md](PHASE_4.5_CHECKPOINT.md) for full details.
 
-**To complete Phase 4.5:**
+### 📋 Optional V1 Polish (backlog)
 
-1. ⏳ Custom menu in ProductOps/Intake sheets
-2. ⏳ Control tab rendering with live updates
-3. ⏳ Apps Script → backend HTTP calls
-4. ⏳ Polling logic for job completion
-5. ⏳ End-to-end testing from Sheets UI
+**Nice-to-have improvements (not blocking):**
+1. Control/RunLog tab in ProductOps sheet (ops visibility)
+2. Multi-range selection support in Apps Script
+3. Cell-level diff tracking (for smarter saves)
+4. OAuth-based user identity (stronger than current email)
 
 **Flow actions for future implementation:**
 - `flow3.compute_all_frameworks`
@@ -395,19 +410,20 @@ This makes the **optimization engine viable**.
 
 ## Next Execution Step
 
-**Current Status: Backend PM Jobs Complete ✅**
+**Status: Phase 4.5 COMPLETE ✅**
 
-**→ Next: Apps Script UI Layer**
+**→ Phase 5: Portfolio Optimization Engine**
 
-1. Create custom menu in ProductOps sheet ("Roadmap AI")
-2. Implement menu items for 4 PM jobs:
-   - "See Latest Intake" → `pm.backlog_sync`
-   - "Score Selected Initiatives" → `pm.score_selected`
-   - "Switch Framework" → `pm.switch_framework`
-   - "Save Selected Changes" → `pm.save_selected`
-3. Add Control tab with status columns
-4. Implement polling logic (`GET /actions/status/{run_id}`)
-5. Live-update Control tab with results
-6. End-to-end testing from Sheets
+Phase 4.5 is the hard prerequisite and is now complete. The foundation is solid:
+
+- ✅ Sheet-native execution layer (Apps Script menus → FastAPI backend)
+- ✅ PM jobs orchestrate backend flows reliably
+- ✅ Audit trail via ActionRun ledger
+- ✅ Provenance model in place (flow + PM job tokens)
+- ✅ Selection-scoped operations working end-to-end
+
+**Ready to proceed with Phase 5.**
+
+See [PHASE_4.5_CHECKPOINT.md](PHASE_4.5_CHECKPOINT.md) for complete implementation details.
 
 

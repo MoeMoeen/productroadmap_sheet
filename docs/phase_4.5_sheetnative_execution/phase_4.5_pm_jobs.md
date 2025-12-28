@@ -333,10 +333,11 @@ The same Save button exists everywhere, but meaning differs:
 
 ---
 
-## 5.1 Global Implementation Status (V1) ✅
+## 5.1 Global Implementation Status (V1) ✅ COMPLETE
 
-**All 4 PM jobs fully implemented in `app/services/action_runner.py`:**
+**All 4 PM jobs fully implemented end-to-end (backend + UI):**
 
+### Backend (action_runner.py)
 - **Consistent architecture**: All PM jobs use ActionRun/Worker pattern for execution, audit, and async handling
 - **Selection-based operations**: Apps Script passes `initiative_keys`; backend skips blanks and tracks `skipped_no_key`
 - **Status abstraction**: All jobs use generic `write_status_to_sheet` alias (delegates to `write_status_to_productops_sheet`)
@@ -351,6 +352,22 @@ The same Save button exists everywhere, but meaning differs:
   - Sheet Updated Source: May use PM job tokens when PM job writes sheet
 - **Action registry**: 15 total actions (Flow 0-4 + 4 PM Jobs)
 - **Validation**: Static checks pass; imports verified; no Pylance errors
+
+### Frontend (Apps Script)
+- **Bound menus**: ProductOps + Central Backlog sheets with "Roadmap AI" menus
+- **Selection handling**: Extracts initiative_keys from active range with header detection
+- **API calls**: Shared-secret authentication via X-ROADMAP-AI-SECRET header
+- **Error handling**: Try/catch blocks surface API errors in-sheet via toast
+- **Optional polling**: Apps Script can poll until completion for UX feedback
+- **Tab-aware**: pm.save_selected menu detects current tab and routes correctly
+
+**End-to-end validation:**
+- ✅ Swagger API testing (all 4 PM jobs)
+- ✅ Apps Script menu testing (selection + execution)
+- ✅ Sheet UI feedback (Status column updates, results visible)
+- ✅ Error paths (validation + error messages)
+
+**Checkpoint document:** See [PHASE_4.5_CHECKPOINT.md](PHASE_4.5_CHECKPOINT.md) for complete details.
 
 ---
 

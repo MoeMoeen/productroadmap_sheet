@@ -602,31 +602,35 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
 
 ### **✅ COMPLETED:**
 
-**Phase 4.5 – Sheet-Native Execution & Control Plane (Backend)** *(PRE-OPTIMIZATION PREREQUISITE)*
-   * **Action API** – Single entry point (`POST /actions/enqueue`, `GET /actions/status/{run_id}`)
-   * **ActionRun Ledger** – DB-backed execution tracking with job state, payloads, results
-   * **PM Jobs Implemented**:
-     - `pm.backlog_sync` – See latest intake initiatives in Central Backlog
-     - `pm.score_selected` – Deep-dive and score selected initiatives
-     - `pm.switch_framework` – Change active scoring framework (local only)
-     - `pm.save_selected` – Save changes from tab (selection-based, tab-aware)
-   * **Consistent Patterns**:
+**Phase 4.5 – Sheet-Native Execution & Control Plane** *(PRE-OPTIMIZATION PREREQUISITE)*
+   * **Backend Execution & Control Plane**
+     - Action API: `POST /actions/run`, `GET /actions/run/{run_id}`
+     - ActionRun Ledger: DB-backed execution tracking with full audit trail
+     - Worker Process: Async job executor with atomic result capture
+     - Action Registry: 15 total actions (Flow 0-4 + 4 PM Jobs)
+   * **PM Jobs (Backend + UI)** – All 4 implemented end-to-end:
+     - `pm.backlog_sync` – Sync intake to Central Backlog (UI: Backlog sheet menu)
+     - `pm.score_selected` – Score selected initiatives (UI: ProductOps Scoring_Inputs menu)
+     - `pm.switch_framework` – Switch active framework locally (UI: ProductOps Scoring_Inputs menu)
+     - `pm.save_selected` – Save tab-aware edits (UI: ProductOps menus for all tabs)
+   * **Apps Script UI Layer**
+     - Bound menus in ProductOps and Central Backlog sheets
+     - Selection extraction from active range
+     - Shared-secret authentication via X-ROADMAP-AI-SECRET header
+     - Error handling with in-sheet toast alerts
+     - Optional polling for completion feedback
+   * **Consistent Architecture**:
      - Server-side orchestration with single ActionRun per job
      - Selection-scoped operations via initiative_keys
      - Per-row Status column writes (separate from Updated Source provenance)
      - Accurate summary fields: selected_count, saved_count, failed_count, skipped_no_key
-   * **Status Writer Abstraction** – Generic `write_status_to_sheet` alias for cross-tab compatibility
-   * **Tab Detection** – Exact config matches with substring fallback for robustness
-   * **Action Registry** – 15 total actions (Flow 0-4 + 4 PM Jobs)
+   * **Checkpoint Document**: [PHASE_4.5_CHECKPOINT.md](docs/phase_4.5_sheetnative_execution/PHASE_4.5_CHECKPOINT.md)
 
 ### **📋 PLANNED (Future):**
 
-**Phase 4.5.B – Apps Script UI Layer**
-   * **Custom Menu** – "Roadmap AI" menu in ProductOps and Intake sheets
-   * **Control Tab** – Live status surface showing run history, results, errors
-   * **Polling Logic** – Apps Script polls backend for job completion
-   * **PM-Driven Workflows** – Zero terminal access required for all flows
-   * **Flow Actions** – Implement remaining flow actions:
+**Phase 4.5.1 – Optional V1 Polish** (backlog)
+   * **Control/RunLog Tab** – Live dashboard of execution history in ProductOps sheet
+   * **Flow Actions** – Implement flow-level actions when needed:
      - `flow3.compute_all_frameworks`, `flow3.write_scores`
      - `flow2.activate`, `flow1.backlog_sync`
      - `flow4.suggest_mathmodels`, `flow4.seed_params`
