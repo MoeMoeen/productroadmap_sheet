@@ -348,33 +348,21 @@ This becomes your **execution audit log**.
 
 **Phase 4.5 is feature-complete.**
 
-**4 PM Jobs fully implemented (end-to-end):**
+**PM Jobs coverage (updated):**
 
-1. ✅ `pm.backlog_sync` – See latest intake initiatives in Central Backlog
-   - Backend: Orchestrates Flow1 full sync
-   - UI: Central Backlog sheet menu item
+- ✅ `pm.backlog_sync` – See latest intake initiatives in Central Backlog (all rows)
+- ✅ `pm.score_selected` – Deep-dive and score selected initiatives (RICE/WSJF/Math Model)
+- ✅ `pm.switch_framework` – Change active scoring framework (local only)
+- ✅ `pm.save_selected` – Save changes from tab (tab-aware, selection-based)
+- ✅ `pm.seed_math_params` – Seed param rows from approved formulas (renamed from pm.build_math_model)
+- 🟡 `pm.suggest_math_model_llm` – LLM-suggested formulas/assumptions for MathModels (backend scaffolded; hook Apps Script + sheet writer)
 
-2. ✅ `pm.score_selected` – Deep-dive and score selected initiatives
-   - Backend: Selection-scoped sync → compute → write
-   - UI: ProductOps Scoring_Inputs menu item
-
-3. ✅ `pm.switch_framework` – Change active scoring framework (local only)
-   - Backend: Tab-aware activation (Scoring_Inputs + Backlog branches)
-   - UI: ProductOps Scoring_Inputs menu item
-
-4. ✅ `pm.save_selected` – Save changes from tab (tab-aware, selection-based)
-   - Backend: Tab detection + branch routing (all 4 tabs supported)
-   - UI: ProductOps menus (handles all tabs dynamically)
-
-**Technical implementation complete:**
-- Action registry: 15 actions (Flow 0-4 + 4 PM Jobs)
-- ActionRun ledger with full audit trail
-- Consistent summary semantics across all PM jobs
-- Generic status writer abstraction (`write_status_to_sheet`)
-- Tab-aware branching in `pm.save_selected`
-- Selection-scoped operations with blank-key handling
-- Apps Script menus with shared-secret authentication
-- Error handling + optional polling
+**Technical implementation (current):**
+- Action registry now includes the two math-model PM jobs (`pm.suggest_math_model_llm`, `pm.seed_math_params`).
+- ActionRun ledger unchanged; same summary semantics/status writing.
+- Apps Script menus cover the first four jobs; math-model menu items to add.
+- Selection-scoped operations with blank-key handling remain consistent.
+- Error handling + optional polling unchanged.
 
 **Checkpoint document:** See [PHASE_4.5_CHECKPOINT.md](PHASE_4.5_CHECKPOINT.md) for full details.
 
@@ -393,6 +381,7 @@ This becomes your **execution audit log**.
 - `flow4.suggest_mathmodels`
 - `flow4.seed_params`
 - `flow0.intake_sync`
+- (Added) Apps Script UI for `pm.suggest_math_model_llm` and `pm.seed_math_params`
 
 ---
 

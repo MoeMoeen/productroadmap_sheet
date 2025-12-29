@@ -22,6 +22,8 @@ class MathModelPromptInput(BaseModel):
     model_name: Optional[str] = None
     model_description_free_text: Optional[str] = None
     model_prompt_to_llm: Optional[str] = None
+    assumptions_text: Optional[str] = None
+    llm_notes: Optional[str] = None
 
 
 class MathModelSuggestion(BaseModel):

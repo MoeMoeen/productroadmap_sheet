@@ -118,22 +118,22 @@ class MathModelsWriter:
         {
             "row_number": int,
             "llm_suggested_formula_text": Optional[str],
-            "assumptions_text": Optional[str],
             "llm_notes": Optional[str],
         }
+        
+        NOTE: We do NOT write assumptions_text—that is user-owned. PM edits assumptions manually.
         """
         if not suggestions:
             return
         
         # Find column indices
         formula_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_suggested_formula_text")
-        assumptions_col_idx = self._find_column_index(spreadsheet_id, tab_name, "assumptions_text")
         notes_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_notes")
         approved_col_idx = self._find_column_index(spreadsheet_id, tab_name, "approved_by_user")
         suggested_by_llm_col_idx = self._find_column_index(spreadsheet_id, tab_name, "suggested_by_llm")
         
         # Guard: require at least one suggestion column
-        if not (formula_col_idx or assumptions_col_idx or notes_col_idx):
+        if not (formula_col_idx or notes_col_idx):
             logger.warning(f"Could not find suggestion columns in {tab_name}")
             return
         
@@ -154,8 +154,9 @@ class MathModelsWriter:
         elif not approved_col_idx and row_numbers:
             logger.warning(f"Could not find approved_by_user column in {tab_name}; skipping race-safety check")
         
-        # Build batch update data
+        # Build batch update data and track which rows were actually updated
         batch_data = []
+        updated_rows = set()  # Track rows that had at least one cell written
         
         for suggestion in suggestions:
             row_number = suggestion.get("row_number")
@@ -171,7 +172,6 @@ class MathModelsWriter:
                 continue
             
             formula_sugg = suggestion.get("llm_suggested_formula_text")
-            assumptions_sugg = suggestion.get("assumptions_text")
             notes_sugg = suggestion.get("llm_notes")
             
             if formula_col_idx and formula_sugg:
@@ -181,14 +181,7 @@ class MathModelsWriter:
                     "range": cell_a1,
                     "values": [[formula_sugg]],
                 })
-            
-            if assumptions_col_idx and assumptions_sugg:
-                col_a1 = _col_index_to_a1(assumptions_col_idx)
-                cell_a1 = f"{tab_name}!{col_a1}{row_number}"
-                batch_data.append({
-                    "range": cell_a1,
-                    "values": [[assumptions_sugg]],
-                })
+                updated_rows.add(row_number)
 
             if notes_col_idx and notes_sugg:
                 col_a1 = _col_index_to_a1(notes_col_idx)
@@ -197,28 +190,28 @@ class MathModelsWriter:
                     "range": cell_a1,
                     "values": [[notes_sugg]],
                 })
+                updated_rows.add(row_number)
 
             # Mark as suggested by LLM if any suggestion was provided
-            if suggested_by_llm_col_idx and (formula_sugg or assumptions_sugg or notes_sugg):
+            if suggested_by_llm_col_idx and (formula_sugg or notes_sugg):
                 col_a1 = _col_index_to_a1(suggested_by_llm_col_idx)
                 cell_a1 = f"{tab_name}!{col_a1}{row_number}"
                 batch_data.append({
                     "range": cell_a1,
                     "values": [[True]],
                 })
+                updated_rows.add(row_number)
         
         if batch_data:
-            # If Updated Source column exists, add provenance token for each updated row
+            # If Updated Source column exists, add provenance token ONLY for rows that were actually updated
             us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
             if us_col_idx:
-                for suggestion in suggestions:
-                    row_number = suggestion.get("row_number")
-                    if isinstance(row_number, int):
-                        us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}"
-                        batch_data.append({
-                            "range": us_a1,
-                            "values": [[token(Provenance.FLOW4_SUGGEST_MATHMODELS)]],
-                        })
+                for row_number in updated_rows:
+                    us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}"
+                    batch_data.append({
+                        "range": us_a1,
+                        "values": [[token(Provenance.FLOW4_SUGGEST_MATHMODELS)]],
+                    })
 
             self.client.batch_update_values(
                 spreadsheet_id=spreadsheet_id,
@@ -268,27 +261,41 @@ class MathModelsWriter:
         row_numbers: List[int],
         approved_col_idx: int,
     ) -> Dict[int, bool]:
-        """Re-fetch approved_by_user status for rows to detect staleness.
+        """Fetch approved_by_user status for rows in a single range query.
         
         Returns dict mapping row_number -> approved_by_user value.
         Used to prevent race conditions where PM approves during job execution.
+        
+        Optimization: Fetches a single continuous range instead of N individual calls.
         """
         if not row_numbers or not approved_col_idx:
             return {}
         
         try:
             col_a1 = _col_index_to_a1(approved_col_idx)
-            ranges = [f"{tab_name}!{col_a1}{row_num}" for row_num in row_numbers]
+            min_row = min(row_numbers)
+            max_row = max(row_numbers)
             
-            # Fetch approved status for all rows in one call
+            # Fetch continuous range covering all rows
+            range_a1 = f"{tab_name}!{col_a1}{min_row}:{col_a1}{max_row}"
+            values = self.client.get_values(spreadsheet_id, range_a1)
+            
+            # Map back to row numbers
             result = {}
-            for row_num, range_a1 in zip(row_numbers, ranges):
-                values = self.client.get_values(spreadsheet_id, range_a1)
-                if values and values[0]:
-                    # True if cell is "TRUE", "true", "1", etc.
-                    cell_val = str(values[0][0]).strip().lower()
-                    result[row_num] = cell_val in ("true", "1", "yes")
-                else:
+            if values:
+                for offset, cell_val in enumerate(values):
+                    row_num = min_row + offset
+                    if row_num in row_numbers:
+                        # True if cell is "TRUE", "true", "1", etc.
+                        if cell_val:
+                            cell_str = str(cell_val[0] if isinstance(cell_val, list) else cell_val).strip().lower()
+                            result[row_num] = cell_str in ("true", "1", "yes")
+                        else:
+                            result[row_num] = False
+            
+            # Fill in any missing rows as False
+            for row_num in row_numbers:
+                if row_num not in result:
                     result[row_num] = False
             
             return result

@@ -10,7 +10,7 @@ import traceback
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Set
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -260,6 +260,30 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         summary["success"] = saved
         summary["skipped"] = skipped
         summary["failed"] = failed
+
+    elif action == "pm.suggest_math_model_llm":
+        selected_count = result.get("selected_count", 0)
+        skipped_no_key = result.get("skipped_no_key", 0)
+        ok_count = result.get("ok_count", 0)
+        skipped_count = result.get("skipped_count", 0)
+        failed_count = result.get("failed_count", 0)
+        # Total = all keys (valid + invalid); Success = OK (suggested); Skipped = blank keys + logic skips; Failed = FAILED statuses
+        summary["total"] = selected_count + skipped_no_key
+        summary["success"] = ok_count
+        summary["skipped"] = skipped_no_key + skipped_count
+        summary["failed"] = failed_count
+
+    elif action == "pm.seed_math_params":
+        selected_count = result.get("selected_count", 0)
+        skipped_no_key = result.get("skipped_no_key", 0)
+        ok_count = result.get("ok_count", 0)
+        skipped_count = result.get("skipped_count", 0)
+        failed_count = result.get("failed_count", 0)
+        # Total = all keys (valid + invalid); Success = OK statuses; Skipped = blank keys + logic skips; Failed = FAILED statuses
+        summary["total"] = selected_count + skipped_no_key
+        summary["success"] = ok_count
+        summary["skipped"] = skipped_no_key + skipped_count
+        summary["failed"] = failed_count
     
     return summary
 
@@ -376,7 +400,8 @@ def _build_action_context(payload: Dict[str, Any]) -> ActionContext:
     llm_client: Optional[LLMClient] = None
     
     # Only instantiate LLM when needed
-    if any(action.startswith(prefix) for prefix in ["flow4.suggest_mathmodels", "flow4.seed_params"]):
+    # Use exact equality for PM jobs (safer), startswith for Flow 4 (multiple variants)
+    if action in {"pm.seed_math_params", "pm.suggest_math_model_llm"} or any(action.startswith(prefix) for prefix in ["flow4.suggest_mathmodels", "flow4.seed_params"]):
         llm_client = LLMClient()
 
     return ActionContext(payload=payload, sheets_client=sheets_client, llm_client=llm_client)
@@ -813,6 +838,437 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
             {"step": "flow3.compute_selected", "status": "ok", "count": computed},
             {"step": "flow3.write_scores", "status": "ok", "count": written},
             {"step": "status_write", "status": "ok"},
+        ],
+    }
+
+
+def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[str, Any]:
+    """PM Job #4a: Suggest math model formulas via LLM.
+
+    For selected initiatives without approved math models:
+    - Reads initiative context (description, KPIs, etc.)
+    - Calls LLM to suggest: formula_text, assumptions_text, model_name, model_description
+    - Writes suggestions back to MathModels tab (sheet only, does not set approved_by_user)
+    - PM reviews/edits, then sets approved_by_user = TRUE to trigger pm.seed_math_params
+
+    Does not seed params (that's pm.seed_math_params).
+    Does not compute scores.
+    
+    Workflow:
+      1. PM selects initiatives on MathModels tab
+      2. Runs pm.suggest_math_model_llm → LLM generates formula + assumptions suggestions
+      3. PM reviews/edits/approves (sets approved_by_user = TRUE)
+      4. Runs pm.seed_math_params → Parameters seeded with LLM metadata
+      5. PM fills param values on Params tab
+      6. Runs pm.save_selected → Persists to DB
+      7. Runs pm.score_selected → Computes math model scores
+    """
+    sheet_ctx = ctx.payload.get("sheet_context") or {}
+    options = ctx.payload.get("options") or {}
+    scope = ctx.payload.get("scope") or {}
+    if not isinstance(sheet_ctx, dict):
+        sheet_ctx = {}
+    if not isinstance(options, dict):
+        options = {}
+    if not isinstance(scope, dict):
+        scope = {}
+
+    spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (settings.PRODUCT_OPS.spreadsheet_id if settings.PRODUCT_OPS else None)
+    mathmodels_tab = settings.PRODUCT_OPS.mathmodels_tab if settings.PRODUCT_OPS else "MathModels"
+    max_llm_calls = int(options.get("max_llm_calls", 10))
+
+    keys = scope.get("initiative_keys") or []
+    if not isinstance(keys, list):
+        keys = []
+    keys = [k for k in keys if isinstance(k, str) and k.strip()]
+    keys = list(dict.fromkeys(keys))
+    original_keys = scope.get("initiative_keys")
+    skipped_no_key = (len(original_keys) - len(keys)) if isinstance(original_keys, list) else 0
+
+    if not spreadsheet_id:
+        raise ValueError("sheet_context.spreadsheet_id missing and PRODUCT_OPS not configured")
+
+    # Early bail if no selected keys
+    if not keys:
+        logger.info("pm.suggest_math_model_llm.no_keys_selected", extra={"skipped_no_key": skipped_no_key})
+        return {
+            "pm_job": "pm.suggest_math_model_llm",
+            "selected_count": 0,
+            "suggested_models": 0,
+            "skipped_no_key": skipped_no_key,
+            "ok_count": 0,
+            "skipped_count": 0,
+            "failed_count": 0,
+            "substeps": [
+                {"step": "model_suggestion", "status": "skipped", "reason": "no keys selected"},
+            ],
+        }
+
+    from app.sheets.math_models_reader import MathModelsReader
+    from app.sheets.math_models_writer import MathModelsWriter
+    from app.llm.scoring_assistant import suggest_math_model_for_initiative
+    from app.db.models.initiative import Initiative
+    
+    status_by_key: Dict[str, Optional[str]] = {k: None for k in keys}
+    suggestions_to_write = []
+
+    try:
+        math_reader = MathModelsReader(ctx.sheets_client)
+        math_writer = MathModelsWriter(ctx.sheets_client)
+        assert ctx.llm_client is not None, "LLM client required for pm.suggest_math_model_llm"
+        llm_client = ctx.llm_client
+
+
+        # Read MathModels for selected keys
+        all_math_rows = math_reader.get_rows_for_sheet(spreadsheet_id=str(spreadsheet_id), tab_name=mathmodels_tab)
+        selected_math_rows = [(row_num, row) for row_num, row in all_math_rows if row.initiative_key in keys]
+        found_keys = {row.initiative_key for _, row in selected_math_rows}
+        missing_in_sheet = [k for k in keys if k not in found_keys]
+        for k in missing_in_sheet:
+            status_by_key[k] = "SKIPPED: Not found in MathModels tab"
+
+        models_suggested = 0
+        llm_calls = 0
+
+        for row_number, math_row in selected_math_rows:
+            key = math_row.initiative_key
+
+            # Skip if already has a formula (already suggested or manually filled)
+            if math_row.formula_text and math_row.formula_text.strip():
+                status_by_key[key] = "SKIPPED: Formula already exists"
+                continue
+
+            # Check LLM limit
+            if llm_calls >= max_llm_calls:
+                status_by_key[key] = "SKIPPED: LLM call limit reached"
+                continue
+
+            # Fetch initiative from DB for context
+            initiative = db.query(Initiative).filter(Initiative.initiative_key == key).one_or_none()
+            if not initiative:
+                status_by_key[key] = "SKIPPED: Initiative not found in DB"
+                continue
+            
+            # Guard: check if we have sufficient context for LLM
+            # If initiative lacks key fields AND PM didn't provide custom prompt, skip
+            has_problem_context = bool(
+                (initiative.problem_statement and initiative.problem_statement.strip()) or
+                (initiative.expected_impact_description and initiative.expected_impact_description.strip()) or
+                (initiative.impact_metric and initiative.impact_metric.strip())
+            )
+            has_custom_prompt = bool(math_row.model_prompt_to_llm and math_row.model_prompt_to_llm.strip())
+            
+            if not has_problem_context and not has_custom_prompt:
+                status_by_key[key] = "SKIPPED: Insufficient context (add model_prompt_to_llm or fill initiative fields)"
+                continue
+
+            # Call LLM to suggest model
+            try:
+                suggestion = suggest_math_model_for_initiative(initiative, math_row, llm_client)
+                llm_calls += 1
+                
+                # Queue for batch write (LLM-owned columns only; assumptions_text is user-owned)
+                suggestions_to_write.append({
+                    "row_number": row_number,
+                    "llm_suggested_formula_text": suggestion.formula_text,
+                    "llm_notes": suggestion.notes,
+                })
+                
+                status_by_key[key] = "OK: Suggested formula (review and approve before seeding params)"
+                models_suggested += 1
+
+            except Exception as exc:
+                logger.exception(f"pm.suggest_math_model_llm.llm_failed for {key}")
+                status_by_key[key] = f"FAILED: LLM error: {str(exc)[:50]}"
+                continue
+        
+        # Batch write all suggestions
+        if suggestions_to_write:
+            math_writer.write_suggestions_batch(
+                spreadsheet_id=str(spreadsheet_id),
+                tab_name=mathmodels_tab,
+                suggestions=suggestions_to_write,
+            )
+
+    except Exception as e:
+        logger.exception("pm.suggest_math_model_llm.failed")
+        for k in keys:
+            if status_by_key[k] is None:
+                status_by_key[k] = f"FAILED: {str(e)[:50]}"
+        # Best-effort status write
+        try:
+            from app.sheets.productops_writer import write_status_to_sheet
+            write_status_to_sheet(ctx.sheets_client, str(spreadsheet_id), mathmodels_tab, {k: v for k, v in status_by_key.items() if v is not None})
+        except Exception:
+            logger.warning("pm.suggest_math_model_llm.status_write_failed_on_error")
+        return {
+            "pm_job": "pm.suggest_math_model_llm",
+            "selected_count": len(keys),
+            "suggested_models": 0,
+            "skipped_no_key": skipped_no_key,
+            "ok_count": 0,
+            "skipped_count": 0,
+            "failed_count": len(keys),
+            "substeps": [{"step": "model_suggestion", "status": "failed", "error": str(e)[:50]}],
+        }
+
+    # Write status to MathModels tab
+    try:
+        from app.sheets.productops_writer import write_status_to_sheet
+        write_status_to_sheet(ctx.sheets_client, str(spreadsheet_id), mathmodels_tab, {k: v for k, v in status_by_key.items() if v is not None})
+    except Exception:
+        logger.warning("pm.suggest_math_model_llm.status_write_failed")
+
+    # Count statuses by prefix
+    ok_count = sum(1 for v in status_by_key.values() if v and v.startswith("OK"))
+    skipped_count = sum(1 for v in status_by_key.values() if v and v.startswith("SKIPPED"))
+    failed_count = sum(1 for v in status_by_key.values() if v and v.startswith("FAILED"))
+
+    return {
+        "pm_job": "pm.suggest_math_model_llm",
+        "selected_count": len(keys),
+        "suggested_models": models_suggested,
+        "skipped_no_key": skipped_no_key,
+        "ok_count": ok_count,
+        "skipped_count": skipped_count,
+        "failed_count": failed_count,
+        "substeps": [
+            {"step": "model_suggestion", "status": "ok", "suggested": models_suggested, "llm_calls": llm_calls},
+        ],
+    }
+
+
+def _action_pm_seed_math_params(db: Session, ctx: ActionContext) -> Dict[str, Any]:
+    """PM Job #5: Seed math model parameters from approved formulas.
+
+    For selected initiatives with approved math models:
+    - Parses formula → extracts required params
+    - Seeds missing params in Params tab (sheet only) with LLM metadata
+    - Stops (does not compute scores)
+
+    PM must then fill param values and run pm.score_selected to compute scores.
+    """
+    sheet_ctx = ctx.payload.get("sheet_context") or {}
+    options = ctx.payload.get("options") or {}
+    scope = ctx.payload.get("scope") or {}
+    if not isinstance(sheet_ctx, dict):
+        sheet_ctx = {}
+    if not isinstance(options, dict):
+        options = {}
+    if not isinstance(scope, dict):
+        scope = {}
+
+    spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (settings.PRODUCT_OPS.spreadsheet_id if settings.PRODUCT_OPS else None)
+    mathmodels_tab = settings.PRODUCT_OPS.mathmodels_tab if settings.PRODUCT_OPS else "MathModels"
+    params_tab = settings.PRODUCT_OPS.params_tab if settings.PRODUCT_OPS else "Params"
+    max_llm_calls = int(options.get("max_llm_calls", 10))
+
+    keys = scope.get("initiative_keys") or []
+    if not isinstance(keys, list):
+        keys = []
+    keys = [k for k in keys if isinstance(k, str) and k.strip()]
+    keys = list(dict.fromkeys(keys))
+    original_keys = scope.get("initiative_keys")
+    skipped_no_key = (len(original_keys) - len(keys)) if isinstance(original_keys, list) else 0
+
+    if not spreadsheet_id:
+        raise ValueError("sheet_context.spreadsheet_id missing and PRODUCT_OPS not configured")
+
+    # Early bail if no selected keys
+    if not keys:
+        logger.info("pm.seed_math_params.no_keys_selected", extra={"skipped_no_key": skipped_no_key})
+        return {
+            "pm_job": "pm.seed_math_params",
+            "selected_count": 0,
+            "models_processed": 0,
+            "params_seeded": 0,
+            "skipped_no_key": skipped_no_key,
+            "failed_count": 0,
+            "substeps": [
+                {"step": "param_seeding", "status": "skipped", "reason": "no keys selected"},
+            ],
+        }
+
+    # Import param seeding logic
+    from app.sheets.math_models_reader import MathModelsReader
+    from app.sheets.params_reader import ParamsReader
+    from app.sheets.params_writer import ParamsWriter
+    from app.utils.safe_eval import extract_identifiers, validate_formula
+
+    status_by_key: Dict[str, Optional[str]] = {k: None for k in keys}
+
+    try:
+        math_reader = MathModelsReader(ctx.sheets_client)
+        params_reader = ParamsReader(ctx.sheets_client)
+        params_writer = ParamsWriter(ctx.sheets_client)
+        assert ctx.llm_client is not None, "LLM client required for pm.build_math_model"
+        llm_client = ctx.llm_client
+
+        # Read MathModels for selected keys only
+        all_math_rows = math_reader.get_rows_for_sheet(spreadsheet_id=str(spreadsheet_id), tab_name=mathmodels_tab)
+        selected_math_rows = [(row_num, row) for row_num, row in all_math_rows if row.initiative_key in keys]
+        found_keys = {row.initiative_key for _, row in selected_math_rows}
+        missing_in_sheet = [k for k in keys if k not in found_keys]
+        for k in missing_in_sheet:
+            status_by_key[k] = "SKIPPED: Not found in MathModels tab"
+
+        # Read existing params
+        existing_params_rows = params_reader.get_rows_for_sheet(spreadsheet_id=str(spreadsheet_id), tab_name=params_tab)
+        existing_keys: Set[tuple[str, str, str]] = {
+            (row.initiative_key, row.framework or "MATH_MODEL", row.param_name)
+            for _, row in existing_params_rows
+        }
+
+        models_processed = 0
+        params_seeded = 0
+        llm_calls = 0
+
+        for row_number, math_row in selected_math_rows:
+            key = math_row.initiative_key
+
+            # Skip unapproved
+            if not math_row.approved_by_user:
+                status_by_key[key] = "SKIPPED: Math model not approved"
+                continue
+
+            # Skip if no formula
+            if not math_row.formula_text:
+                status_by_key[key] = "SKIPPED: No formula"
+                continue
+
+            # Validate formula
+            errors = validate_formula(math_row.formula_text)
+            # validate_formula contract: returns list[str]; empty list means valid
+            if errors:
+                status_by_key[key] = f"FAILED: Invalid formula: {errors[0][:50]}"
+                continue
+
+            # Extract identifiers
+            try:
+                identifiers = extract_identifiers(math_row.formula_text)
+            except Exception as exc:
+                status_by_key[key] = f"FAILED: Cannot parse formula: {str(exc)[:50]}"
+                continue
+
+            if not identifiers:
+                status_by_key[key] = "SKIPPED: No parameters needed"
+                continue
+
+            # Find missing identifiers
+            missing_identifiers = sorted(
+                {ident for ident in identifiers if (key, "MATH_MODEL", ident) not in existing_keys}
+            )
+
+            if not missing_identifiers:
+                status_by_key[key] = "OK: All parameters already seeded"
+                models_processed += 1
+                continue
+
+            # Check LLM limit
+            if llm_calls >= max_llm_calls:
+                status_by_key[key] = "SKIPPED: LLM call limit reached"
+                continue
+
+            # Call LLM for metadata
+            try:
+                from app.llm.scoring_assistant import suggest_param_metadata_for_model
+                suggestion = suggest_param_metadata_for_model(
+                    initiative_key=key,
+                    identifiers=missing_identifiers,
+                    formula_text=math_row.formula_text,
+                    llm=llm_client,
+                )
+                llm_calls += 1
+            except Exception as exc:
+                logger.exception(f"pm.build_math_model.llm_failed for {key}")
+                status_by_key[key] = f"FAILED: LLM error: {str(exc)[:50]}"
+                continue
+
+            # Build params to append
+            params_to_append = []
+            seen_keys = set()
+            for param_sugg in suggestion.params:
+                if param_sugg.key not in missing_identifiers:
+                    continue
+                if param_sugg.key in seen_keys:
+                    continue
+                seen_keys.add(param_sugg.key)
+
+                notes = f"LLM example: {param_sugg.example_value}" if param_sugg.example_value else ""
+                params_to_append.append({
+                    "initiative_key": key,
+                    "param_name": param_sugg.key,
+                    "param_display": param_sugg.name or param_sugg.key,
+                    "description": param_sugg.description or "",
+                    "unit": param_sugg.unit or "",
+                    "source": param_sugg.source_hint or "ai_suggested",
+                    "value": "",  # Empty: PM fills this
+                    "approved": False,
+                    "is_auto_seeded": True,
+                    "framework": "MATH_MODEL",
+                    "notes": notes,
+                })
+
+            if params_to_append:
+                params_writer.append_new_params(
+                    spreadsheet_id=str(spreadsheet_id),
+                    tab_name=params_tab,
+                    params=params_to_append,
+                )
+                params_seeded += len(params_to_append)
+                # Update cache so duplicate identifiers in same run don't get seeded twice
+                for p in params_to_append:
+                    existing_keys.add((key, "MATH_MODEL", p["param_name"]))
+                status_by_key[key] = f"OK: Seeded {len(params_to_append)} params; fill values in Params tab"
+                models_processed += 1
+            else:
+                status_by_key[key] = "OK: All parameters already seeded"
+                models_processed += 1
+
+    except Exception as e:
+        logger.exception("pm.seed_math_params.failed")
+        for k in keys:
+            if status_by_key[k] is None:
+                status_by_key[k] = f"FAILED: {str(e)[:50]}"
+        # Best-effort status write
+        try:
+            from app.sheets.productops_writer import write_status_to_sheet
+            write_status_to_sheet(ctx.sheets_client, str(spreadsheet_id), mathmodels_tab, {k: v for k, v in status_by_key.items() if v is not None})
+        except Exception:
+            logger.warning("pm.seed_math_params.status_write_failed_on_error")
+        return {
+            "pm_job": "pm.seed_math_params",
+            "selected_count": len(keys),
+            "models_processed": 0,
+            "params_seeded": 0,
+            "skipped_no_key": skipped_no_key,
+            "failed_count": len(keys),
+            "substeps": [{"step": "param_seeding", "status": "failed", "error": str(e)[:50]}],
+        }
+
+    # Write status to MathModels tab
+    try:
+        from app.sheets.productops_writer import write_status_to_sheet
+        write_status_to_sheet(ctx.sheets_client, str(spreadsheet_id), mathmodels_tab, {k: v for k, v in status_by_key.items() if v is not None})
+    except Exception:
+        logger.warning("pm.seed_math_params.status_write_failed")
+
+    # Count statuses by prefix for accurate summary
+    ok_count = sum(1 for v in status_by_key.values() if v and v.startswith("OK"))
+    skipped_count = sum(1 for v in status_by_key.values() if v and v.startswith("SKIPPED"))
+    failed_count = sum(1 for v in status_by_key.values() if v and v.startswith("FAILED"))
+
+    return {
+        "pm_job": "pm.seed_math_params",
+        "selected_count": len(keys),
+        "models_processed": models_processed,
+        "params_seeded": params_seeded,
+        "skipped_no_key": skipped_no_key,
+        "ok_count": ok_count,
+        "skipped_count": skipped_count,
+        "failed_count": failed_count,
+        "substeps": [
+            {"step": "param_seeding", "status": "ok", "models": models_processed, "params": params_seeded, "llm_calls": llm_calls},
         ],
     }
 
@@ -1463,9 +1919,11 @@ _ACTION_REGISTRY: Dict[str, ActionFn] = {
     # Flow 0
     "flow0.intake_sync": _action_flow0_intake_sync,
 
-    # PM Jobs (V1)
+    # PM Jobs (V1 + V2 Math Models)
     "pm.backlog_sync": _action_pm_backlog_sync,
     "pm.score_selected": _action_pm_score_selected,
     "pm.switch_framework": _action_pm_switch_framework,
     "pm.save_selected": _action_pm_save_selected,
+    "pm.suggest_math_model_llm": _action_pm_suggest_math_model_llm,
+    "pm.seed_math_params": _action_pm_seed_math_params,
 }

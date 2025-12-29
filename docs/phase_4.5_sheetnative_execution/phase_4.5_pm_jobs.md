@@ -2,7 +2,7 @@ Below is a **clean, accurate, comprehensive Step 4.5 document**, written exactly
 
 ---
 
-# Step 4.5 — Sheet-Native Execution Layer & PM Jobs (V1)
+# Step 4.5 — Sheet-Native Execution Layer & PM Jobs (V2)
 
 ## 1. Purpose of Step 4.5
 
@@ -85,7 +85,7 @@ PM jobs are mapped onto this execution model, but PMs never see it.
 
 ## 4. Agreed PM Jobs (V1)
 
-We explicitly limit V1 to **four PM jobs**.
+We explicitly defined V1 as **four PM jobs**. V2 adds two math-model jobs to support LLM-assisted formulas and explicit parameter seeding.
 Each job is described in:
 
 * PM intent
@@ -333,41 +333,94 @@ The same Save button exists everywhere, but meaning differs:
 
 ---
 
-## 5.1 Global Implementation Status (V1) ✅ COMPLETE
+## 4.1 Additional PM Jobs (V2 — Math Models)
 
-**All 4 PM jobs fully implemented end-to-end (backend + UI):**
+### PM Job #5 — Suggest math model via LLM (new)
+
+**PM intent**
+
+> “Give me a draft formula and assumptions for this initiative.”
+
+**Sheet surface**
+
+* **MathModels tab** (selected initiatives)
+
+**Behavior**
+
+* Calls LLM to propose a draft formula and notes for rows without a formula.
+* Writes only to LLM-owned columns on MathModels: `llm_suggested_formula_text`, `llm_notes`, and sets `suggested_by_llm`.
+* Never overwrites user-owned columns: `formula_text`, `assumptions_text`, `approved_by_user`.
+* Guard: If initiative context is thin (no problem statement, no impact description, no metric) and `model_prompt_to_llm` is empty, the job skips with "SKIPPED: Insufficient context".
+* Status per row: OK suggested / SKIPPED (formula exists or no key or insufficient context) / FAILED (LLM or sheet error).
+
+**Usage pattern**
+
+1) Select rows on MathModels with empty `formula_text`.
+2) Run `pm.suggest_math_model_llm`.
+3) Review/edit: copy the suggestion into `formula_text` and add/edit `assumptions_text`; set `approved_by_user = TRUE` before seeding.
+
+### PM Job #6 — Seed math params (renamed from pm.build_math_model)
+
+**PM intent**
+
+> “Take the approved formula and create parameter rows to fill.”
+
+**Sheet surface**
+
+* **MathModels tab** for selection, writes new rows to **Params tab**.
+
+**Behavior**
+
+* Validates `formula_text`, extracts identifiers, and seeds Params rows with LLM metadata (values empty).
+* Skips rows without approval or without formula.
+* Status per row: OK seeded / SKIPPED (not approved/no formula/no key) / FAILED (validation or write error).
+* Sheet-first: DB persistence happens later via `pm.save_selected` on Params.
+
+**Usage pattern**
+
+1) Approved formula on MathModels (`approved_by_user = TRUE`).
+2) Run `pm.seed_math_params` (seeds metadata + empty values).
+3) Fill param values on Params tab.
+4) Run `pm.save_selected` (Params) → `pm.score_selected`.
+
+**Rationale for rename**
+
+* Old name `pm.build_math_model` implied scoring; the job only seeds parameters. `pm.seed_math_params` is explicit and matches the PM mental model.
+
+## 5.1 Global Implementation Status (V2)
+
+**Implemented**
+
+- ✅ V1 jobs (4): backlog_sync, score_selected, switch_framework, save_selected
+- ✅ V2 math-model jobs added to backend + registry: suggest_math_model_llm, seed_math_params
+
+**Pending polish**
+
+- LLM prompt + sheet writer wiring for `pm.suggest_math_model_llm` suggestions.
+- Apps Script menu items for both math-model jobs.
+- End-to-end tests for both Path A (manual formula) and Path B (LLM → approve → seed → save → score).
+
+---
+
+## See Also
+
+- Math Model Workflow (V2) — Column ownership, two-step flow, timeline, guards, and troubleshooting: [phase_4.5_sheetnative_execution/PHASE_4.5_CHECKPOINT.md](productroadmap_sheet_project/docs/phase_4.5_sheetnative_execution/PHASE_4.5_CHECKPOINT.md)
+- PM Jobs Cheatsheet — Quick references for all jobs including math model steps: [phase_4.5_sheetnative_execution/phase_4.5_pm_cheatsheet.md](productroadmap_sheet_project/docs/phase_4.5_sheetnative_execution/phase_4.5_pm_cheatsheet.md)
 
 ### Backend (action_runner.py)
-- **Consistent architecture**: All PM jobs use ActionRun/Worker pattern for execution, audit, and async handling
-- **Selection-based operations**: Apps Script passes `initiative_keys`; backend skips blanks and tracks `skipped_no_key`
-- **Status abstraction**: All jobs use generic `write_status_to_sheet` alias (delegates to `write_status_to_productops_sheet`)
-- **Tab-aware branching**: `pm.save_selected` detects tab via exact config matches with substring fallback
-- **Summary semantics**: All jobs return consistent fields:
-  - Early bail: `selected_count: 0`, `failed_count: 0`, `skipped_no_key: 0`
-  - Success: accurate `selected_count`, `saved_count`, `failed_count: max(0, selected - saved)`, `skipped_no_key`
-- **Error handling**: Best-effort per-row Status writes; errors captured in ActionRun result
-- **Provenance model**:
-  - ActionRun: PM job tokens (`pm.*`)
-  - DB rows: Flow tokens (`flow1.*`, `flow3.*`, etc.)
-  - Sheet Updated Source: May use PM job tokens when PM job writes sheet
-- **Action registry**: 15 total actions (Flow 0-4 + 4 PM Jobs)
-- **Validation**: Static checks pass; imports verified; no Pylance errors
+- Consistent ActionRun/worker pattern across all 6 PM jobs.
+- Status abstraction + summary semantics unchanged; new jobs return the same fields (selected/ok/skipped/failed).
+- `pm.seed_math_params` renamed and registered; `pm.suggest_math_model_llm` scaffolded with TODO prompt/writer hook.
 
 ### Frontend (Apps Script)
-- **Bound menus**: ProductOps + Central Backlog sheets with "Roadmap AI" menus
-- **Selection handling**: Extracts initiative_keys from active range with header detection
-- **API calls**: Shared-secret authentication via X-ROADMAP-AI-SECRET header
-- **Error handling**: Try/catch blocks surface API errors in-sheet via toast
-- **Optional polling**: Apps Script can poll until completion for UX feedback
-- **Tab-aware**: pm.save_selected menu detects current tab and routes correctly
+- Existing menus for 4 jobs remain.
+- TODO: Add MathModels tab menu items for `pm.suggest_math_model_llm` and `pm.seed_math_params`.
 
-**End-to-end validation:**
-- ✅ Swagger API testing (all 4 PM jobs)
-- ✅ Apps Script menu testing (selection + execution)
-- ✅ Sheet UI feedback (Status column updates, results visible)
-- ✅ Error paths (validation + error messages)
+**Validation**
+- Backend static checks pass; registry updated.
+- LLM prompt/write path for suggest job still to wire.
 
-**Checkpoint document:** See [PHASE_4.5_CHECKPOINT.md](PHASE_4.5_CHECKPOINT.md) for complete details.
+**Checkpoint document:** See [PHASE_4.5_CHECKPOINT.md](PHASE_4.5_CHECKPOINT.md); V2 updates are additive (math-model jobs).
 
 ---
 

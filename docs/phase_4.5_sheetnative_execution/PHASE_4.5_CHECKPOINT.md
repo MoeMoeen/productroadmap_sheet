@@ -198,6 +198,33 @@ All 4 PM jobs implemented in both backend and UI.
 ✅ **Apps Script Testing (Sheet UI)**
 - Menu items appear on sheet open
 - Selection extraction: Correctly identifies initiative_keys from selected rows
+
+---
+
+## Math Model Workflow (V2)
+
+**Column Ownership**
+- User-owned (PM edits; never overwritten by suggest job): `model_name`, `model_description_free_text`, `model_prompt_to_llm`, `formula_text`, `assumptions_text`, `approved_by_user`.
+- LLM-owned (safe to write in suggest job): `llm_suggested_formula_text`, `llm_notes`, `suggested_by_llm`, `Updated Source`.
+
+**Two-Step Flow**
+- Step 1 — Suggest (`pm.suggest_math_model_llm`): LLM writes suggestions to `llm_suggested_formula_text` + `llm_notes` only; sets `suggested_by_llm`. Skips on insufficient context (no initiative fields and no `model_prompt_to_llm`).
+- Step 2 — Seed (`pm.seed_math_params`): After PM copies/edits into `formula_text` + `assumptions_text` and sets `approved_by_user = TRUE`, seeds Params rows with identifiers + metadata (values empty).
+
+**Full Timeline**
+Suggest → PM review/copy/edit → Approve (`approved_by_user = TRUE`) → Seed Params → Fill values → Save Selected (Params) → Score Selected.
+
+**Race Safety & Provenance**
+- Re-checks `approved_by_user` just before write; skipped rows are not stamped.
+- Only stamps Updated Source when a cell was actually written (tracks `updated_rows`).
+
+**LLM Context Guard**
+- Skips suggestion if both initiative context (problem statement, impact description, metric) and `model_prompt_to_llm` are empty; prevents low-quality formulas.
+
+**Troubleshooting**
+- Bad suggestion: leave `formula_text` empty or clear `llm_suggested_formula_text`; rerun suggest with better prompt/context.
+- Scoring fails after filling params: ensure `pm.save_selected` ran on Params; scoring reads persisted values from DB.
+- Changing formula post-seed: edit `formula_text` and rerun `pm.seed_math_params` to regenerate identifiers; clean up old Params as needed.
 - API calls: Shared secret header sent correctly
 - Response parsing: run_id extracted and displayed
 - Error handling: API errors show in toast alerts
@@ -220,6 +247,11 @@ All 4 PM jobs implemented in both backend and UI.
 - Incremental backlog sync (delta-based vs full refresh)
 - Control/RunLog tab (live dashboard of execution history)
 - Workflow triggers & automation
+
+### Post-checkpoint math-model updates (V2)
+- Added `pm.seed_math_params` (renamed from pm.build_math_model) to seed Params rows from approved formulas.
+- Added `pm.suggest_math_model_llm` scaffold to propose formulas/assumptions in MathModels (sheet-only suggestions; PM approves before seeding).
+- Backend registry updated; Apps Script menu items pending.
 
 ### Phase 5 Prerequisites Met
 ✅ Sheet-native execution layer complete

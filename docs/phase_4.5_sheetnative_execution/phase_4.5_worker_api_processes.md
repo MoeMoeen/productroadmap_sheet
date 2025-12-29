@@ -125,3 +125,189 @@ Same word, different target.
 # Both processes auto-load ROADMAP_AI_SECRET from .env
 uv run uvicorn app.main:app --port 8000 --env-file .env
 uv run python -m app.workers.action_worker
+
+
+-----------------------------------------------------------------------------------
+
+# EDUCATIONAL
+
+Totally fair question. The confusion comes from the word “async” being used for two different problems.
+
+1) FastAPI async def solves “don’t block while waiting”
+
+FastAPI async is about concurrency inside one web server process:
+
+If your handler does I/O (DB query, HTTP call) and uses await, the server can work on other requests while it’s waiting.
+
+It’s great for lots of short requests and I/O-heavy tasks.
+
+
+But it’s still the same request/response lifecycle:
+
+client calls endpoint
+
+server runs the work
+
+server returns response
+
+if the server restarts mid-way, the work is gone
+
+
+So async def helps with performance, not durable background jobs.
+
+
+---
+
+2) ActionRun + Worker solves “do long work reliably and track it”
+
+Your worker architecture solves different requirements:
+
+✅ Durability
+
+The job is stored in DB (ActionRun). If the API server restarts, the job is still there.
+
+✅ Long-running tasks
+
+Apps Script / browsers time out. A worker can run for minutes.
+
+✅ Progress & audit trail
+
+You can poll GET /actions/run/{run_id} and see queued/running/success/failed, plus results/errors.
+
+✅ Separation of concerns
+
+Web API stays responsive. Heavy work happens elsewhere.
+
+So this is not “async vs sync”. It’s:
+
+> request concurrency vs background job orchestration
+
+
+
+
+---
+
+3) Why not just use FastAPI BackgroundTasks?
+
+FastAPI has BackgroundTasks, but:
+
+it runs in the same process as the web server
+
+if the process restarts, background tasks die
+
+no built-in job history, retries, locking, etc.
+
+
+It’s okay for “send an email after response”, not for “recompute scores + write to sheets + update backlog”.
+
+
+---
+
+4) Where Kafka / RabbitMQ / Celery fit
+
+Those are professional queue systems for when you need:
+
+higher throughput
+
+multiple worker machines
+
+delayed/retry policies
+
+dead-letter queues
+
+event streams (Kafka especially)
+
+guaranteed delivery semantics
+
+
+RabbitMQ (message broker)
+
+good for “job queues”
+
+pairs often with Celery
+
+
+Kafka (event streaming)
+
+good for “events over time”
+
+multiple consumers
+
+replayable logs
+
+
+Celery/RQ (job frameworks)
+
+the “worker runner” part
+
+often uses Redis/RabbitMQ as backend
+
+
+What you built is basically:
+
+a minimal job queue using Postgres as the queue
+
+plus a worker loop
+
+with row locking (FOR UPDATE SKIP LOCKED) to avoid double execution
+
+
+That’s why it feels like “mini RabbitMQ”: conceptually similar, but implemented with DB rows.
+
+
+---
+
+5) How they work together in real systems
+
+A common production setup looks like:
+
+FastAPI endpoints (often async def)
+
+validate request
+
+enqueue job (Celery/RQ/Kafka/RabbitMQ or DB queue)
+
+return run_id
+
+
+Workers
+
+pull jobs from queue
+
+do heavy work
+
+store result/status
+
+
+
+So async FastAPI and queues are complementary, not competing.
+
+
+---
+
+Rule of thumb (simple)
+
+Use FastAPI async when:
+
+work is short
+
+mostly waiting on I/O
+
+you can return response quickly
+
+
+Use a job queue/worker when:
+
+work may take long (seconds → minutes)
+
+you need durability (survive restarts)
+
+you need status tracking/polling
+
+you want to protect the web server from heavy tasks
+
+
+That’s exactly your case (Sheets writes, scoring batches, LLM calls, full sync).
+
+
+---

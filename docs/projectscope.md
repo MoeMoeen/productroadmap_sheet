@@ -45,6 +45,7 @@ Ultimately, the platform becomes the **single source of truth** for product deci
   * WSJF
   * Custom frameworks
   * Full mathematical-model scoring
+  * LLM-assisted math model suggestion + explicit parameter seeding
 * Auto-generate formulas and parameters using LLMs.
 * Maintain consistent, normalized scoring data sets.
 * Support Monte Carlo simulation and multi-objective prioritization.
@@ -70,7 +71,8 @@ Ultimately, the platform becomes the **single source of truth** for product deci
 * **MathModels Sheet**
 
   * One row per initiative using mathematical modeling
-  * Stores PM free-text descriptions, LLM-suggested formulas, final approved formulas
+  * Stores PM free-text descriptions, LLM-suggested formulas, final approved formulas, approval flag
+  * Workflow: Suggest via LLM → PM review/approve → Seed Params → fill values → Save → Score
 * **Params Sheet**
 
   * One row per (initiative, framework, parameter)
@@ -90,7 +92,7 @@ Ultimately, the platform becomes the **single source of truth** for product deci
 
   * Framework factory (RICE, WSJF, MathModel, Custom frameworks)
   * LLM-assisted formula generation
-  * Parameter auto-seeding
+  * Parameter auto-seeding (now via explicit PM job `pm.seed_math_params`)
 * **Optimization Engine**
 
   * Linear / non-linear optimization
@@ -131,8 +133,8 @@ All flows (0–4) are now **triggerable from Google Sheets** via a custom menu:
   * Write scores back to ProductOps
   * Activate framework (AUTO / forced)
   * Sync Central Backlog
-  * Suggest Math Models (selected rows)
-  * Seed Params (approved models)
+  * Suggest Math Models (LLM, selected rows) — `pm.suggest_math_model_llm`
+  * Seed Params (approved models) — `pm.seed_math_params`
   * Sync MathModels → DB
   * Sync Params → DB
   * Sync Intake → DB

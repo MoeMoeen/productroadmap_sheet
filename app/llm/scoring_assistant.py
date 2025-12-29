@@ -13,7 +13,11 @@ def suggest_math_model_for_initiative(
 	row: MathModelRow,
 	llm: LLMClient,
 ) -> MathModelSuggestion:
-	"""Construct prompt input from Initiative + MathModelRow and call LLM."""
+	"""Construct prompt input from Initiative + MathModelRow and call LLM.
+	
+	Includes PM-authored model description/prompt and any existing assumptions/notes
+	so LLM can build on prior context or iterate.
+	"""
 
 	payload = MathModelPromptInput(
 		initiative_key=str(initiative.initiative_key),
@@ -28,6 +32,8 @@ def suggest_math_model_for_initiative(
 		model_name=getattr(row, "model_name", None),
 		model_description_free_text=getattr(row, "model_description_free_text", None),
 		model_prompt_to_llm=getattr(row, "model_prompt_to_llm", None),
+		assumptions_text=getattr(row, "assumptions_text", None),
+		llm_notes=getattr(row, "llm_notes", None),
 	)
 
 	return llm.suggest_math_model(payload)
