@@ -145,6 +145,7 @@ def _build_user_prompt(payload: MathModelPromptInput) -> str:
     add("Impact unit", payload.impact_unit)
     add("Model name", payload.model_name)
     add("Model description", payload.model_description_free_text)
+    add("Existing assumptions", payload.assumptions_text)
     add("Extra prompt", payload.model_prompt_to_llm)
 
     return "\n".join(lines)
