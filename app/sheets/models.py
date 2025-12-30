@@ -24,7 +24,7 @@ MATHMODELS_HEADER_MAP = {
     "model_prompt_to_llm": ["model_prompt_to_llm", "prompt_to_llm", "llm_prompt"],
     # Metadata/provenance (optional columns)
     "updated_source": ["updated_source", "Updated Source"],
-    "updated_at": ["updated_at", "Updated At"],
+    "updated_at": ["updated_at", "Updated At", "updated at"],
 }
 
 PARAMS_HEADER_MAP = {
@@ -43,7 +43,7 @@ PARAMS_HEADER_MAP = {
     "notes": ["notes", "param_notes"],
     # Metadata/provenance (optional columns)
     "updated_source": ["updated_source", "Updated Source"],
-    "updated_at": ["updated_at", "Updated At"],
+    "updated_at": ["updated_at", "Updated At", "updated at"],
 }
 
 # Intake sheet header aliases (centralized)

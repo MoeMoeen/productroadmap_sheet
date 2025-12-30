@@ -11,8 +11,10 @@ Follows the same pattern as backlog_writer.py and intake_writer.py:
 from __future__ import annotations
 
 import logging
+import json
 from typing import Dict, List, Any, cast
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
@@ -31,6 +33,22 @@ logger = logging.getLogger(__name__)
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _to_sheet_value(value: Any) -> Any:
+    """Normalize values before sending to Sheets to avoid JSON serialization errors."""
+    if value is None:
+        return None
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value)
+        except Exception:
+            return str(value)
+    return value
 
 # Note: PRODUCTOPS_SCORE_OUTPUT_COLUMNS and SCORE_FIELD_TO_HEADERS are imported
 # from app.sheets.models (centralized). Do not redefine locally.
@@ -152,15 +170,15 @@ def write_scores_to_productops_sheet(
 
         # For each score column, collect update if value exists
         for field, col_idx in col_map.items():
-            if field == "initiative_key":
-                continue
-            if field == "updated_source":
+            if field in {"initiative_key", "updated_source", "updated_at"}:
                 continue
 
             # Get value from DB
             score_value = getattr(ini, field, None)
             if score_value is None:
                 continue  # Don't update empty scores (leave blank)
+
+            score_value = _to_sheet_value(score_value)
 
             # Add to batch
             cell_range = _cell_range_for_update(tab_name, col_idx, row_idx)
@@ -206,7 +224,7 @@ def write_scores_to_productops_sheet(
                 "productops_writer.batch_update_failed",
                 extra={"num_updates": len(batch_updates)},
             )
-            return 0
+            raise
     else:
         logger.info(
             "productops_writer.no_updates",
