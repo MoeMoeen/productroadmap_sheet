@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Optional, List, Dict, Any
 import logging
+from datetime import datetime, timezone
 
 from app.sheets.client import SheetsClient
 from app.sheets.models import PARAMS_HEADER_MAP
@@ -19,6 +20,10 @@ from app.utils.header_utils import normalize_header
 from app.utils.provenance import Provenance, token
 
 logger = logging.getLogger(__name__)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class ParamsWriter:
@@ -144,14 +149,23 @@ class ParamsWriter:
         
         # Stamp provenance for each appended row
         us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
-        if us_col_idx:
-            us_col_letter = _col_index_to_a1(us_col_idx)
+        ua_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_at")
+        if us_col_idx or ua_col_idx:
+            us_col_letter = _col_index_to_a1(us_col_idx) if us_col_idx else None
+            ua_col_letter = _col_index_to_a1(ua_col_idx) if ua_col_idx else None
+            ts = _now_iso()
             batch_data = []
             for row_num in range(start_row, end_row + 1):
-                batch_data.append({
-                    "range": f"{tab_name}!{us_col_letter}{row_num}",
-                    "values": [[token(Provenance.FLOW4_SYNC_PARAMS)]],
-                })
+                if us_col_letter:
+                    batch_data.append({
+                        "range": f"{tab_name}!{us_col_letter}{row_num}",
+                        "values": [[token(Provenance.FLOW4_SYNC_PARAMS)]],
+                    })
+                if ua_col_letter:
+                    batch_data.append({
+                        "range": f"{tab_name}!{ua_col_letter}{row_num}",
+                        "values": [[ts]],
+                    })
             if batch_data:
                 self.client.batch_update_values(
                     spreadsheet_id=spreadsheet_id,
@@ -247,14 +261,23 @@ class ParamsWriter:
         
         # Stamp provenance for each appended row
         us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
-        if us_col_idx:
-            us_col_letter = _col_index_to_a1(us_col_idx)
+        ua_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_at")
+        if us_col_idx or ua_col_idx:
+            us_col_letter = _col_index_to_a1(us_col_idx) if us_col_idx else None
+            ua_col_letter = _col_index_to_a1(ua_col_idx) if ua_col_idx else None
+            ts = _now_iso()
             batch_data = []
             for row_num in range(start_row, end_row + 1):
-                batch_data.append({
-                    "range": f"{tab_name}!{us_col_letter}{row_num}",
-                    "values": [[token(Provenance.FLOW4_SEED_PARAMS)]],
-                })
+                if us_col_letter:
+                    batch_data.append({
+                        "range": f"{tab_name}!{us_col_letter}{row_num}",
+                        "values": [[token(Provenance.FLOW4_SEED_PARAMS)]],
+                    })
+                if ua_col_letter:
+                    batch_data.append({
+                        "range": f"{tab_name}!{ua_col_letter}{row_num}",
+                        "values": [[ts]],
+                    })
             if batch_data:
                 self.client.batch_update_values(
                     spreadsheet_id=spreadsheet_id,
@@ -310,14 +333,21 @@ class ParamsWriter:
         
         # Stamp provenance if Updated Source column exists
         us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
-        if us_col_idx:
-            us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}"
-            self.client.update_values(
-                spreadsheet_id=spreadsheet_id,
-                range_=us_a1,
-                values=[[token(Provenance.FLOW4_SYNC_PARAMS)]],
-                value_input_option="RAW",
-            )
+        ua_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_at")
+        if us_col_idx or ua_col_idx:
+            updates = []
+            if us_col_idx:
+                us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}"
+                updates.append({"range": us_a1, "values": [[token(Provenance.FLOW4_SYNC_PARAMS)]]})
+            if ua_col_idx:
+                ua_a1 = f"{tab_name}!{_col_index_to_a1(ua_col_idx)}{row_number}"
+                updates.append({"range": ua_a1, "values": [[_now_iso()]]})
+            if updates:
+                self.client.batch_update_values(
+                    spreadsheet_id=spreadsheet_id,
+                    data=updates,
+                    value_input_option="RAW",
+                )
         
         # Update is_auto_seeded if column exists
         auto_seeded_col_idx = self._find_column_index(spreadsheet_id, tab_name, "is_auto_seeded")
@@ -357,11 +387,16 @@ class ParamsWriter:
         
         # Build batch update data
         batch_data = []
+        updated_rows = set()
         
         for update in updates:
             row_number = update.get("row_number")
             new_value = update.get("value")
             is_auto_seeded = update.get("is_auto_seeded", False)
+
+            if not isinstance(row_number, int):
+                logger.debug("params_writer.update_batch.skip_bad_row", extra={"row_number": row_number})
+                continue
             
             # Check if approved (skip if yes)
             if approved_col_idx:
@@ -382,6 +417,7 @@ class ParamsWriter:
                     "range": value_cell_a1,
                     "values": [[new_value]],
                 })
+                updated_rows.add(row_number)
             
             # Add auto_seeded update
             if auto_seeded_col_idx:
@@ -390,18 +426,26 @@ class ParamsWriter:
                     "range": auto_seeded_cell_a1,
                     "values": [[is_auto_seeded]],
                 })
+                updated_rows.add(row_number)
         
         if batch_data:
             # Add provenance token for all updated rows if Updated Source column exists
             us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
-            if us_col_idx:
-                for update in updates:
-                    row_number = update.get("row_number")
-                    if isinstance(row_number, int):
+            ua_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_at")
+            if us_col_idx or ua_col_idx:
+                ts = _now_iso()
+                for row_number in updated_rows:
+                    if us_col_idx:
                         us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}"
                         batch_data.append({
                             "range": us_a1,
                             "values": [[token(Provenance.FLOW4_SYNC_PARAMS)]],
+                        })
+                    if ua_col_idx:
+                        ua_a1 = f"{tab_name}!{_col_index_to_a1(ua_col_idx)}{row_number}"
+                        batch_data.append({
+                            "range": ua_a1,
+                            "values": [[ts]],
                         })
             self.client.batch_update_values(
                 spreadsheet_id=spreadsheet_id,
@@ -445,7 +489,10 @@ class ParamsWriter:
         
         batch_data = []
         updated_count = 0
+        touched_rows = set()
         
+        ua_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_at")
+
         # Scan rows starting from row 2 (skip header)
         for row_idx, row in enumerate(all_values[1:], start=2):
             notes_val = row[notes_col_idx - 1] if notes_col_idx and notes_col_idx <= len(row) else None
@@ -474,6 +521,7 @@ class ParamsWriter:
                     "values": [[token(Provenance.FLOW4_SEED_PARAMS)]],
                 })
                 updated_count += 1
+                touched_rows.add(row_idx)
             
             if needs_is_auto_seeded and is_auto_seeded_col_idx:
                 auto_a1 = f"{tab_name}!{_col_index_to_a1(is_auto_seeded_col_idx)}{row_idx}"
@@ -482,6 +530,14 @@ class ParamsWriter:
                     "values": [[True]],
                 })
                 updated_count += 1
+                touched_rows.add(row_idx)
+
+            if ua_col_idx and row_idx in touched_rows:
+                ua_a1 = f"{tab_name}!{_col_index_to_a1(ua_col_idx)}{row_idx}"
+                batch_data.append({
+                    "range": ua_a1,
+                    "values": [[_now_iso()]],
+                })
         
         if batch_data:
             self.client.batch_update_values(

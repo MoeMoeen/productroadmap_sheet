@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 import logging
+from datetime import datetime, timezone
 from app.config import settings
 from app.sheets.client import SheetsClient
 from app.utils.header_utils import normalize_header
@@ -49,6 +50,19 @@ class GoogleSheetsIntakeWriter:
                 return i
         return None
 
+    def _find_updated_at_column_index(self, sheet_id: str, tab_name: str) -> Optional[int]:
+        header_row = getattr(settings, "INTAKE_HEADER_ROW_INDEX", 1) or 1
+        range_a1 = f"{tab_name}!{header_row}:{header_row}"
+        values = self.client.get_values(sheet_id, range_a1)
+        headers = values[0] if values else []
+        for i, h in enumerate(headers, start=1):
+            if h is None:
+                continue
+            name = normalize_header(str(h))
+            if name in {"updated_at", "updated at"}:
+                return i
+        return None
+
     def write_initiative_key(self, sheet_id: str, tab_name: str, row_number: int, initiative_key: str) -> None:
         """Write the initiative_key to the specified row in the intake sheet."""
         col_idx = self._find_key_column_index(sheet_id, tab_name)
@@ -57,9 +71,15 @@ class GoogleSheetsIntakeWriter:
             return
         col_a1 = _col_index_to_a1(col_idx)
         cell_a1 = f"{tab_name}!{col_a1}{row_number}"
-        self.client.update_values(
+        updates = [{"range": cell_a1, "values": [[initiative_key]]}]
+
+        ua_col_idx = self._find_updated_at_column_index(sheet_id, tab_name)
+        if ua_col_idx:
+            ua_a1 = f"{tab_name}!{_col_index_to_a1(ua_col_idx)}{row_number}"
+            updates.append({"range": ua_a1, "values": [[datetime.now(timezone.utc).isoformat()]]})
+
+        self.client.batch_update_values(
             spreadsheet_id=sheet_id,
-            range_=cell_a1,
-            values=[[initiative_key]],
+            data=updates,
             value_input_option="RAW",
         )

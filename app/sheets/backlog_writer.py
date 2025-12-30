@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -40,6 +40,7 @@ def _list_join(values: Any) -> str:
 def initiative_to_backlog_row(initiative: Initiative) -> List[Any]:
     """Convert an Initiative ORM object to a row matching CENTRAL_BACKLOG_HEADER order."""
     deps_inits = _list_join(getattr(initiative, "dependencies_initiatives", None))
+    now_ts = datetime.now(timezone.utc)
 
     return [
         _to_sheet_value(getattr(initiative, "initiative_key", None)),
@@ -65,7 +66,7 @@ def initiative_to_backlog_row(initiative: Initiative) -> List[Any]:
         _to_sheet_value(getattr(initiative, "llm_summary", None)),
         _to_sheet_value(getattr(initiative, "llm_notes", None)),
         _to_sheet_value(getattr(initiative, "strategic_priority_coefficient", None)),
-        _to_sheet_value(getattr(initiative, "updated_at", None)),
+        _to_sheet_value(now_ts),
         token(Provenance.FLOW1_BACKLOGSHEET_WRITE),
     ]
 

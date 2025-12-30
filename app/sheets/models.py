@@ -50,6 +50,7 @@ PARAMS_HEADER_MAP = {
 # Only include well-known, stable fields here to avoid collisions.
 INTAKE_HEADER_MAP: Dict[str, List[str]] = {
     "initiative_key": ["Initiative Key", "InitiativeKey", "initiative_key", "initiative key"],
+    "updated_at": ["Updated At", "updated_at", "updated at"],
 }
 
 # ProductOps Scoring output columns and header aliases

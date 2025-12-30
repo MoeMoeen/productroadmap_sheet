@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Optional, List, Dict, Any
 import logging
+from datetime import datetime, timezone
 
 from app.sheets.client import SheetsClient
 from app.sheets.models import MATHMODELS_HEADER_MAP
@@ -17,6 +18,10 @@ from app.utils.header_utils import normalize_header
 from app.utils.provenance import Provenance, token
 
 logger = logging.getLogger(__name__)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class MathModelsWriter:
@@ -60,14 +65,21 @@ class MathModelsWriter:
 
         # Stamp provenance if Updated Source column exists
         us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
-        if us_col_idx:
-            us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}"
-            self.client.update_values(
-                spreadsheet_id=spreadsheet_id,
-                range_=us_a1,
-                values=[[token(Provenance.FLOW4_SUGGEST_MATHMODELS)]],
-                value_input_option="RAW",
-            )
+        ua_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_at")
+        if us_col_idx or ua_col_idx:
+            updates = []
+            if us_col_idx:
+                us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}"
+                updates.append({"range": us_a1, "values": [[token(Provenance.FLOW4_SUGGEST_MATHMODELS)]]})
+            if ua_col_idx:
+                ua_a1 = f"{tab_name}!{_col_index_to_a1(ua_col_idx)}{row_number}"
+                updates.append({"range": ua_a1, "values": [[_now_iso()]]})
+            if updates:
+                self.client.batch_update_values(
+                    spreadsheet_id=spreadsheet_id,
+                    data=updates,
+                    value_input_option="RAW",
+                )
     
     def write_llm_notes(
         self,
@@ -94,14 +106,21 @@ class MathModelsWriter:
 
         # Stamp provenance if Updated Source column exists
         us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
-        if us_col_idx:
-            us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}"
-            self.client.update_values(
-                spreadsheet_id=spreadsheet_id,
-                range_=us_a1,
-                values=[[token(Provenance.FLOW4_SUGGEST_MATHMODELS)]],
-                value_input_option="RAW",
-            )
+        ua_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_at")
+        if us_col_idx or ua_col_idx:
+            updates = []
+            if us_col_idx:
+                us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}"
+                updates.append({"range": us_a1, "values": [[token(Provenance.FLOW4_SUGGEST_MATHMODELS)]]})
+            if ua_col_idx:
+                ua_a1 = f"{tab_name}!{_col_index_to_a1(ua_col_idx)}{row_number}"
+                updates.append({"range": ua_a1, "values": [[_now_iso()]]})
+            if updates:
+                self.client.batch_update_values(
+                    spreadsheet_id=spreadsheet_id,
+                    data=updates,
+                    value_input_option="RAW",
+                )
     
     def write_suggestions_batch(
         self,
@@ -157,6 +176,7 @@ class MathModelsWriter:
         # Build batch update data and track which rows were actually updated
         batch_data = []
         updated_rows = set()  # Track rows that had at least one cell written
+        ua_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_at")
         
         for suggestion in suggestions:
             row_number = suggestion.get("row_number")
@@ -205,13 +225,21 @@ class MathModelsWriter:
         if batch_data:
             # If Updated Source column exists, add provenance token ONLY for rows that were actually updated
             us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
-            if us_col_idx:
+            if us_col_idx or ua_col_idx:
+                ts = _now_iso()
                 for row_number in updated_rows:
-                    us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}"
-                    batch_data.append({
-                        "range": us_a1,
-                        "values": [[token(Provenance.FLOW4_SUGGEST_MATHMODELS)]],
-                    })
+                    if us_col_idx:
+                        us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}"
+                        batch_data.append({
+                            "range": us_a1,
+                            "values": [[token(Provenance.FLOW4_SUGGEST_MATHMODELS)]],
+                        })
+                    if ua_col_idx:
+                        ua_a1 = f"{tab_name}!{_col_index_to_a1(ua_col_idx)}{row_number}"
+                        batch_data.append({
+                            "range": ua_a1,
+                            "values": [[ts]],
+                        })
 
             self.client.batch_update_values(
                 spreadsheet_id=spreadsheet_id,

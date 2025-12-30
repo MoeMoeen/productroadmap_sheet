@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from typing import Dict, List, Any, cast
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -26,6 +27,10 @@ from app.sheets.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 # Note: PRODUCTOPS_SCORE_OUTPUT_COLUMNS and SCORE_FIELD_TO_HEADERS are imported
 # from app.sheets.models (centralized). Do not redefine locally.
@@ -87,6 +92,9 @@ def write_scores_to_productops_sheet(
             continue
         if nh in {"updated_source", "updated source"}:
             col_map["updated_source"] = i
+            continue
+        if nh in {"updated_at", "updated at"}:
+            col_map["updated_at"] = i
             continue
         # If header matches any known alias, map to its canonical field
         if nh in alias_lookup:
@@ -164,13 +172,22 @@ def write_scores_to_productops_sheet(
             row_updated = True
 
         # If row had score updates and sheet has an Updated Source column, set it
-        if row_updated and "updated_source" in col_map:
-            us_col_idx = col_map["updated_source"]
-            cell_range = _cell_range_for_update(tab_name, us_col_idx, row_idx)
-            batch_updates.append({
-                "range": cell_range,
-                "values": [[token(Provenance.FLOW3_PRODUCTOPSSHEET_WRITE_SCORES)]],
-            })
+        if row_updated:
+            ts = _now_iso()
+            if "updated_source" in col_map:
+                us_col_idx = col_map["updated_source"]
+                cell_range = _cell_range_for_update(tab_name, us_col_idx, row_idx)
+                batch_updates.append({
+                    "range": cell_range,
+                    "values": [[token(Provenance.FLOW3_PRODUCTOPSSHEET_WRITE_SCORES)]],
+                })
+            if "updated_at" in col_map:
+                ua_col_idx = col_map["updated_at"]
+                cell_range = _cell_range_for_update(tab_name, ua_col_idx, row_idx)
+                batch_updates.append({
+                    "range": cell_range,
+                    "values": [[ts]],
+                })
 
     # Step 5: Execute single batch update if we have any updates
     if batch_updates:
@@ -221,11 +238,14 @@ def write_status_to_productops_sheet(
     # Locate initiative_key and Status columns
     key_col = None
     status_col = None
+    updated_at_col = None
     for i, nh in enumerate(norm_headers):
         if nh == "initiative_key":
             key_col = i
         elif nh in {"status", "last_run_status", "run_status"}:
             status_col = i
+        elif nh in {"updated_at", "updated at"}:
+            updated_at_col = i
 
     if key_col is None:
         logger.warning("productops_writer.status.no_key_column", extra={"tab": tab_name})
@@ -253,6 +273,12 @@ def write_status_to_productops_sheet(
             "range": cell_range,
             "values": [[msg]],
         })
+        if updated_at_col is not None:
+            ua_range = _cell_range_for_update(tab_name, updated_at_col, row_idx)
+            batch_updates.append({
+                "range": ua_range,
+                "values": [[_now_iso()]],
+            })
         written += 1
 
     if batch_updates:
