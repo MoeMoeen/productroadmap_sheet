@@ -37,13 +37,39 @@ class ParamsWriter:
     def __init__(self, client: SheetsClient) -> None:
         self.client = client
     
+    def _get_last_data_row(self, spreadsheet_id: str, tab_name: str) -> int:
+        """Return last row index (1-based) that has data in initiative_key column.
+        
+        Returns 1 if only header exists.
+        
+        Important: values[idx] corresponds to sheet row (idx + 1).
+        """
+        try:
+            init_key_col_idx = self._find_column_index(spreadsheet_id, tab_name, "initiative_key") or 1
+            col_letter = _col_index_to_a1(init_key_col_idx)
+
+            values = self.client.get_values(spreadsheet_id, f"{tab_name}!{col_letter}:{col_letter}") or []
+
+            # Walk backwards; values[idx] corresponds to row (idx + 1)
+            for idx in range(len(values) - 1, 0, -1):  # skip header at idx=0
+                cell = values[idx][0] if (isinstance(values[idx], list) and values[idx]) else ""
+                if str(cell).strip():
+                    return idx + 1  # Convert list index to sheet row number
+
+            return 1
+        except Exception as e:
+            logger.error(f"Error finding last data row in {tab_name}: {e}")
+            return 1
+    
     def append_parameters(
         self,
         spreadsheet_id: str,
         tab_name: str,
         parameters: List[Dict[str, Any]],
     ) -> None:
-        """Append new parameter rows to the Params tab.
+        """Append new parameter rows to the Params tab using append API.
+        
+        Uses append_values() + updatedRange to guarantee no race conditions.
         
         Each parameter dict should have:
         {
@@ -74,47 +100,69 @@ class ParamsWriter:
         header = header_values[0]
         column_indices = self._build_column_indices(header)
         
-        # Get current last row
-        grid_rows, _ = self.client.get_sheet_grid_size(spreadsheet_id, tab_name)
-        start_append_row = grid_rows + 1
-        
         # Build rows in column order
         rows_to_append = []
         for param in parameters:
             row = self._build_row(param, column_indices, len(header))
             rows_to_append.append(row)
         
-        # Append rows
-        if rows_to_append:
-            end_col = _col_index_to_a1(len(header))
-            range_a1 = f"{tab_name}!A{start_append_row}:{end_col}{start_append_row + len(rows_to_append) - 1}"
-            
-            self.client.update_values(
-                spreadsheet_id=spreadsheet_id,
-                range_=range_a1,
-                values=rows_to_append,
-                value_input_option="RAW",
+        if not rows_to_append:
+            return
+        
+        # Append rows and capture response with updatedRange
+        range_a1 = f"{tab_name}!A:A"
+        append_resp = self.client.append_values(
+            spreadsheet_id=spreadsheet_id,
+            range_=range_a1,
+            values=rows_to_append,
+            value_input_option="RAW",
+        )
+        
+        # Parse updatedRange from response to get exact row numbers
+        import re
+        updates = append_resp.get("updates", {}) if isinstance(append_resp, dict) else {}
+        updated_range = updates.get("updatedRange")  # e.g. "Params!A14:N19"
+        
+        if not updated_range:
+            logger.warning(
+                "params_writer.append_parameters.no_updatedRange",
+                extra={"response": str(append_resp)[:200]}
             )
-            
-            # Stamp provenance for each appended row if Updated Source column exists
-            us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
-            if us_col_idx:
-                batch_data = []
-                for i in range(len(rows_to_append)):
-                    row_num = start_append_row + i
-                    us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_num}"
-                    batch_data.append({
-                        "range": us_a1,
-                        "values": [[token(Provenance.FLOW4_SYNC_PARAMS)]],
-                    })
-                if batch_data:
-                    self.client.batch_update_values(
-                        spreadsheet_id=spreadsheet_id,
-                        data=batch_data,
-                        value_input_option="RAW",
-                    )
-            
-            logger.info(f"Appended {len(rows_to_append)} parameters to {tab_name}")
+            return
+        
+        # Parse "Params!A14:N19" to extract start_row and end_row
+        m = re.search(r"!([A-Z]+)(\d+):([A-Z]+)(\d+)$", updated_range)
+        if not m:
+            logger.warning(
+                "params_writer.append_parameters.cannot_parse_updatedRange",
+                extra={"updatedRange": updated_range}
+            )
+            return
+        
+        start_row = int(m.group(2))
+        end_row = int(m.group(4))
+        
+        # Stamp provenance for each appended row
+        us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
+        if us_col_idx:
+            us_col_letter = _col_index_to_a1(us_col_idx)
+            batch_data = []
+            for row_num in range(start_row, end_row + 1):
+                batch_data.append({
+                    "range": f"{tab_name}!{us_col_letter}{row_num}",
+                    "values": [[token(Provenance.FLOW4_SYNC_PARAMS)]],
+                })
+            if batch_data:
+                self.client.batch_update_values(
+                    spreadsheet_id=spreadsheet_id,
+                    data=batch_data,
+                    value_input_option="RAW",
+                )
+        
+        logger.info(
+            "params_writer.append_parameters.complete",
+            extra={"rows_appended": len(rows_to_append), "updated_range": updated_range}
+        )
     
     def append_new_params(
         self,
@@ -164,28 +212,47 @@ class ParamsWriter:
         if not rows_to_append:
             return
         
-        # Append via SheetsClient helper (append API determines next row automatically)
+        # Append rows and capture response with updatedRange
         range_a1 = f"{tab_name}!A:A"
-        self.client.append_values(
+        append_resp = self.client.append_values(
             spreadsheet_id=spreadsheet_id,
             range_=range_a1,
             values=rows_to_append,
             value_input_option="RAW",
         )
         
-        # Stamp provenance for each appended row if Updated Source column exists
+        # Parse updatedRange from response to get exact row numbers
+        updates = append_resp.get("updates", {}) if isinstance(append_resp, dict) else {}
+        updated_range = updates.get("updatedRange")  # e.g. "Params!A14:N19"
+        
+        if not updated_range:
+            logger.warning(
+                "params_writer.append_new_params.no_updatedRange",
+                extra={"response": str(append_resp)[:200]}
+            )
+            return
+        
+        # Parse "Params!A14:N19" to extract start_row and end_row
+        import re
+        m = re.search(r"!([A-Z]+)(\d+):([A-Z]+)(\d+)$", updated_range)
+        if not m:
+            logger.warning(
+                "params_writer.append_new_params.cannot_parse_updatedRange",
+                extra={"updatedRange": updated_range}
+            )
+            return
+        
+        start_row = int(m.group(2))
+        end_row = int(m.group(4))
+        
+        # Stamp provenance for each appended row
         us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
         if us_col_idx:
-            # Determine starting row by reading grid size
-            grid_rows, _ = self.client.get_sheet_grid_size(spreadsheet_id, tab_name)
-            # Last appended rows occupy positions (grid_rows - len(rows_to_append) + 1) .. grid_rows
-            start_row = grid_rows - len(rows_to_append) + 1
+            us_col_letter = _col_index_to_a1(us_col_idx)
             batch_data = []
-            for i in range(len(rows_to_append)):
-                row_num = start_row + i
-                us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_num}"
+            for row_num in range(start_row, end_row + 1):
                 batch_data.append({
-                    "range": us_a1,
+                    "range": f"{tab_name}!{us_col_letter}{row_num}",
                     "values": [[token(Provenance.FLOW4_SEED_PARAMS)]],
                 })
             if batch_data:
@@ -194,7 +261,11 @@ class ParamsWriter:
                     data=batch_data,
                     value_input_option="RAW",
                 )
-        logger.info(f"Appended {len(rows_to_append)} params to {tab_name}")
+        
+        logger.info(
+            "params_writer.append_new_params.complete",
+            extra={"rows_appended": len(rows_to_append), "updated_range": updated_range}
+        )
 
     def update_parameter_value(
         self,
@@ -363,9 +434,6 @@ class ParamsWriter:
         if not all_values or len(all_values) < 2:
             return 0
         
-        header = all_values[0]
-        column_indices = self._build_column_indices(header)
-        
         # Find relevant columns
         notes_col_idx = self._find_column_index(spreadsheet_id, tab_name, "notes")
         updated_source_col_idx = self._find_column_index(spreadsheet_id, tab_name, "Updated_Source")
@@ -397,7 +465,7 @@ class ParamsWriter:
             
             # Check if backfill needed
             needs_updated_source = not updated_source_val or updated_source_val == ""
-            needs_is_auto_seeded = not is_auto_seeded_val or is_auto_seeded_val == "" or is_auto_seeded_val == False
+            needs_is_auto_seeded = not is_auto_seeded_val or is_auto_seeded_val == "" or not is_auto_seeded_val
             
             if needs_updated_source and updated_source_col_idx:
                 us_a1 = f"{tab_name}!{_col_index_to_a1(updated_source_col_idx)}{row_idx}"

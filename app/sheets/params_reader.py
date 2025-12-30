@@ -81,32 +81,49 @@ class ParamsReader:
         start_data_row: int = 2,
         max_rows: Optional[int] = None,
     ) -> List[ParamRowPair]:
-        """Read Param rows for a given sheet/tab as (row_number, ParamRow)."""
+        """Read Param rows for a given sheet/tab as (row_number, ParamRow).
         
-        # Get grid size to build precise A1 range
-        grid_rows, grid_cols = self.client.get_sheet_grid_size(spreadsheet_id, tab_name)
-        last_row = grid_rows if max_rows is None else min(grid_rows, header_row + max_rows)
-        end_col_letter = _col_index_to_a1(grid_cols)
-        range_ = f"{tab_name}!A{header_row}:{end_col_letter}{last_row}"
+        Uses open-ended range (A2:{end_col} without end row) to avoid scanning
+        thousands of empty grid rows. Sheets API stops at last data automatically.
         
-        raw_values = self.client.get_values(
+        Empty rows are debug-logged only. Partial rows (missing required fields)
+        are warned about.
+        """
+        # Read header row only
+        header_range = f"{tab_name}!{header_row}:{header_row}"
+        header_values = self.client.get_values(
             spreadsheet_id=spreadsheet_id,
-            range_=range_,
+            range_=header_range,
             value_render_option="UNFORMATTED_VALUE",
         )
         
-        if not raw_values:
+        if not header_values or not header_values[0]:
+            logger.info(f"Params tab '{tab_name}' has no header row")
             return []
         
-        header = raw_values[0]
-        data_rows = raw_values[1:]
+        header = header_values[0]
+        end_col_letter = _col_index_to_a1(len(header))
+        
+        # Read data with open-ended range (no end row specified)
+        # Sheets API will stop at the last row with data
+        data_range = f"{tab_name}!A{start_data_row}:{end_col_letter}"
+        data_values = self.client.get_values(
+            spreadsheet_id=spreadsheet_id,
+            range_=data_range,
+            value_render_option="UNFORMATTED_VALUE",
+        ) or []
+        
+        # Optionally cap at max_rows
+        if max_rows is not None:
+            data_values = data_values[:max_rows]
         
         rows: List[ParamRowPair] = []
         current_row_number = start_data_row
         
-        for row_cells in data_rows:
+        for row_cells in data_values:
             if self._is_empty_row(row_cells):
-                logger.warning(f"Skipping empty Param row {current_row_number}")
+                # Empty rows are normal; log at debug level only
+                logger.debug("params_reader.skip_empty_row", extra={"row": current_row_number})
                 current_row_number += 1
                 continue
             
@@ -115,8 +132,12 @@ class ParamsReader:
             ik = row_dict.get("initiative_key")
             pn = row_dict.get("param_name")
 
+            # Only warn on partially-filled rows missing required fields
             if not (isinstance(ik, str) and ik.strip()) or not (isinstance(pn, str) and pn.strip()):
-                logger.warning(f"Skipping Param row {current_row_number} due to missing initiative_key or param_name")
+                logger.warning(
+                    "params_reader.skip_missing_required_fields",
+                    extra={"row": current_row_number, "initiative_key": ik, "param_name": pn}
+                )
                 current_row_number += 1
                 continue
 
@@ -124,11 +145,17 @@ class ParamsReader:
                 param_row = ParamRow(**row_dict)
                 rows.append((current_row_number, param_row))
             except Exception as e:
-                # Log parsing errors but don't fail the entire read
-                print(f"Error parsing Param row {current_row_number}: {e}")
+                logger.warning(
+                    "params_reader.parse_error",
+                    extra={"row": current_row_number, "error": str(e)[:200]}
+                )
             
             current_row_number += 1
         
+        logger.info(
+            "params_reader.complete",
+            extra={"tab": tab_name, "rows_read": len(rows), "total_scanned": len(data_values)}
+        )
         return rows
     
     def _row_to_dict(self, header: List[Any], row_cells: List[Any]) -> Dict[str, Any]:

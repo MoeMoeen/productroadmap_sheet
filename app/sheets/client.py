@@ -127,20 +127,27 @@ class SheetsClient:
         range_: str,
         values: List[List[Any]],
         value_input_option: str = "USER_ENTERED",
-    ) -> None:
-        """Append rows to a sheet using the Sheets append API."""
+    ) -> Dict[str, Any]:
+        """Append rows to a sheet using the Sheets append API.
+        
+        Returns the full API response which includes updates.updatedRange
+        showing exactly which rows were inserted.
+        """
         body = {"values": values}
-        (
+        resp = (
             self.service.spreadsheets()
             .values()
             .append(
                 spreadsheetId=spreadsheet_id,
                 range=range_,
                 valueInputOption=value_input_option,
+                insertDataOption="INSERT_ROWS",
+                includeValuesInResponse=False,
                 body=body,
             )
             .execute()
         )
+        return resp
 
     def batch_update(self, spreadsheet_id: str, requests: list[dict]) -> None:
         """Send a batchUpdate with the provided list of requests."""
@@ -196,4 +203,3 @@ class SheetsClient:
                 "updated_ranges": result.get("totalUpdatedRanges"),
             },
         )
-    
