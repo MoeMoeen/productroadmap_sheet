@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 # Centralized header mapping: canonical field name -> list of accepted aliases
+
+# ProductOps MathModels tab columns and header aliases
 MATHMODELS_HEADER_MAP = {
     "initiative_key": ["initiative_key"],
     "formula_text": ["formula_text", "formula_text_final", "formula"],
@@ -27,6 +29,7 @@ MATHMODELS_HEADER_MAP = {
     "updated_at": ["updated_at", "Updated At", "updated at"],
 }
 
+# ProductOps Params tab columns and header aliases
 PARAMS_HEADER_MAP = {
     "initiative_key": ["initiative_key", "Initiative Key", "Initiative_Key", "initiative key"],
     "param_name": ["param_name", "parameter_name", "name"],
@@ -71,6 +74,7 @@ PRODUCTOPS_SCORE_OUTPUT_COLUMNS: List[str] = [
     "overall_score",
 ]
 
+# Mapping from score field names to possible header aliases used in ProductOps sheet Scoring_inputs tab
 SCORE_FIELD_TO_HEADERS: Dict[str, List[str]] = {
     "rice_value_score": ["rice_value_score", "rice: value score"],
     "rice_effort_score": ["rice_effort_score", "rice: effort score"],
@@ -120,6 +124,7 @@ CENTRAL_BACKLOG_HEADER: List[str] = [
     "Updated Source",
 ]
 
+# Mapping from Central Backlog header names to model field names
 CENTRAL_HEADER_TO_FIELD: Dict[str, str] = {
     "Initiative Key": "initiative_key",
     "Title": "title",
