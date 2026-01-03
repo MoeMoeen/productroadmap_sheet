@@ -17,9 +17,11 @@ class InitiativeMathModel(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     framework = Column(String(50), nullable=False, default="MATH_MODEL", index=True)
+    model_name = Column(String(150), nullable=True)
     formula_text = Column(Text, nullable=False)
     parameters_json = Column(JSON, nullable=True)  # e.g. {"traffic": {...}, "uplift": {...}}
     assumptions_text = Column(Text, nullable=True)
+    model_description_free_text = Column(Text, nullable=True)
 
     suggested_by_llm = Column(Boolean, nullable=False, default=False)
     approved_by_user = Column(Boolean, nullable=False, default=False)
