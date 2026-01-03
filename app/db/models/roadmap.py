@@ -33,4 +33,4 @@ class Roadmap(Base):
     )
 
     entries = relationship("RoadmapEntry", back_populates="roadmap", cascade="all, delete-orphan")
-    source_portfolio = relationship("Portfolio")
+    source_portfolio = relationship("Portfolio", back_populates="published_roadmaps")

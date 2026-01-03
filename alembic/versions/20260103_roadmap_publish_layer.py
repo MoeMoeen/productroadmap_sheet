@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "20260103_roadmap_publish_layer"
-down_revision = "20260103_phase5_optimization_models"
+revision = "r20260103_publish"
+down_revision = "r20260103_p5_opt"
 branch_labels = None
 depends_on = None
 
@@ -41,10 +41,20 @@ def upgrade() -> None:
         ["source_portfolio_item_id"],
         unique=False,
     )
+    op.create_unique_constraint(
+        "uq_roadmap_entries_roadmap_initiative",
+        "roadmap_entries",
+        ["roadmap_id", "initiative_id"],
+    )
 
 
 def downgrade() -> None:
     op.drop_index("ix_roadmap_entries_source_portfolio_item_id", table_name="roadmap_entries")
+    op.drop_constraint(
+        "uq_roadmap_entries_roadmap_initiative",
+        "roadmap_entries",
+        type_="unique",
+    )
 
     with op.batch_alter_table("roadmap_entries") as batch:
         batch.drop_column("source_portfolio_item_id")

@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     JSON,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -176,12 +177,16 @@ class Portfolio(Base):
     scenario = relationship("OptimizationScenario", back_populates="portfolios")
     run = relationship("OptimizationRun", back_populates="portfolio")
     items = relationship("PortfolioItem", back_populates="portfolio", cascade="all, delete-orphan")
+    published_roadmaps = relationship("Roadmap", back_populates="source_portfolio", cascade="all, delete-orphan")
 
 
 class PortfolioItem(Base):
     """Membership of initiatives in a portfolio."""
 
     __tablename__ = "portfolio_items"
+    __table_args__ = (
+        UniqueConstraint("portfolio_id", "initiative_id", name="uq_portfolio_items_portfolio_initiative"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     portfolio_id = Column(Integer, ForeignKey("portfolios.id"), nullable=False, index=True)
@@ -206,4 +211,6 @@ class PortfolioItem(Base):
     )
 
     portfolio = relationship("Portfolio", back_populates="items")
-    initiative = relationship("Initiative")
+    published_roadmap_entries = relationship("RoadmapEntry", back_populates="source_portfolio_item")
+    initiative = relationship("Initiative", back_populates="portfolio_items")
+

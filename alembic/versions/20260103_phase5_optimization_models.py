@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "20260103_phase5_optimization_models"
+revision = "r20260103_p5_opt"
 down_revision = "20251221_action_runs"
 branch_labels = None
 depends_on = None

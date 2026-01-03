@@ -1,6 +1,6 @@
 # productroadmap_sheet_project/app/db/models/roadmap_entry.py
 
-from sqlalchemy import Column, ForeignKey, Integer, String, Boolean, Text
+from sqlalchemy import Column, ForeignKey, Integer, String, Boolean, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -12,6 +12,9 @@ class RoadmapEntry(Base):
     """
 
     __tablename__ = "roadmap_entries"
+    __table_args__ = (
+        UniqueConstraint("roadmap_id", "initiative_id", name="uq_roadmap_entries_roadmap_initiative"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
 
@@ -30,4 +33,4 @@ class RoadmapEntry(Base):
 
     roadmap = relationship("Roadmap", back_populates="entries")
     initiative = relationship("Initiative", back_populates="roadmap_entries")
-    source_portfolio_item = relationship("PortfolioItem")
+    source_portfolio_item = relationship("PortfolioItem", back_populates="published_roadmap_entries")

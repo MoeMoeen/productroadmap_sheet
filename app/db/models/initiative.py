@@ -148,3 +148,4 @@ class Initiative(Base):
     roadmap_entries = relationship("RoadmapEntry", back_populates="initiative")
     scores = relationship("InitiativeScore", back_populates="initiative")
     params = relationship("InitiativeParam", back_populates="initiative")
+    portfolio_items = relationship("PortfolioItem", back_populates="initiative")
