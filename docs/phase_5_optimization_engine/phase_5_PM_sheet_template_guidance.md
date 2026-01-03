@@ -2,24 +2,34 @@ Below is **non-binding Optimization Center sheet template guidance**: recommende
 
 ---
 
-# Optimization Center — Recommended Sheet Template (Non-binding)
+# Optimization Center — Recommended Sheet Template (Non-binding, Updated & Locked)
 
-## Global principles
+This is **UX guidance only**.
+Nothing here is enforced by code — PMs can reorder columns, add new columns, insert formulas, and experiment freely.
+The backend only relies on **recognized headers**, not column order.
+
+---
+
+## Global principles (unchanged, reaffirmed)
 
 * **PMs can move/add columns anytime**; backend uses header names (aliases), not positions.
 * Every tab should include **3 system columns** (recommended):
 
-  * `run_status` (backend writes per-row job outcome)
-  * `updated_source` (backend writes provenance token)
-  * `updated_at` (backend writes UTC timestamp)
+  * `run_status` — backend writes per-row job outcome
+  * `updated_source` — backend writes provenance
+  * `updated_at` — backend writes UTC timestamp
 * Use **filters + conditional formatting** to make workflows obvious (especially Candidates + Results).
-* Keep the solver-driving fields **simple and human-enterable**; keep complex structure in JSON cells only when necessary.
+* Keep solver-driving inputs **simple and human-enterable**; use JSON only where structure is genuinely needed.
 
 ---
 
 ## Tab 1 — `Candidates`
 
-**Purpose:** The working shortlist of initiatives eligible for optimization (a “graduation” surface).
+**Purpose:**
+A **read-only working shortlist** of initiatives eligible for optimization, with a **selection checkbox**.
+This is a *view + selection surface*, **not** a data entry surface.
+
+All initiative data here is expected to be **formula-copied** from Central Backlog.
 
 ### Recommended columns (backend-recognized)
 
@@ -39,40 +49,57 @@ Below is **non-binding Optimization Center sheet template guidance**: recommende
 * `synergy_group_keys`
 * `active_scoring_framework`
 * `active_overall_score`
+
+**Contribution display (derived, read-only):**
+
 * `north_star_contribution`
+  *(single number, derived from `kpi_contribution_json[north_star]`)*
+* `strategic_kpi_contributions`
+  *(summary string, derived from `kpi_contribution_json` for strategic KPIs)*
+
+**KPI alignment (derived, read-only):**
+
 * `immediate_kpi_key`
-* `primary_kpi_key`
+
+* `metric_chain_json`
+
 * `status`
 
-### Recommended PM-only helper columns (sheet-only)
+> ❌ `primary_kpi_key` is **removed** and must not appear.
 
-* `is_selected_for_run` (checkbox)
+### PM-only helper columns (sheet-only)
+
+* `is_selected_for_run` (checkbox — **the only interactive control here**)
 * `notes`
-* `owner` (if you want)
-* `confidence` / `data_quality` (if you want)
-* `why_in_candidate_pool` (formula that checks completeness)
+* `why_in_candidate_pool` (formula: completeness / graduation logic)
+* `confidence`, `data_quality`, etc. (optional)
 
 ### UX tips
 
-* Filter default view: `is_selected_for_run = TRUE` and `run_status != OK`
+* Default filter:
+
+  * `is_selected_for_run = TRUE`
+  * `run_status != OK`
 * Conditional formatting:
 
-  * highlight missing `engineering_tokens`
-  * highlight mandatory with missing `mandate_reason`
-  * highlight prerequisite_keys that look malformed (e.g., no “INIT-”)
+  * missing `engineering_tokens`
+  * mandatory initiatives missing `mandate_reason`
+  * malformed `prerequisite_keys` (e.g., no `INIT-`)
 
 ---
 
 ## Tab 2 — `Scenario_Config`
 
-**Purpose:** Define the scenario (period + objective mode + capacity + weights).
+**Purpose:**
+Define **how** the optimizer should run.
 
 ### Recommended columns (backend-recognized)
 
 * `scenario_name`
 * `period_key`
 * `capacity_total_tokens`
-* `objective_mode` (`north_star` | `weighted_kpis` | `lexicographic`)
+* `objective_mode`
+  (`north_star` | `weighted_kpis` | `lexicographic`)
 * `objective_weights_json`
 * `notes`
 
@@ -81,26 +108,34 @@ Below is **non-binding Optimization Center sheet template guidance**: recommende
 * `active_north_star_kpi_key` (lookup from ProductOps → Metrics_Config)
 * `active_strategic_kpis` (lookup/list)
 * `weights_validated` (formula)
-* `last_used_run_id` (formula/vlookup from Runs)
+* `last_used_run_id` (vlookup from Runs)
 
 ### UX tips
 
-* Use a data validation dropdown for `objective_mode`.
+* Use a dropdown for `objective_mode`.
 * For `objective_weights_json`:
 
-  * keep it readable; one JSON cell is fine in v1
-  * PMs can maintain weights in helper columns and build JSON with a formula if desired
+  * JSON is acceptable in v1
+  * PMs may maintain weights in helper columns and build JSON via formula
+
+**Normalization reminder (for PMs):**
+
+* `weighted_kpis` mode uses **normalized contributions**
+* Default normalization scale = **Targets**
 
 ---
 
 ## Tab 3 — `Constraints`
 
-**Purpose:** Structured constraint rows (floors/caps/targets/bundles/exclusions/etc.).
+**Purpose:**
+Define **governance and feasibility rules**.
 
 ### Recommended columns (backend-recognized)
 
-* `constraint_type` (floor/cap/mandatory/dependency/bundle/target/exclusion)
-* `dimension` (market/department/category/global/kpi)
+* `constraint_type`
+  (`floor` | `cap` | `mandatory` | `dependency` | `bundle` | `exclusion` | `target`)
+* `dimension`
+  (`market` | `department` | `category` | `global` | `kpi`)
 * `key`
 * `min_tokens`
 * `max_tokens`
@@ -110,24 +145,28 @@ Below is **non-binding Optimization Center sheet template guidance**: recommende
 
 ### PM-only helper columns
 
-* `is_active` (checkbox) — if you want soft toggling without deleting rows
-* `priority` (if you want future ordering)
-* `source` (Leadership/Finance/etc.)
+* `is_active` (checkbox, optional)
+* `priority` (future)
+* `source` (Leadership / Finance / etc.)
 
 ### UX tips
 
-* Treat Constraints as “rule rows” — keep them small, clear, and readable.
-* If you add `is_active`, backend can ignore it now; PM can use it for experimentation.
+* Treat each row as a **single rule**.
+* Backend compiles this tab into an `OptimizationConstraintSet`.
 
 ---
 
 ## Tab 4 — `Targets`
 
-**Purpose:** Explicit KPI targets by market or global (cleaner than embedding in Constraints rows).
+**Purpose:**
+Define **KPI targets**, used for:
+
+* constraints
+* normalization (weighted objective)
 
 ### Recommended columns (backend-recognized)
 
-* `market` (use `GLOBAL` for global targets)
+* `market` (`GLOBAL` allowed)
 * `kpi_key`
 * `target_value`
 * `floor_or_goal` (`floor` | `goal`)
@@ -136,21 +175,22 @@ Below is **non-binding Optimization Center sheet template guidance**: recommende
 ### PM-only helper columns
 
 * `unit` (lookup from Metrics_Config)
-* `owner` (Finance/Analytics)
-* `confidence` (high/med/low)
+* `owner`
+* `confidence`
 
 ### UX tips
 
-* Strongly recommend Targets be only **North Star or Strategic KPIs** (your locked rule).
-* Keep target_value in KPI-native units.
+* KPI keys must be **North Star or Strategic KPIs only**.
+* Target values are entered in **native KPI units**.
 
 ---
 
 ## Tab 5 — `Runs`
 
-**Purpose:** Audit + history of optimization runs.
+**Purpose:**
+Execution history and audit trail.
 
-### Recommended columns (backend-recognized / backend-written)
+### Backend-written columns
 
 * `run_id`
 * `scenario_name`
@@ -166,21 +206,17 @@ Below is **non-binding Optimization Center sheet template guidance**: recommende
 
 ### PM-only helper columns
 
-* `compare_to_run_id` (for future diffing)
+* `compare_to_run_id`
 * `notes`
-
-### UX tips
-
-* Keep this tab append-only from PM perspective.
-* PMs should use it as “what happened and when.”
 
 ---
 
-## Tab 6 — `Results_Portfolio`
+## Tab 6 — `Results` (Results_Portfolio)
 
-**Purpose:** The selected portfolio results (one row per initiative in result set).
+**Purpose:**
+The selected portfolio produced by a run.
 
-### Recommended columns (backend-recognized / backend-written)
+### Backend-written columns
 
 * `initiative_key`
 * `selected`
@@ -195,27 +231,19 @@ Below is **non-binding Optimization Center sheet template guidance**: recommende
 * `dependency_status`
 * `notes`
 
-### PM-only helper columns
+### PM-only helper columns (future)
 
-* `manual_override_selected` (future)
-* `override_reason` (future)
-* `comments`
-
-### UX tips
-
-* Sort view by:
-
-  * selected first
-  * then `north_star_gain` desc
-* If you want “portfolio rank”, add a column; backend can fill it later.
+* `manual_override_selected`
+* `override_reason`
 
 ---
 
 ## Tab 7 — `Gaps_And_Alerts`
 
-**Purpose:** Shows infeasibilities, unmet targets, and constraint tensions.
+**Purpose:**
+Explain **why the portfolio is imperfect**.
 
-### Recommended columns (backend-recognized / backend-written)
+### Backend-written columns
 
 * `market`
 * `kpi_key`
@@ -224,33 +252,50 @@ Below is **non-binding Optimization Center sheet template guidance**: recommende
 * `gap`
 * `severity`
 * `notes`
-* `recommendation` (optional now; LLM later)
+* `recommendation` (optional, LLM later)
 
 ### PM-only helper columns
 
-* `owner` (who should act)
-* `status` (open/triaged/done)
+* `owner`
+* `status`
 * `next_action`
-
-### UX tips
-
-* Treat this as the “portfolio debugging” tab.
-* Severity can be computed by backend or a formula.
 
 ---
 
-# Optional: minimal “system columns” guidance
+## (Related but separate) ProductOps → `KPI_Contributions`
 
-For each tab, it’s useful to have these columns somewhere (PM can place them anywhere):
+> Not part of Optimization Center, but **feeds it directly**
+
+**Purpose:**
+Single entry surface for `kpi_contribution_json`.
+
+### Recommended columns
+
+* `initiative_key` *(formula-copied, read-only)*
+* `kpi_contribution_json` *(PM / Analytics editable)*
+* `notes`
+* `run_status`
+* `updated_source`
+* `updated_at`
+
+**Rules:**
+
+* Keys must ⊆ `{north_star ∪ strategic_kpis}`
+* Units validated against Metrics_Config
+* Backend never invents values
+* Optimization Center only **displays derived summaries**
+
+---
+
+## System columns (unchanged)
+
+Every tab may include (anywhere):
 
 * `run_status`
 * `updated_source`
 * `updated_at`
 
-The backend will:
-
-* write these when it touches a row
-* ignore them when PM saves (read-only)
+Backend writes these; PM edits are ignored.
 
 ---
 

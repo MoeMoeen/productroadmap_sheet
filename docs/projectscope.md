@@ -604,53 +604,141 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
 
 ### **✅ COMPLETED:**
 
-**Phase 4.5 – Sheet-Native Execution & Control Plane** *(PRE-OPTIMIZATION PREREQUISITE)*
+**Phase 4.5 – Sheet-Native Execution & Control Plane** *(✅ COMPLETE - PRE-OPTIMIZATION PREREQUISITE)*
+
+**Status: FEATURE-COMPLETE (V2). Date: 28 December 2025**
+
    * **Backend Execution & Control Plane**
-     - Action API: `POST /actions/run`, `GET /actions/run/{run_id}`
-     - ActionRun Ledger: DB-backed execution tracking with full audit trail
-     - Worker Process: Async job executor with atomic result capture
-     - Action Registry: 15 total actions (Flow 0-4 + 4 PM Jobs)
-   * **PM Jobs (Backend + UI)** – All 4 implemented end-to-end:
-     - `pm.backlog_sync` – Sync intake to Central Backlog (UI: Backlog sheet menu)
-     - `pm.score_selected` – Score selected initiatives (UI: ProductOps Scoring_Inputs menu)
-     - `pm.switch_framework` – Switch active framework locally (UI: ProductOps Scoring_Inputs menu)
-     - `pm.save_selected` – Save tab-aware edits (UI: ProductOps menus for all tabs)
-   * **Apps Script UI Layer**
-     - Bound menus in ProductOps and Central Backlog sheets
-     - Selection extraction from active range
-     - Shared-secret authentication via X-ROADMAP-AI-SECRET header
-     - Error handling with in-sheet toast alerts
-     - Optional polling for completion feedback
-   * **Consistent Architecture**:
-     - Server-side orchestration with single ActionRun per job
-     - Selection-scoped operations via initiative_keys
-     - Per-row Status column writes (separate from Updated Source provenance)
-     - Accurate summary fields: selected_count, saved_count, failed_count, skipped_no_key
-   * **Checkpoint Document**: [PHASE_4.5_CHECKPOINT.md](docs/phase_4.5_sheetnative_execution/PHASE_4.5_CHECKPOINT.md)
+     - Action API: `POST /actions/run`, `GET /actions/run/{run_id}` (HTTP layer)
+     - ActionRun Ledger: DB-backed execution tracking with full audit trail (run_id, action, status, payload_json, result_json, error_text, started_at, finished_at, requested_by)
+     - Worker Process: Continuously polls DB for queued ActionRun rows; executes single job per ActionRun; atomic result capture
+     - Two-process architecture: FastAPI web process (enqueues) + async worker process (executes) communicating via DB
+     - Action Registry: 15 total actions (Flow 0-4 legacy + 6 PM Jobs)
+
+   * **PM Jobs (V2 – All 6 Implemented End-to-End)**:
+     
+     **Core Jobs (V1)**:
+     - `pm.backlog_sync` – Sync all intake sheets to Central Backlog (no selection). Runs Flow 1 full sync pipeline.
+       - UI: Central Backlog sheet → Roadmap AI menu → "See Latest Intake"
+       - Behavior: Intake sync → DB update → backlog regeneration → per-row Status writes
+       - Summary: updated_count, cells_updated
+     
+     - `pm.score_selected` – Score selected initiatives across all frameworks (RICE, WSJF, Math Model). Selection-based; skips blank keys.
+       - UI: ProductOps Scoring_Inputs sheet → Roadmap AI menu → "Score Selected"
+       - Behavior: Sync inputs → compute_all_frameworks → write scores → per-row Status
+       - Summary: selected_count, saved_count, failed_count, skipped_no_key
+     
+     - `pm.switch_framework` – Change active scoring framework (local-only, sheet-specific). No recompute; copies already-computed per-framework scores to active fields.
+       - UI: ProductOps Scoring_Inputs sheet → Roadmap AI menu → "Switch Framework"
+       - Behavior: Tab-aware (Scoring_Inputs or Central Backlog); activate scores → write active fields → per-row Status
+       - Summary: selected_count, saved_count, failed_count, skipped_no_key
+       - Key detail: No cross-sheet propagation; changes only current sheet
+     
+     - `pm.save_selected` – Persist tab edits to DB (tab-aware branching). Selection-based; skips blank keys.
+       - UI: ProductOps sheets → Roadmap AI menu → "Save Selected" (detects tab context)
+       - Tab-aware branches:
+         - **Scoring_Inputs**: Syncs scoring inputs via Flow3
+         - **MathModels**: Syncs math models via MathModelSyncService
+         - **Params**: Syncs parameters via ParamsSyncService
+         - **Central Backlog**: Updates initiatives via Flow1
+       - Summary: selected_count, saved_count, failed_count, skipped_no_key
+     
+     **Math Model Jobs (V2 – NEW)**:
+     - `pm.suggest_math_model_llm` – LLM suggests draft formula + notes for selected rows. Writes only to LLM columns (llm_suggested_formula_text, llm_notes, suggested_by_llm).
+       - UI: ProductOps MathModels sheet → Roadmap AI menu → "Suggest Math Model"
+       - Behavior: Calls LLM for rows with empty formula_text; guards on insufficient context (no problem_statement/impact_description/metric and no model_prompt_to_llm)
+       - Summary: selected_count, suggested_count, skipped_existing_formula, skipped_insufficient_context, failed_count
+       - Key detail: Never overwrites user columns (formula_text, assumptions_text, approved_by_user)
+     
+     - `pm.seed_math_params` – Validates approved formulas, extracts variable names, seeds Params rows with metadata (values empty). Sheet-first; DB persistence via pm.save_selected.
+       - UI: ProductOps MathModels sheet → Roadmap AI menu → "Seed Math Params"
+       - Behavior: For rows with formula_text and approved_by_user=TRUE, parse formula → extract identifiers → seed new Params rows
+       - Summary: selected_count, seeded_count, skipped_not_approved, skipped_no_formula, failed_count
+       - Usage flow: Approve formula → Seed Params → Fill values on Params tab → pm.save_selected (Params) → pm.score_selected
+
+   * **Apps Script UI Layer** (Bound scripts in ProductOps & Central Backlog sheets)
+     - Custom menu "Roadmap AI" with items for all 6 jobs
+     - Selection extraction: Reads initiative_keys from active selected rows; skips blanks
+     - HTTP integration: config.gs (API URL + secret), api.gs (POST /actions/run, GET /actions/run/{run_id} helpers)
+     - Authentication: Shared-secret header X-ROADMAP-AI-SECRET from Script Properties
+     - Error handling: Try/catch blocks surface API errors via in-sheet toast notifications
+     - Optional polling: Apps Script can poll status until completion for UX feedback
+     - Tab-aware branching: pm.save_selected intelligently routes based on active sheet name
+
+   * **Consistent Architecture Across All Jobs**:
+     - Server-side orchestration: Single ActionRun per job (no nested enqueues)
+     - Selection scoping: initiative_keys list passed in scope payload; blank keys filtered
+     - Per-row Status writes: Generic write_status_to_sheet abstraction (supports any tab)
+     - Accurate summary fields: selected_count, saved_count/suggested_count/seeded_count, failed_count, skipped_no_key (early bail: selected_count: 0)
+     - Provenance: ActionRun uses PM job token (e.g., pm.score_selected); sheet Updated Source reflects actual writer (Flow 3 token, etc.)
+
+   * **Provenance & Audit Trail Architecture** (Dual-Column):
+     1. **updated_source (Provenance Token)**
+        - Canonical "why" column: Flow token or PM job token
+        - Examples: flow3.compute_all_frameworks, pm.score_selected, flow1.backlog_sheet_write
+     
+     2. **updated_at (UTC Timestamp)**
+        - ISO-formatted timestamp of when row was modified
+        - Set to datetime.now(timezone.utc).isoformat() on every update
+        - Enables chronological auditing and change tracking
+     
+     - **Coverage**: All sheet writers stamp both columns
+       - Params: append, update, backfill
+       - MathModels: single & batch suggestions
+       - ProductOps: scores, status updates
+       - Backlog: full regeneration
+       - Intake: key assignment
+     
+   * **Type Safety & Serialization**:
+     - Fixed "Object of type datetime is not JSON serializable" crashes
+     - Added `_to_sheet_value()` helper: converts datetime → ISO, Decimal → float, dict/list → JSON string
+     - ProductOps writer skips updated_at when copying DB fields (only set via UTC timestamp, not from DB)
+     - Prevents batch_update_values failures from non-JSON-serializable types
+   
+   * **Header Alias Coverage**:
+     - PARAMS_HEADER_MAP, MATHMODELS_HEADER_MAP, INTAKE_HEADER_MAP support "updated at" alias
+     - Aliases: [updated_at, Updated At, updated at]
+     - Resolves header mismatches across sheet column name variants
+   
+   * **Key Files Changed**:
+     - app/api/actions.py – Action API endpoints
+     - app/api/schemas/actions.py – ActionRun + request/response schemas
+     - app/services/action_runner.py – PM job orchestration logic + all 6 job implementations
+     - app/workers/action_worker.py – Worker process polling + execution
+     - app/db/models/action.py – ActionRun ORM
+     - app/sheets/{params,mathmodels,productops,backlog,intake}_writer.py – Updated with UTC timestamp + type normalization
+     - app/sheets/models.py – Header alias updates
+     - Apps Script (ProductOps & Central Backlog sheets) – UI menus + HTTP calls
+   
+   * **Documentation**:
+     - [PHASE_4.5_CHECKPOINT.md](docs/phase_4.5_sheetnative_execution/PHASE_4.5_CHECKPOINT.md) – Complete checkpoint with end-to-end flows and validation
+     - [phase_4.5_pm_jobs.md](docs/phase_4.5_sheetnative_execution/phase_4.5_pm_jobs.md) – Detailed PM job specification (V1 + V2 math model jobs)
+     - [phase_4.5_pm_cheatsheet.md](docs/phase_4.5_sheetnative_execution/phase_4.5_pm_cheatsheet.md) – Quick reference guide for all 6 jobs + status codes + best practices
+     - [phase_4.5_worker_api_processes.md](docs/phase_4.5_sheetnative_execution/phase_4.5_worker_api_processes.md) – Two-process architecture explanation + polling semantics
 
 ### **📋 PLANNED (Future):**
 
-**Phase 4.5.1 – Optional V1 Polish** (backlog)
-   * **Control/RunLog Tab** – Live dashboard of execution history in ProductOps sheet
-   * **Flow Actions** – Implement flow-level actions when needed:
-     - `flow3.compute_all_frameworks`, `flow3.write_scores`
-     - `flow2.activate`, `flow1.backlog_sync`
-     - `flow4.suggest_mathmodels`, `flow4.seed_params`
-     - `flow0.intake_sync`
+**Phase 4.5.1 – Polish & Hardening** (BACKLOG, LOW PRIORITY)
+   * **Control/RunLog Tab** – Optional: Live dashboard of execution history in ProductOps sheet (ActionRun audit trail)
+   * **Flow Actions** – Optional: Implement flow-level actions if direct Flow 0-4 triggering needed (currently using PM job wrappers)
+   * **Status**: Not blocking; Phase 4.5 is production-ready without these polish items
 
-**Phase 4 – MathModel Framework & LLM-Assisted Scoring** *(Post-4.5)*
-   * **MathModels Sheet** – Dedicated sheet for custom quantitative formulas per initiative
-   * **InitiativeMathModel** – DB model persistence and versioning
-   * **LLM Integration for MathModels**:
-     - Formula generation from PM free-text descriptions
-     - Parameter suggestion with units, ranges, and metadata
-     - Assumptions extraction and documentation
-     - Plain-language formula explanations
-   * **MathModelFramework** – Scoring framework using custom formulas
-   * **Bidirectional Sheet-DB Sync** – MathModels sheet ↔ DB with batch updates
-   * **Safe Formula Evaluation** – Parser and evaluator for approved formulas
-   * **Parameter Seeding** – Auto-create Params rows from parsed formula variables
-   * **Formula Approval Workflow** – LLM suggestions → PM review → approved formula
+**Phase 4 – MathModel Framework & LLM-Assisted Scoring** *(PARALLEL WITH 4.5 / ACTIVE)*
+   * **Status: IN PROGRESS** – Infrastructure in place; core components complete; polish pending
+   * **Completed Components**:
+     - MathModels sheet reader, writer, DB model (InitiativeMathModel)
+     - MathModelFramework scoring engine (safe formula evaluation)
+     - Parameter seeding from formulas (formula parser)
+     - LLM prompts for formula suggestion + parameter metadata
+     - Two-step workflow: Suggest (LLM) → Approve → Seed → Fill → Score
+   * **Remaining (Polish, not blocking)**:
+     - Fine-tune LLM prompts for formula quality
+     - Enhance formula parser robustness
+     - Add formula validation before seeding
+   * **Notes**:
+     - pm.suggest_math_model_llm and pm.seed_math_params are live in Phase 4.5 (V2)
+     - Enables full custom-formula workflows alongside RICE/WSJF
+     - Ready for production use via sheet UI
 
 **Phase 5 – Portfolio Optimization & Roadmap Generation** *(ENABLED BY 4.5)*
    * Linear / mixed-integer optimization solver (pulp, ortools)
@@ -679,13 +767,49 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
 
 ## 9. Operational Notes (Current Implementation)
 
+### **Architecture Overview**
+
+The system is a **3-flow architecture** with **sheet-native execution** (Phase 4.5):
+
+- **Flow 1**: Intake consolidation (departments → DB → Central Backlog)
+- **Flow 2**: Score activation (per-framework scores → active fields)
+- **Flow 3**: Product Ops multi-framework scoring (parameters → per-framework scores)
+- **Phase 4.5**: All flows triggerable from Google Sheets via custom menu + Action API
+
+### **Provenance & Audit Trail Architecture**
+
+Every sheet writer now maintains a **dual-column provenance system**:
+
+1. **`updated_source` (Provenance Token)**
+   - Canonical source of why a row was changed
+   - Examples: `flow3.compute_all_frameworks`, `flow4.sync_params`, `flow1.backlog_sheet_write`
+   - Set by writers alongside data updates
+   
+2. **`updated_at` (UTC Timestamp)**
+   - ISO-formatted timestamp of when the row was updated
+   - Set to current UTC time (`datetime.now(timezone.utc).isoformat()`)
+   - Enables chronological auditing and change tracking
+
+**Coverage**:
+   - **Params Writer**: Appends, updates, backfill all stamp both columns
+   - **MathModels Writer**: Single/batch suggestions stamp both columns
+   - **ProductOps Writer**: Score and status writes stamp both columns
+   - **Backlog Writer**: Full regeneration stamps current UTC time
+   - **Intake Writer**: Key assignment stamps both columns
+
+**Type Safety**: All writers use `_to_sheet_value()` to convert:
+   - `datetime` / `date` → ISO string
+   - `Decimal` → float
+   - `dict` / `list` → JSON string
+   - Prevents "Object of type X is not JSON serializable" errors during Sheets API batch updates
+
 ### **Three-Flow Architecture**
 
 The current system operates with three independent, coordinated data flows:
 
 1. **Flow 1 – Intake Consolidation (Source of Truth)**
    - **What**: Department intake sheets → DB → Central Backlog sheet
-   - **When**: Triggered manually or on schedule via `sync_intake_job.py`
+   - **When**: Triggered manually or on schedule via `sync_intake_job.py` or `pm.backlog_sync` action
    - **Responsibility**: Consolidates all initiative requests into canonical DB model
    - **Key Operations**:
      - `backlog_update_cli --sync`: Pull Central Backlog sheet changes into DB
@@ -702,7 +826,7 @@ The current system operates with three independent, coordinated data flows:
 
 3. **Flow 3 – Product Ops Multi-Framework Scoring (Optional)**
    - **What**: Product Ops sheet → Per-framework scoring → Write back
-   - **When**: On schedule or manual trigger
+   - **When**: On schedule or manual trigger via `pm.score_selected` action
    - **Responsibility**: Computes RICE + WSJF scores from Product Ops parameters
    - **Key Operations**:
      - `flow3_cli --sync`: Read Product Ops sheet into DB
@@ -715,9 +839,9 @@ The current system operates with three independent, coordinated data flows:
 To change the active scoring framework (e.g., WSJF → RICE):
 
 1. **Edit Central Backlog** – Change `active_scoring_framework` cell
-2. **Run Flow 1** – `backlog_update_cli --sync` (pulls framework change into DB)
+2. **Run Flow 1** – `pm.backlog_sync` or `backlog_update_cli --sync` (pulls framework change into DB)
 3. **Run Flow 2** – `flow2_scoring_cli --all` (activates RICE scores to active fields)
-4. **Sync Back** – `backlog_sync_cli --log-level INFO` (pushes updated active scores to sheet)
+4. **Sync Back** – `pm.backlog_sync` or `backlog_sync_cli --log-level INFO` (pushes updated active scores to sheet)
 
 Result: Central Backlog now shows RICE scores in `value_score` / `overall_score` columns.
 
@@ -728,10 +852,11 @@ Result: Central Backlog now shows RICE scores in `value_score` / `overall_score`
 - **Batch Updates**: All sheet writes use Google Sheets API `values().batchUpdate()` (1 API call for N cells) for efficiency
 - **Header Normalization**: Sheet columns support underscore variants (e.g., `active_scoring_framework` or `ACTIVE_SCORING_FRAMEWORK`)
 - **Atomicity**: DB transactions ensure data consistency; sheet updates batched to avoid partial writes
+- **Type Normalization**: All DB values normalized to Sheets-safe types before batch updates to prevent serialization errors
 
 ### **Data Propagation Example**
 
-Product Ops enters RICE parameters → Flow 3 `--sync` → DB updated → Flow 3 `--compute-all` → RICE per-framework scores computed → Flow 3 `--write-scores` → Scores written to Central Backlog sheet → Flow 2 activation skipped (scores already for current framework) → Flow 1 backlog_sync reads updated Central Backlog back into DB for next iteration.
+Product Ops enters RICE parameters → Flow 3 `--sync` → DB updated → Flow 3 `--compute-all` → RICE per-framework scores computed → Flow 3 `--write-scores` → Scores written to Central Backlog sheet (with `updated_source` and `updated_at`) → Flow 2 activation skipped (scores already for current framework) → Flow 1 backlog_sync reads updated Central Backlog back into DB for next iteration.
 
 ---
 

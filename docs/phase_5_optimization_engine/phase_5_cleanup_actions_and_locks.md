@@ -404,282 +404,338 @@ It does not change solver math, but it helps humans avoid mistakes.
 
 ---
 
-First: restating our insight 
+      First: restating our insight 
 
 
-1. Initiative → Metric chain
+      1. Initiative → Metric chain
 
-immediate KPI
+      immediate KPI
 
-intermediary KPIs (optional)
+      intermediary KPIs (optional)
 
-ends at North Star and/or Strategic KPI
-
-
-
-2. Metric chain → Mathematical model
-
-formula text expresses how metrics flow and transform
-
-parameters are just the inputs to those transformations
+      ends at North Star and/or Strategic KPI
 
 
 
-3. Mathematical model → Params
+      2. Metric chain → Mathematical model
 
-Params tab is essentially:
+      formula text expresses how metrics flow and transform
 
-> “values for variables used in the formula”
-
-
+      parameters are just the inputs to those transformations
 
 
 
-4. KPI contribution
+      3. Mathematical model → Params
 
-is simply the final evaluated outputs of that same model,
+      Params tab is essentially:
 
-but projected onto strategic KPI space (north star + strategic KPIs)
+      > “values for variables used in the formula”
 
 
 
 
-So philosophically:
 
-> Params, metric chain, formula text, and KPI contributions are all manifestations of the same causal model.
+      4. KPI contribution
+
+      is simply the final evaluated outputs of that same model,
+
+      but projected onto strategic KPI space (north star + strategic KPIs)
 
 
 
-That observation is 100% correct.
+
+      So philosophically:
+
+      > Params, metric chain, formula text, and KPI contributions are all manifestations of the same causal model.
+
+
+
+      That observation is 100% correct.
+
+
+      ---
+
+      So why not merge Params + KPI Contributions into one tab?
+
+      Let’s analyze both options rigorously.
+
+
+      ---
+
+      Option 1: Merge Params + KPI Contributions into a single tab
+
+      What this would mean
+
+      One unified tab that contains:
+
+      metric variables (inputs)
+
+      intermediate KPIs
+
+      final KPI outputs (contributions)
+
+      possibly units
+
+
+      Pros
+
+      Conceptually elegant
+
+      One place for “the model”
+
+      Strong causal coherence
+
+      Fewer tabs
+
+
+      Cons (this is where it breaks in practice)
+
+      This is the important part.
+
+      1. Inputs vs outputs have fundamentally different semantics
+
+      Params = assumptions / inputs / knobs
+
+      KPI contributions = results / outputs Mixing them invites accidental editing of outputs.
+
+
+
+      2. Ownership differs
+
+      Params:
+
+      PM / Analytics / Finance / Eng
+
+      often debated, revised, ranged, approved
+
+
+      KPI contributions:
+
+      usually owned by PM + Analytics
+
+      should be more controlled and stable
+
+      often reviewed at leadership level
+
+
+
+
+      3. Lifecycle differs
+
+      Params change frequently (scenario analysis)
+
+      KPI contributions should change only when model or assumptions change
+
+
+
+      4. Optimization engine boundary
+
+      Optimization should consume:
+
+      kpi_contribution_json
+
+
+      It should not care about raw parameters
+
+      Keeping outputs separate gives you a clean contract:
+
+      > “Optimization consumes outputs, not assumptions.”
+
+
+
+
+
+      5. Future automation
+
+      In Phase 5.1 / 6:
+
+      LLM or evaluator can recompute KPI contributions automatically
+
+
+      If outputs live in same table as inputs, overwrite rules get messy.
+
+
+
+
+      Verdict: elegant on paper, but operationally fragile.
+
+
+      ---
+
+      Option 2: Keep Params and KPI Contributions separate (recommended)
+
+      But with one crucial clarification (this is the key)
+
+      They are separate tabs, but they are logically linked through the MathModel.
+
+      Think of it like this:
+
+      MathModels (structure)
+         ↓
+      Params (inputs / assumptions)
+         ↓
+      [Evaluate model]
+         ↓
+      KPI Contributions (outputs)
+         ↓
+      Optimization
+
+      This is exactly how real modeling systems work (Excel models, financial models, ML pipelines).
+
+
+      ---
+
+      Where each thing belongs (clean mental model)
+
+      ProductOps → MathModels
+
+      What is the model?
+
+      formula_text
+
+      metric_chain_text
+
+      approved_by_user
+
+      structure & logic
+
+
+      ProductOps → Params
+
+      What assumptions do we plug into the model?
+
+      input variables
+
+      ranges
+
+      sources
+
+      approvals
+
+      units (for variables)
+
+
+      ProductOps → KPI_Contributions (new tab)
+
+      What does this initiative contribute to strategic KPIs?
+
+      explicitly:
+
+      {
+      "gmv": 120000,
+      "retention_30d": 0.01
+      }
+
+      validated against:
+
+      Metrics_Config (allowed keys)
+
+      units (sanity checks)
+
+
+      may be:
+
+      manually entered (v1)
+
+      auto-derived later (v1.1+)
+
+
+
+      Optimization Center
+
+      consumes only KPI contributions
+
+      never touches Params
+
+
+      ---
+
+      Final verdict:
+
+      Do NOT merge Params and KPI Contributions.
+
+      Instead:
+
+      keep them as separate tabs
+
+      but treat KPI Contributions as:
+
+      > “the evaluated, strategic-facing outputs of the MathModel + Params”
+
+
+
+
+      We will:
+
+      validate consistency between:
+
+      metric_chain_text
+
+      Params variables
+
+      KPI Contributions keys
+
+
+      but not force them into one table.
+
+
+      This is the cleanest, most scalable architecture.
 
 
 ---
 
-So why not merge Params + KPI Contributions into one tab?
+16. PM-curated view contract (one paragraph, doc-ready)
 
-Let’s analyze both options rigorously.
+PM-curated view contract: ProductOps and Optimization Center tabs that “mirror” initiatives (e.g., Scoring_inputs, Candidates) are PM-curated working views, typically populated via Google Sheets formulas from the Central Backlog (or other tabs). The backend must never assume completeness or correctness of these views; instead, it treats them as an explicit, user-defined scope: it reads the initiative_keys present (or selected), validates that the referenced initiatives exist and meet required prerequisites (tokens, KPI contributions, dependencies, etc.), and then executes the requested action. Any issues must be surfaced explicitly via run_status / Gaps_And_Alerts, while all optimization/scoring runs persist an inputs snapshot for auditability and reproducibility. In short: Sheets choose the slice; the backend validates and executes.
 
+   The limitations (and mitigations)
 
----
+      A) IMPORTRANGE access friction
 
-Option 1: Merge Params + KPI Contributions into a single tab
+         Each user/spreadsheet combination often needs a one-time “Allow access” click.
 
-What this would mean
+         In org settings, sharing/permissions can complicate this.
 
-One unified tab that contains:
+         Mitigation
 
-metric variables (inputs)
+            Use a shared Google Workspace drive/folder with consistent permissions.
 
-intermediate KPIs
+            Prefer connecting “official” sheets where access is stable.
 
-final KPI outputs (contributions)
+      B) Performance / recalculation cost
 
-possibly units
+         IMPORTRANGE + heavy QUERY/FILTER on thousands of rows can get slow.
 
+         Many volatile formulas can cause lag and “Loading…” states.
 
-Pros
+         Mitigation
 
-Conceptually elegant
+            Keep mirrored ranges narrow (only needed columns).
 
-One place for “the model”
+            Use helper tabs to import once, then filter locally.
 
-Strong causal coherence
+            Avoid volatile functions (INDIRECT, excessive ARRAYFORMULA on huge ranges).
 
-Fewer tabs
+      C) Fragility when headers/columns change
 
+         If PMs rename a header in the source sheet, formula queries can break.
 
-Cons (this is where it breaks in practice)
+         If PMs “move columns”, some formulas break unless they’re header-based.
 
-This is the important part.
+         Mitigation
 
-1. Inputs vs outputs have fundamentally different semantics
+            Build formulas that reference by header names where possible (e.g., QUERY selecting by column positions is brittle).
 
-Params = assumptions / inputs / knobs
+            Keep a small “export range” in the source sheet that is stable.
 
-KPI contributions = results / outputs Mixing them invites accidental editing of outputs.
+      D) No “relational” join semantics
 
+         You can approximate joins, but it’s not a database.
 
+         Complex multi-table joins across multiple sheets get messy fast.
 
-2. Ownership differs
+         Mitigation
 
-Params:
+            Keep joins simple: initiative_key is the join key.
 
-PM / Analytics / Finance / Eng
-
-often debated, revised, ranged, approved
-
-
-KPI contributions:
-
-usually owned by PM + Analytics
-
-should be more controlled and stable
-
-often reviewed at leadership level
-
-
-
-
-3. Lifecycle differs
-
-Params change frequently (scenario analysis)
-
-KPI contributions should change only when model or assumptions change
-
-
-
-4. Optimization engine boundary
-
-Optimization should consume:
-
-kpi_contribution_json
-
-
-It should not care about raw parameters
-
-Keeping outputs separate gives you a clean contract:
-
-> “Optimization consumes outputs, not assumptions.”
-
-
-
-
-
-5. Future automation
-
-In Phase 5.1 / 6:
-
-LLM or evaluator can recompute KPI contributions automatically
-
-
-If outputs live in same table as inputs, overwrite rules get messy.
-
-
-
-
-Verdict: elegant on paper, but operationally fragile.
-
-
----
-
-Option 2: Keep Params and KPI Contributions separate (recommended)
-
-But with one crucial clarification (this is the key)
-
-They are separate tabs, but they are logically linked through the MathModel.
-
-Think of it like this:
-
-MathModels (structure)
-   ↓
-Params (inputs / assumptions)
-   ↓
-[Evaluate model]
-   ↓
-KPI Contributions (outputs)
-   ↓
-Optimization
-
-This is exactly how real modeling systems work (Excel models, financial models, ML pipelines).
-
-
----
-
-Where each thing belongs (clean mental model)
-
-ProductOps → MathModels
-
-What is the model?
-
-formula_text
-
-metric_chain_text
-
-approved_by_user
-
-structure & logic
-
-
-ProductOps → Params
-
-What assumptions do we plug into the model?
-
-input variables
-
-ranges
-
-sources
-
-approvals
-
-units (for variables)
-
-
-ProductOps → KPI_Contributions (new tab)
-
-What does this initiative contribute to strategic KPIs?
-
-explicitly:
-
-{
-  "gmv": 120000,
-  "retention_30d": 0.01
-}
-
-validated against:
-
-Metrics_Config (allowed keys)
-
-units (sanity checks)
-
-
-may be:
-
-manually entered (v1)
-
-auto-derived later (v1.1+)
-
-
-
-Optimization Center
-
-consumes only KPI contributions
-
-never touches Params
-
-
----
-
-Final verdict:
-
-Do NOT merge Params and KPI Contributions.
-
-Instead:
-
-keep them as separate tabs
-
-but treat KPI Contributions as:
-
-> “the evaluated, strategic-facing outputs of the MathModel + Params”
-
-
-
-
-We will:
-
-validate consistency between:
-
-metric_chain_text
-
-Params variables
-
-KPI Contributions keys
-
-
-but not force them into one table.
-
-
-This is the cleanest, most scalable architecture.
-
-
----
+            For anything complex, rely on backend validation and DB snapshotting.
