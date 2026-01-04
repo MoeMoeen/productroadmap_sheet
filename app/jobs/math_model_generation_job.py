@@ -95,7 +95,7 @@ def run_math_model_generation_job(
 					"initiative_key": getattr(mm, "initiative_key", None),
 					"row": row_number,
 					"model": "gpt-4o",
-					"formula_length": len(suggestion.formula_text) if suggestion.formula_text else 0,
+					"formula_length": len(suggestion.llm_suggested_formula_text) if suggestion.llm_suggested_formula_text else 0,
 				},
 			)
 		except Exception:
@@ -106,9 +106,9 @@ def run_math_model_generation_job(
 			continue
 
 		# FORMULA VALIDATION: Check if formula is valid, warn if not
-		if suggestion.formula_text:
+		if suggestion.llm_suggested_formula_text:
 			try:
-				errors = validate_formula(suggestion.formula_text)
+				errors = validate_formula(suggestion.llm_suggested_formula_text)
 				if errors:
 					logger.warning(
 						f"Formula validation warning for {getattr(mm, 'initiative_key', 'unknown')}: {errors}",
@@ -122,9 +122,9 @@ def run_math_model_generation_job(
 		suggestions_to_write.append(
 			{
 				"row_number": row_number,
-				"llm_suggested_formula_text": suggestion.formula_text,
-				"assumptions_text": "\n".join(suggestion.assumptions),
-				"llm_notes": suggestion.notes,
+				"llm_suggested_formula_text": suggestion.llm_suggested_formula_text,
+				"llm_notes": suggestion.llm_notes,
+				"llm_suggested_metric_chain_text": suggestion.llm_suggested_metric_chain_text,
 			}
 		)
 		suggested += 1

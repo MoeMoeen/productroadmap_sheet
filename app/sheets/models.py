@@ -14,12 +14,14 @@ from pydantic import BaseModel, Field, ConfigDict, model_validator
 # ProductOps MathModels tab columns and header aliases
 MATHMODELS_HEADER_MAP = {
     "initiative_key": ["initiative_key"],
+    "immediate_kpi_key": ["immediate_kpi_key", "Immediate KPI Key", "immediate kpi key"],
+    "metric_chain_text": ["metric_chain_text", "Metric Chain", "metric chain"],
     "formula_text": ["formula_text", "formula_text_final", "formula"],
-    "parameters_json": ["parameters_json", "parameters"],
     "assumptions_text": ["assumptions_text", "assumptions", "notes"],
     "suggested_by_llm": ["suggested_by_llm", "llm_suggested"],
     "approved_by_user": ["approved_by_user", "approved"],
     "llm_suggested_formula_text": ["llm_suggested_formula_text", "formula_suggestion"],
+    "llm_suggested_metric_chain_text": ["llm_suggested_metric_chain_text", "metric_chain_llm_suggestion", "LLM Suggested Metric Chain"],
     "llm_notes": ["llm_notes", "assumptions_suggestion", "llm_assumptions"],
     "model_name": ["model_name"],
     "model_description_free_text": ["model_description_free_text", "model_description", "description"],
@@ -101,11 +103,14 @@ CENTRAL_BACKLOG_HEADER: List[str] = [
     "Country",
     "Product Area",
     "Status",
-    "Strategic Theme",
     "Customer Segment",
     "Initiative Type",
     "Hypothesis",
     "Problem Statement",
+    "Immediate KPI Key",
+    "Metric Chain JSON",
+    "Is Optimization Candidate",
+    "Candidate Period Key",
     # Scoring outputs
     "Value Score",
     "Effort Score",
@@ -116,9 +121,6 @@ CENTRAL_BACKLOG_HEADER: List[str] = [
     "Dependencies Initiatives",
     "Dependencies Others",
     "LLM Summary",
-    "LLM Notes",
-    # Strategic coefficient
-    "Strategic Priority Coefficient",
     # Metadata
     "Updated At",
     "Updated Source",
@@ -134,11 +136,14 @@ CENTRAL_HEADER_TO_FIELD: Dict[str, str] = {
     "Country": "country",
     "Product Area": "product_area",
     "Status": "status",
-    "Strategic Theme": "strategic_theme",
     "Customer Segment": "customer_segment",
     "Initiative Type": "initiative_type",
     "Hypothesis": "hypothesis",
     "Problem Statement": "problem_statement",
+    "Immediate KPI Key": "immediate_kpi_key",
+    "Metric Chain JSON": "metric_chain_json",
+    "Is Optimization Candidate": "is_optimization_candidate",
+    "Candidate Period Key": "candidate_period_key",
     "Value Score": "value_score",
     "Effort Score": "effort_score",
     "Overall Score": "overall_score",
@@ -147,8 +152,6 @@ CENTRAL_HEADER_TO_FIELD: Dict[str, str] = {
     "Dependencies Initiatives": "dependencies_initiatives",
     "Dependencies Others": "dependencies_others",
     "LLM Summary": "llm_summary",
-    "LLM Notes": "llm_notes",
-    "Strategic Priority Coefficient": "strategic_priority_coefficient",
     "Updated At": "updated_at",
     "Updated Source": "updated_source",
 }
@@ -170,20 +173,24 @@ class MathModelRow(BaseModel):
     
     Columns:
     - initiative_key (str): Initiative key (PM-friendly identifier)
+    - model_name (str): PM-provided name for the model
+    - model_description_free_text (str): PM-authored description
+    - model_prompt_to_llm (str): PM extra prompt
+    - immediate_kpi_key (str): KPI anchor
+    - metric_chain_text (str/JSON): PM-provided metric chain
+    - llm_suggested_metric_chain_text (str): LLM suggestion for metric chain
     - formula_text (str): The approved/final formula definition
-    - parameters_json (str): JSON-serialized parameters
-    - assumptions_text (str): Assumptions/notes
-    - suggested_by_llm (bool): Was this suggested by LLM?
     - approved_by_user (bool): Has user approved?
     - llm_suggested_formula_text (str): LLM suggestion for formula (separate column)
-    - llm_notes (str): LLM suggestion for assumptions (separate column)
+    - llm_notes (str): LLM notes column
+    - assumptions_text (str): Assumptions/notes (PM-owned)
+    - suggested_by_llm (bool): Was this suggested by LLM?
     """
     
     model_config = ConfigDict(extra="ignore")
     
     initiative_key: str
     formula_text: Optional[str] = None
-    parameters_json: Optional[str] = None
     assumptions_text: Optional[str] = None
     suggested_by_llm: Optional[bool] = None
     approved_by_user: Optional[bool] = None
@@ -192,6 +199,9 @@ class MathModelRow(BaseModel):
     model_name: Optional[str] = None
     model_description_free_text: Optional[str] = None
     model_prompt_to_llm: Optional[str] = None
+    immediate_kpi_key: Optional[str] = None
+    metric_chain_text: Optional[str] = None
+    llm_suggested_metric_chain_text: Optional[str] = None
 
 
 class ParamRow(BaseModel):
@@ -250,7 +260,6 @@ CENTRAL_EDITABLE_FIELDS: List[str] = [
     "Country",
     "Product Area",
     "Status",
-    "Strategic Theme",
     "Customer Segment",
     "Initiative Type",
     "Hypothesis",
@@ -258,5 +267,6 @@ CENTRAL_EDITABLE_FIELDS: List[str] = [
     "Dependencies Initiatives",
     "Dependencies Others",
     "LLM Summary",
-    "LLM Notes",
+    "Is Optimization Candidate",
+    "Candidate Period Key",
 ]

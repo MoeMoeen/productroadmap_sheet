@@ -970,8 +970,9 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
                 # Queue for batch write (LLM-owned columns only; assumptions_text is user-owned)
                 suggestions_to_write.append({
                     "row_number": row_number,
-                    "llm_suggested_formula_text": suggestion.formula_text,
-                    "llm_notes": suggestion.notes,
+                    "llm_suggested_formula_text": suggestion.llm_suggested_formula_text,
+                    "llm_notes": suggestion.llm_notes,
+                    "llm_suggested_metric_chain_text": suggestion.llm_suggested_metric_chain_text,
                 })
                 
                 status_by_key[key] = "OK: Suggested formula (review and approve before seeding params)"

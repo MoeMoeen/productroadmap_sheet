@@ -112,10 +112,12 @@ def _build_system_prompt() -> str:
     return (
         "You are an expert product & finance analyst. "
         "Design quantitative value models for product initiatives. "
-        "Return ONLY a JSON object with keys: formula_text (multi-line script), "
-        "assumptions (list of strings), notes (string). "
-        "Rules: formula_text must use only assignment lines 'name = expression'; "
+        "Return ONLY a JSON object with keys: llm_suggested_formula_text (multi-line script), "
+        "llm_suggested_metric_chain_text (string; optional), llm_notes (string). "
+        "Do NOT generate assumptions—any assumptions in the prompt are PM-authored context only. "
+        "Rules: llm_suggested_formula_text must use only assignment lines 'name = expression'; "
         "define 'value' as primary metric; optionally define 'effort' (or 'effort_days') and 'overall'; "
+        "align to the immediate KPI when provided; propose an improved metric chain only if it clarifies the KPI path; "
         "use lower_snake_case variable names; allowed operations are +, -, *, /, parentheses, min(), max(); "
         "no imports, no function definitions, no prose outside JSON. "
         "Example formula_text: "
@@ -136,6 +138,8 @@ def _build_user_prompt(payload: MathModelPromptInput) -> str:
         if val:
             lines.append(f"{label}: {val}")
 
+    add("Immediate KPI key", payload.immediate_kpi_key)
+    add("Metric chain (PM provided)", payload.metric_chain_text)
     add("Problem", payload.problem_statement)
     add("Desired outcome", payload.desired_outcome)
     add("Hypothesis", payload.hypothesis)
@@ -145,8 +149,8 @@ def _build_user_prompt(payload: MathModelPromptInput) -> str:
     add("Impact unit", payload.impact_unit)
     add("Model name", payload.model_name)
     add("Model description", payload.model_description_free_text)
-    add("Existing assumptions", payload.assumptions_text)
-    add("Extra prompt", payload.model_prompt_to_llm)
+    add("Custom prompt", payload.model_prompt_to_llm)
+    add("Assumptions (PM-owned; do not change)", payload.assumptions_text)
 
     return "\n".join(lines)
 

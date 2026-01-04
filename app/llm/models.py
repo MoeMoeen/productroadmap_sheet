@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import List, Optional, Any
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, Field, AliasChoices, model_validator
 
 
 class MathModelPromptInput(BaseModel):
@@ -14,6 +14,9 @@ class MathModelPromptInput(BaseModel):
     desired_outcome: Optional[str] = None
     hypothesis: Optional[str] = None
     llm_summary: Optional[str] = None
+
+    immediate_kpi_key: Optional[str] = None
+    metric_chain_text: Optional[str] = None
 
     expected_impact_description: Optional[str] = None
     impact_metric: Optional[str] = None
@@ -26,9 +29,40 @@ class MathModelPromptInput(BaseModel):
 
 
 class MathModelSuggestion(BaseModel):
-    formula_text: str
-    assumptions: List[str]
-    notes: Optional[str] = None
+    """LLM response for math-model suggestions.
+
+    Uses aliases so legacy responses with formula_text/metric_chain_text/notes
+    still parse, but new prompts should return the llm_* keys explicitly.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    llm_suggested_formula_text: str = Field(
+        alias="llm_suggested_formula_text",
+        validation_alias=AliasChoices("llm_suggested_formula_text", "formula_text"),
+    )
+    llm_suggested_metric_chain_text: Optional[str] = Field(
+        default=None,
+        alias="llm_suggested_metric_chain_text",
+        validation_alias=AliasChoices("llm_suggested_metric_chain_text", "metric_chain_text"),
+    )
+    llm_notes: Optional[str] = Field(
+        default=None,
+        alias="llm_notes",
+        validation_alias=AliasChoices("llm_notes", "notes"),
+    )
+
+    @property
+    def formula_text(self) -> str:
+        return self.llm_suggested_formula_text
+
+    @property
+    def metric_chain_text(self) -> Optional[str]:
+        return self.llm_suggested_metric_chain_text
+
+    @property
+    def notes(self) -> Optional[str]:
+        return self.llm_notes
 
 
 class ParamSuggestion(BaseModel):

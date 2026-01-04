@@ -49,8 +49,10 @@ class MathModelSyncService:
         Rules:
         - Resolve initiative by initiative_key
         - Upsert math model object; set initiative.math_model to this object
-        - Map fields: formula_text (required to create), parameters_json, assumptions_text,
-                      suggested_by_llm, approved_by_user
+        - Map fields: formula_text (required to create), assumptions_text,
+                  suggested_by_llm, approved_by_user, model_name, model_description_free_text,
+                  metric_chain_text
+        - Persist immediate_kpi_key and metric_chain_text (stored on initiative.metric_chain_json) for downstream scoring
         - If row provides llm_notes, store on Initiative.llm_notes
         
         Args:
@@ -104,27 +106,31 @@ class MathModelSyncService:
             # Map fields
             setattr(math_model, "framework", getattr(math_model, "framework", None) or "MATH_MODEL")
             setattr(math_model, "formula_text", mm.formula_text or getattr(math_model, "formula_text", None))
-
-            # parameters_json: parse if string
-            params_obj = None
-            if isinstance(mm.parameters_json, dict):
-                params_obj = mm.parameters_json
-            elif isinstance(mm.parameters_json, str) and mm.parameters_json.strip():
-                try:
-                    params_obj = json.loads(mm.parameters_json)
-                except Exception:
-                    logger.warning(
-                        "math_model.sync.bad_parameters_json",
-                        extra={"row": row_number, "initiative_key": mm.initiative_key},
-                    )
-                    params_obj = None
-            setattr(math_model, "parameters_json", params_obj)
+            if getattr(mm, "model_name", None):
+                setattr(math_model, "model_name", mm.model_name)
+            if getattr(mm, "model_description_free_text", None):
+                setattr(math_model, "model_description_free_text", mm.model_description_free_text)
 
             setattr(math_model, "assumptions_text", mm.assumptions_text)
             if mm.suggested_by_llm is not None:
                 setattr(math_model, "suggested_by_llm", bool(mm.suggested_by_llm))
             if mm.approved_by_user is not None:
                 setattr(math_model, "approved_by_user", bool(mm.approved_by_user))
+
+            # Persist KPI alignment + metric chain on Initiative (JSON column). Accept text or JSON string.
+            if getattr(mm, "immediate_kpi_key", None):
+                setattr(initiative, "immediate_kpi_key", mm.immediate_kpi_key)
+            if getattr(mm, "metric_chain_text", None):
+                metric_chain_val = None
+                if isinstance(mm.metric_chain_text, (dict, list)):
+                    metric_chain_val = mm.metric_chain_text
+                elif isinstance(mm.metric_chain_text, str):
+                    try:
+                        metric_chain_val = json.loads(mm.metric_chain_text)
+                    except Exception:
+                        metric_chain_val = mm.metric_chain_text  # store raw text to avoid data loss
+                setattr(initiative, "metric_chain_json", metric_chain_val)
+                setattr(math_model, "metric_chain_text", mm.metric_chain_text)
 
             # Save LLM notes on initiative if provided
             if getattr(mm, "llm_notes", None):

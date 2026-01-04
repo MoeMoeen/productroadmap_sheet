@@ -26,6 +26,8 @@ def suggest_math_model_for_initiative(
 		desired_outcome=getattr(initiative, "desired_outcome", None),
 		hypothesis=getattr(initiative, "hypothesis", None),
 		llm_summary=getattr(initiative, "llm_summary", None),
+		immediate_kpi_key=getattr(row, "immediate_kpi_key", None) or getattr(initiative, "immediate_kpi_key", None),
+		metric_chain_text=getattr(row, "metric_chain_text", None),
 		expected_impact_description=getattr(initiative, "expected_impact_description", None),
 		impact_metric=getattr(initiative, "impact_metric", None),
 		impact_unit=getattr(initiative, "impact_unit", None),

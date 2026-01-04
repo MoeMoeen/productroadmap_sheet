@@ -138,6 +138,7 @@ class MathModelsWriter:
             "row_number": int,
             "llm_suggested_formula_text": Optional[str],
             "llm_notes": Optional[str],
+            "llm_suggested_metric_chain_text": Optional[str],
         }
         
         NOTE: We do NOT write assumptions_text—that is user-owned. PM edits assumptions manually.
@@ -148,11 +149,12 @@ class MathModelsWriter:
         # Find column indices
         formula_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_suggested_formula_text")
         notes_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_notes")
+        metric_chain_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_suggested_metric_chain_text")
         approved_col_idx = self._find_column_index(spreadsheet_id, tab_name, "approved_by_user")
         suggested_by_llm_col_idx = self._find_column_index(spreadsheet_id, tab_name, "suggested_by_llm")
         
         # Guard: require at least one suggestion column
-        if not (formula_col_idx or notes_col_idx):
+        if not (formula_col_idx or notes_col_idx or metric_chain_col_idx):
             logger.warning(f"Could not find suggestion columns in {tab_name}")
             return
         
@@ -193,6 +195,7 @@ class MathModelsWriter:
             
             formula_sugg = suggestion.get("llm_suggested_formula_text")
             notes_sugg = suggestion.get("llm_notes")
+            metric_chain_sugg = suggestion.get("llm_suggested_metric_chain_text")
             
             if formula_col_idx and formula_sugg:
                 col_a1 = _col_index_to_a1(formula_col_idx)
@@ -212,8 +215,17 @@ class MathModelsWriter:
                 })
                 updated_rows.add(row_number)
 
+            if metric_chain_col_idx and metric_chain_sugg:
+                col_a1 = _col_index_to_a1(metric_chain_col_idx)
+                cell_a1 = f"{tab_name}!{col_a1}{row_number}"
+                batch_data.append({
+                    "range": cell_a1,
+                    "values": [[metric_chain_sugg]],
+                })
+                updated_rows.add(row_number)
+
             # Mark as suggested by LLM if any suggestion was provided
-            if suggested_by_llm_col_idx and (formula_sugg or notes_sugg):
+            if suggested_by_llm_col_idx and (formula_sugg or notes_sugg or metric_chain_sugg):
                 col_a1 = _col_index_to_a1(suggested_by_llm_col_idx)
                 cell_a1 = f"{tab_name}!{col_a1}{row_number}"
                 batch_data.append({

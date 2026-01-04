@@ -1,3 +1,5 @@
+#productroadmap_sheet_project/app/services/backlog_mapper.py
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
@@ -44,14 +46,9 @@ def backlog_row_to_update_data(row: BacklogRow) -> Dict[str, Any]:
     data["requesting_team"] = row.get("Requesting Team") or None
     data["country"] = row.get("Country") or None
     data["product_area"] = row.get("Product Area") or None
-
-    data["strategic_theme"] = row.get("Strategic Theme") or None
     data["customer_segment"] = row.get("Customer Segment") or None
     data["initiative_type"] = row.get("Initiative Type") or None
     data["hypothesis"] = row.get("Hypothesis") or None
-
-    # Linked objectives (as free text or JSON string for now)
-    data["linked_objectives"] = row.get("Linked Objectives") or None
 
     # Scoring summary
     data["value_score"] = _to_float(row.get("Value Score"))
@@ -68,11 +65,9 @@ def backlog_row_to_update_data(row: BacklogRow) -> Dict[str, Any]:
     # Lifecycle
     data["status"] = (row.get("Status") or "").strip() or None
 
-    # LLM notes (summary is backend-owned)
-    data["llm_notes"] = row.get("LLM Notes") or None
-
-    # Strategic priority coefficient
-    data["strategic_priority_coefficient"] = _to_float(row.get("Strategic Priority Coefficient"))
+    # Optimization candidate flags
+    data["is_optimization_candidate"] = _to_bool(row.get("Is Optimization Candidate"))
+    data["candidate_period_key"] = row.get("Candidate Period Key") or None
 
     return data
 

@@ -40,13 +40,19 @@ class MathModelsReader:
     
     Columns expected:
     - initiative_key (str)
+    - model_name (str)
+    - model_description_free_text (str)
+    - immediate_kpi_key (str)
+    - metric_chain_text (str/JSON)
+    - llm_suggested_metric_chain_text (str)
     - formula_text (str) - approved/final formula
-    - parameters_json (str)
-    - assumptions_text (str)
-    - suggested_by_llm (bool)
+    - status (str)
     - approved_by_user (bool)
     - llm_suggested_formula_text (str) - LLM suggestion column
-    - llm_notes (str) - LLM assumptions suggestion column
+    - llm_notes (str) - LLM notes column
+    - assumptions_text (str)
+    - model_prompt_to_llm (str)
+    - suggested_by_llm (bool)
     
     Returns rows as (row_number, MathModelRow) pairs.
     """
