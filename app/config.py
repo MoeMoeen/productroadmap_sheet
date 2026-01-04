@@ -83,6 +83,7 @@ class IntakeSheetConfig(BaseModel):
 
 
 class BacklogSheetConfig(BaseModel):
+    """Configuration for a central backlog Google Sheet."""
     spreadsheet_id: str
     tab_name: str = "Backlog"
     product_org: Optional[str] = None  # optional label for multi-org
@@ -93,6 +94,8 @@ class ProductOpsConfig(BaseModel):
     scoring_inputs_tab: str = "Scoring_Inputs"
     mathmodels_tab: str = "MathModels"
     params_tab: str = "Params"
+    metrics_config_tab: str = "Metrics_Config"
+    kpi_contributions_tab: str = "KPI_Contributions"
     config_tab: Optional[str] = "Config"
 
     @field_validator("spreadsheet_id")

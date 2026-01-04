@@ -9,7 +9,90 @@ from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
+# Common alias sets (used across tabs)
+UPDATED_SOURCE_ALIASES = [
+    "updated_source",
+    "Updated Source",
+    "UPDATED SOURCE",
+    "UpdatedSource",
+    "last_updated_source",
+    "Last Updated Source",
+]
+
+UPDATED_AT_ALIASES = [
+    "updated_at",
+    "Updated At",
+    "UPDATED AT",
+    "UpdatedAt",
+    "last_updated_at",
+    "Last Updated At",
+]
+
+RUN_STATUS_ALIASES = [
+    "run_status",
+    "Run Status",
+    "RUN STATUS",
+    "status",
+    "Status",
+    "STATUS",
+    "last_run_status",
+    "Last Run Status",
+]
+
+
+# ProductOps Metrics_Config tab header aliases
+METRICS_CONFIG_HEADER_MAP = {
+    "kpi_key": ["kpi_key", "KPI Key", "kpi", "KPI", "metric_key", "Metric Key"],
+    "kpi_name": ["kpi_name", "KPI Name", "kpi title", "KPI Title", "metric_name", "Metric Name"],
+    "kpi_level": ["kpi_level", "KPI Level", "level", "Level", "metric_level", "Metric Level"],
+    "unit": ["unit", "Unit", "units", "Units"],
+    "description": ["description", "Description", "desc", "Desc"],
+    "is_active": ["is_active", "Is Active", "active", "Active", "enabled", "Enabled"],
+    "notes": ["notes", "Notes", "comment", "Comment", "comments", "Comments"],
+
+    # system / read-only surfaces
+    "run_status": RUN_STATUS_ALIASES,
+    "updated_source": UPDATED_SOURCE_ALIASES,
+    "updated_at": UPDATED_AT_ALIASES,
+}
+
+# ProductOps KPI_Contributions tab header aliases
+KPI_CONTRIBUTIONS_HEADER_MAP = {
+    "initiative_key": ["initiative_key", "Initiative Key", "initiative id", "Initiative ID", "key", "Key"],
+    "kpi_contribution_json": [
+        "kpi_contribution_json",
+        "KPI Contribution JSON",
+        "kpi_contributions",
+        "KPI Contributions",
+        "contributions",
+        "Contributions",
+    ],
+    "notes": ["notes", "Notes"],
+
+    # system / read-only
+    "run_status": RUN_STATUS_ALIASES,
+    "updated_source": UPDATED_SOURCE_ALIASES,
+    "updated_at": UPDATED_AT_ALIASES,
+}
+
+
 # Centralized header mapping: canonical field name -> list of accepted aliases
+
+# ProductOps allowlists
+METRICS_CONFIG_EDITABLE_FIELDS: List[str] = [
+    "kpi_key",
+    "kpi_name",
+    "kpi_level",
+    "unit",
+    "description",
+    "is_active",
+    "notes",
+]
+
+KPI_CONTRIBUTIONS_EDITABLE_FIELDS: List[str] = [
+    "kpi_contribution_json",
+    "notes",
+]
 
 # ProductOps MathModels tab columns and header aliases
 MATHMODELS_HEADER_MAP = {
@@ -157,6 +240,13 @@ CENTRAL_HEADER_TO_FIELD: Dict[str, str] = {
 }
 
 __all__ = [
+    "UPDATED_SOURCE_ALIASES",
+    "UPDATED_AT_ALIASES",
+    "RUN_STATUS_ALIASES",
+    "METRICS_CONFIG_HEADER_MAP",
+    "METRICS_CONFIG_EDITABLE_FIELDS",
+    "KPI_CONTRIBUTIONS_HEADER_MAP",
+    "KPI_CONTRIBUTIONS_EDITABLE_FIELDS",
     "MATHMODELS_HEADER_MAP",
     "PARAMS_HEADER_MAP",
     "INTAKE_HEADER_MAP",
@@ -165,7 +255,36 @@ __all__ = [
     "CENTRAL_BACKLOG_HEADER",
     "CENTRAL_HEADER_TO_FIELD",
     "CENTRAL_EDITABLE_FIELDS",
+    "MetricsConfigRow",
+    "KPIContributionRow",
+    "MathModelRow",
+    "ParamRow",
 ]
+
+
+class MetricsConfigRow(BaseModel):
+    """Represents a single row from ProductOps Metrics_Config tab."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    kpi_key: str
+    kpi_name: Optional[str] = None
+    kpi_level: Optional[str] = None
+    unit: Optional[str] = None
+    description: Optional[str] = None
+    # Keep None so blank cells don't force True; sync layer applies defaults conditionally
+    is_active: Optional[bool] = Field(default=None)
+    notes: Optional[str] = None
+
+
+class KPIContributionRow(BaseModel):
+    """Represents a single row from ProductOps KPI_Contributions tab."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    initiative_key: str
+    kpi_contribution_json: Optional[Any] = None
+    notes: Optional[str] = None
 
 
 class MathModelRow(BaseModel):

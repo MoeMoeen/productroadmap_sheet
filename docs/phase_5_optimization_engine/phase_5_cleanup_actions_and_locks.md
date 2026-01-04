@@ -739,3 +739,114 @@ PM-curated view contract: ProductOps and Optimization Center tabs that “mirror
             Keep joins simple: initiative_key is the join key.
 
             For anything complex, rely on backend validation and DB snapshotting.
+
+
+17. What is is_active in Metrics_Config
+
+
+What is is_active in Metrics_Config and why it exists
+
+is_active is a governance + scoping flag for KPIs.
+
+It answers one simple question:
+
+> Is this KPI currently part of the organization’s active strategy and therefore allowed to be used by the system right now?
+
+
+
+How is_active is used (concretely)
+
+1) Limits what KPIs are allowed in KPI contributions
+
+When PMs define kpi_contribution_json for initiatives:
+
+Only KPIs that are:
+
+present in Metrics_Config
+
+AND is_active = true
+
+AND kpi_level ∈ {north_star, strategic}
+
+
+are accepted.
+
+
+Inactive KPIs are rejected in KPIContributionsSyncService.
+
+This prevents:
+
+legacy KPIs
+
+experimental KPIs
+
+deprecated metrics
+from silently influencing optimization.
+
+
+
+
+2) Controls what KPIs can appear in optimization objectives
+
+When running optimization:
+
+Weighted objective:
+
+weights can only reference active KPIs
+
+
+Targets / constraints:
+
+only active KPIs are considered valid
+
+
+
+So is_active defines the current optimization universe.
+
+
+
+3) Supports strategy changes without data loss
+
+Instead of deleting KPIs when strategy changes, PMs can:
+
+set is_active = false
+
+keep historical data, contributions, old portfolios intact
+
+cleanly switch strategy for the next planning cycle
+
+
+This is extremely useful quarter-to-quarter.
+
+
+
+What is_active is not
+
+❌ It is not initiative-specific
+
+❌ It is not a scoring toggle
+
+❌ It is not about data availability
+
+
+It is purely a strategic configuration flag.
+
+
+
+Default behavior (important)
+
+Blank is_active → treated as True (safe default)
+
+Exactly one active north_star must exist (you enforce this ✔)
+
+Zero or more active strategic KPIs allowed
+
+
+
+
+One-sentence summary
+
+> is_active defines which KPIs are currently “in play” for contributions, targets, and optimization—without deleting history or breaking old data.
+
+
+---

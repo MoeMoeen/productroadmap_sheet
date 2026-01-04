@@ -3,5 +3,7 @@
 "scoring_inputs_tab": "Scoring_Inputs",
 "mathmodels_tab": "MathModels",
 "params_tab": "Params",
+"metrics_config_tab": "Metrics_Config",
+"kpi_contributions_tab": "KPI_Contributions",
 "config_tab": "Config"
 }

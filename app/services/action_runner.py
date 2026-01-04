@@ -29,7 +29,9 @@ from app.jobs.sync_intake_job import run_sync_all_intake_sheets
 
 from app.sheets.client import SheetsClient, get_sheets_service
 from app.services.math_model_service import MathModelSyncService
+from app.services.metrics_config_sync_service import MetricsConfigSyncService
 from app.services.params_sync_service import ParamsSyncService
+from app.services.kpi_contributions_sync_service import KPIContributionsSyncService
 
 from app.jobs.math_model_generation_job import run_math_model_generation_job
 from app.jobs.param_seeding_job import run_param_seeding_job
@@ -665,8 +667,9 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
     if not isinstance(scope, dict):
         scope = {}
 
-    spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (settings.PRODUCT_OPS.spreadsheet_id if settings.PRODUCT_OPS else None)
-    tab = sheet_ctx.get("tab") or (settings.PRODUCT_OPS.scoring_inputs_tab if settings.PRODUCT_OPS else "Scoring_Inputs")
+    cfg = settings.PRODUCT_OPS
+    spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (cfg.spreadsheet_id if cfg else None)
+    tab = sheet_ctx.get("tab") or (cfg.scoring_inputs_tab if cfg else "Scoring_Inputs")
     commit_every = int(options.get("commit_every", settings.SCORING_BATCH_COMMIT_EVERY))
 
     keys = scope.get("initiative_keys") or []
@@ -778,6 +781,7 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
             spreadsheet_id=str(spreadsheet_id),
             tab_name=str(tab),
             initiative_keys=keys,
+            warnings_by_key=svc.latest_math_warnings or None,
         )
     except Exception as e:
         logger.exception("pm.score_selected.write_scores_failed")
@@ -952,9 +956,10 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
             # Guard: check if we have sufficient context for LLM
             # If initiative lacks key fields AND PM didn't provide custom prompt, skip
             has_problem_context = bool(
-                (initiative.problem_statement and initiative.problem_statement.strip()) or
-                (initiative.expected_impact_description and initiative.expected_impact_description.strip()) or
-                (initiative.impact_metric and initiative.impact_metric.strip())
+                (initiative.problem_statement and initiative.problem_statement.strip())
+                or (initiative.hypothesis and initiative.hypothesis.strip())
+                or (initiative.llm_summary and initiative.llm_summary.strip())
+                or (initiative.title and initiative.title.strip())
             )
             has_custom_prompt = bool(math_row.model_prompt_to_llm and math_row.model_prompt_to_llm.strip())
             
@@ -1302,8 +1307,10 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
     if not isinstance(scope, dict):
         scope = {}
 
-    spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (settings.PRODUCT_OPS.spreadsheet_id if settings.PRODUCT_OPS else None)
-    tab = sheet_ctx.get("tab") or (settings.PRODUCT_OPS.scoring_inputs_tab if settings.PRODUCT_OPS else "Scoring_Inputs")
+    cfg = settings.PRODUCT_OPS
+
+    spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (cfg.spreadsheet_id if cfg else None)
+    tab = sheet_ctx.get("tab") or (cfg.scoring_inputs_tab if cfg else "Scoring_Inputs")
     commit_every = int(options.get("commit_every", settings.SCORING_BATCH_COMMIT_EVERY))
 
     keys = scope.get("initiative_keys") or []
@@ -1600,8 +1607,12 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
     if not isinstance(scope, dict):
         scope = {}
 
-    spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (settings.PRODUCT_OPS.spreadsheet_id if settings.PRODUCT_OPS else None)
-    tab = sheet_ctx.get("tab") or (settings.PRODUCT_OPS.scoring_inputs_tab if settings.PRODUCT_OPS else "Scoring_Inputs")
+    scope_type = scope.get("type") if isinstance(scope, dict) else None
+    is_scope_all = scope_type == "all"
+
+    cfg = settings.PRODUCT_OPS
+    spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (cfg.spreadsheet_id if cfg else None)
+    tab = sheet_ctx.get("tab") or (cfg.scoring_inputs_tab if cfg else "Scoring_Inputs")
     commit_every = int(options.get("commit_every", settings.SCORING_BATCH_COMMIT_EVERY))
 
     keys = scope.get("initiative_keys") or []
@@ -1613,11 +1624,20 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
     original_keys = scope.get("initiative_keys")
     skipped_no_key = (len(original_keys) - len(keys)) if isinstance(original_keys, list) else 0
 
+    metrics_kpi_keys = scope.get("kpi_keys") or []
+    if not isinstance(metrics_kpi_keys, list):
+        metrics_kpi_keys = []
+    metrics_kpi_keys = [k for k in metrics_kpi_keys if isinstance(k, str) and k.strip()]
+    metrics_kpi_keys = list(dict.fromkeys(metrics_kpi_keys))
+
     if not spreadsheet_id:
         raise ValueError("sheet_context.spreadsheet_id missing and PRODUCT_OPS not configured")
 
-    # Early bail if no selected keys
-    if not keys:
+    is_metrics_config_tab = bool(cfg and tab == cfg.metrics_config_tab)
+    is_kpi_contrib_tab = bool(cfg and tab == getattr(cfg, "kpi_contributions_tab", None))
+
+    # Early bail if no selected keys (unless Metrics_Config/KPI_Contributions or explicit all-scope)
+    if not keys and not is_metrics_config_tab and not is_kpi_contrib_tab and not is_scope_all:
         logger.info("pm.save_selected.no_keys_selected", extra={"skipped_no_key": skipped_no_key})
         return {
             "pm_job": "pm.save_selected",
@@ -1635,8 +1655,88 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
     status_by_key: Dict[str, Optional[str]] = {k: None for k in keys}
 
     # Safer tab detection: prefer exact config matches, fallback to substring for Backlog
-    cfg = settings.PRODUCT_OPS
     tab_lc = str(tab).lower()
+
+    if cfg and tab == getattr(cfg, "metrics_config_tab", None):
+        # ---------- Branch M: Metrics_Config ----------
+        try:
+            svc = MetricsConfigSyncService(ctx.sheets_client)
+            result = svc.sync_sheet_to_db(
+                db=db,
+                spreadsheet_id=str(spreadsheet_id),
+                tab_name=str(tab),
+                commit_every=commit_every,
+                kpi_keys=metrics_kpi_keys or None,
+            )
+            saved = int(result.get("upserts", 0))
+            row_count = int(result.get("row_count", 0))
+        except Exception as e:
+            logger.exception("pm.save_selected.metrics_config_sync_failed")
+            return {
+                "pm_job": "pm.save_selected",
+                "tab": tab,
+                "selected_count": len(metrics_kpi_keys),
+                "saved_count": 0,
+                "skipped_no_key": skipped_no_key,
+                "failed_count": len(metrics_kpi_keys) or 1,
+                "substeps": [
+                    {"step": "save", "status": "failed", "error": str(e)[:50]},
+                ],
+            }
+
+        return {
+            "pm_job": "pm.save_selected",
+            "tab": tab,
+            "selected_count": len(metrics_kpi_keys) if metrics_kpi_keys else row_count,
+            "saved_count": saved,
+            "skipped_no_key": skipped_no_key,
+            "failed_count": max(0, (len(metrics_kpi_keys) if metrics_kpi_keys else row_count) - saved),
+            "substeps": [
+                {"step": "save", "status": "ok", "count": saved},
+            ],
+        }
+
+    if cfg and tab == getattr(cfg, "kpi_contributions_tab", None):
+        # ---------- Branch K: KPI_Contributions ----------
+        row_count_processed = 0
+        try:
+            svc = KPIContributionsSyncService(ctx.sheets_client)
+            result = svc.sync_sheet_to_db(
+                db=db,
+                spreadsheet_id=str(spreadsheet_id),
+                tab_name=str(tab),
+                commit_every=commit_every,
+                initiative_keys=keys or None,
+            )
+            saved = int(result.get("upserts", 0))
+            row_count_processed = int(result.get("row_count", 0))
+        except Exception as e:
+            logger.exception("pm.save_selected.kpi_contributions_sync_failed")
+            for k in keys:
+                status_by_key[k] = "FAILED: save failed"
+            return {
+                "pm_job": "pm.save_selected",
+                "tab": tab,
+                "selected_count": len(keys) if keys else row_count_processed,
+                "saved_count": 0,
+                "skipped_no_key": skipped_no_key,
+                "failed_count": len(keys) or row_count_processed or 1,
+                "substeps": [
+                    {"step": "save", "status": "failed", "error": str(e)[:50]},
+                ],
+            }
+
+        return {
+            "pm_job": "pm.save_selected",
+            "tab": tab,
+            "selected_count": len(keys) if keys else row_count_processed,
+            "saved_count": saved,
+            "skipped_no_key": skipped_no_key,
+            "failed_count": max(0, (len(keys) if keys else row_count_processed) - saved),
+            "substeps": [
+                {"step": "save", "status": "ok", "count": saved},
+            ],
+        }
 
     if cfg and tab == cfg.mathmodels_tab:
         # ---------- Branch B: MathModels ----------
@@ -1838,7 +1938,7 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
             commit_every=commit_every,
             spreadsheet_id=str(spreadsheet_id),
             tab_name=str(tab),
-            initiative_keys=keys,
+            initiative_keys=(keys if keys else None) if is_scope_all else keys,
         )
     except Exception as e:
         logger.exception("pm.save_selected.inputs_sync_failed")
@@ -1880,13 +1980,14 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
         logger.warning("pm.save_selected.status_write_failed_inputs")
 
     saved_i = int(saved)
+    selected_count_report = len(keys) if keys else saved_i
     return {
         "pm_job": "pm.save_selected",
         "tab": tab,
-        "selected_count": len(keys),
+        "selected_count": selected_count_report,
         "saved_count": saved_i,
         "skipped_no_key": skipped_no_key,
-        "failed_count": max(0, len(keys) - saved_i),
+        "failed_count": max(0, selected_count_report - saved_i),
         "substeps": [
             {"step": "save", "status": "ok", "count": saved_i},
             {"step": "status_write", "status": "ok"},

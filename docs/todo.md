@@ -72,3 +72,28 @@ multi-roadmap scenarios
 governance without friction
 
 
+
+
+Immediate next steps (per Phase 5 roadmap, given current code state):
+
+1) ProductOps config tabs to DB:
+   - Implement Metrics_Config reader/writer + sync service to OrganizationMetricsConfig; add ActionRun for save.
+   - Implement KPI_Contributions reader/writer + sync service to Initiative.kpi_contribution_json (validated against Metrics_Config); add ActionRun for save.
+
+2) MathModels parse path:
+   - Finalize metric_chain_text parsing to Initiative.metric_chain_json (and raw on InitiativeMathModel) in the save flow; ensure status/writebacks OK.
+
+3) Optimization Center plumbing:
+   - Create workbook tabs (Candidates, Scenario_Config, Constraints, Targets, Runs, Results, Gaps_And_Alerts) with header maps.
+   - Implement readers/writers + sync services for Scenario/Constraints/Targets, and status stamping.
+
+4) Optimization service:
+   - Build MILP solver (north_star, weighted_kpis with target-based normalization, lexicographic), with constraints (capacity, floors/caps, mandatory, bundles, prereqs, exclusions, optional synergies).
+   - Persist OptimizationRun + Portfolio + PortfolioItems with inputs_snapshot_json/result_json.
+
+5) PM actions (ActionRun):
+   - Add pm.optimize_* actions: save_scenario, save_constraints, save_targets, run_selected_candidates, run_all_candidates, write_results.
+
+6) Tests:
+   - Unit: normalization, constraint builders, objective selection.
+   - Integration: sheet→DB→opt→sheet round-trip; deterministic rerun check.

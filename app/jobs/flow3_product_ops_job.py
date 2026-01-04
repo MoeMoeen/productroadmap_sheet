@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 
 from sqlalchemy.orm import Session
 
@@ -217,6 +217,7 @@ def run_flow3_write_scores_to_sheet(
     spreadsheet_id: Optional[str] = None,
     tab_name: Optional[str] = None,
     initiative_keys: Optional[List[str]] = None,
+    warnings_by_key: Optional[Dict[str, Any]] = None,
 ) -> int:
     """Flow 3.C Phase 2: Write per-framework scores from DB back to Product Ops sheet.
 
@@ -252,7 +253,14 @@ def run_flow3_write_scores_to_sheet(
     client = SheetsClient(service)
 
     try:
-        count = write_scores_to_productops_sheet(db, client, sheet_id, tab, initiative_keys=initiative_keys)
+        count = write_scores_to_productops_sheet(
+            db,
+            client,
+            sheet_id,
+            tab,
+            initiative_keys=initiative_keys,
+            warnings_by_key=warnings_by_key,
+        )
         logger.info("flow3.write_scores.done", extra={"updated": count})
         return count
     except Exception:

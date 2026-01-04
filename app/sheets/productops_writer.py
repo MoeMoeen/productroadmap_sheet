@@ -61,6 +61,7 @@ def write_scores_to_productops_sheet(
     tab_name: str = "Scoring_Inputs",
     *,
     initiative_keys: List[str] | None = None,
+    warnings_by_key: Dict[str, Any] | None = None,
 ) -> int:
     """Write per-framework scores from DB to Product Ops sheet using targeted cell updates.
 
@@ -173,10 +174,22 @@ def write_scores_to_productops_sheet(
             if field in {"initiative_key", "updated_source", "updated_at"}:
                 continue
 
-            # Get value from DB
-            score_value = getattr(ini, field, None)
-            if score_value is None:
-                continue  # Don't update empty scores (leave blank)
+            # math_warnings are sheet-only: source from provided warnings map, not DB
+            if field == "math_warnings":
+                if not warnings_by_key:
+                    continue
+                raw_warn = warnings_by_key.get(key)
+                if raw_warn is None:
+                    continue
+                if isinstance(raw_warn, list):
+                    score_value = "; ".join(str(w) for w in raw_warn if w)
+                else:
+                    score_value = str(raw_warn)
+            else:
+                # Get value from DB
+                score_value = getattr(ini, field, None)
+                if score_value is None:
+                    continue  # Don't update empty scores (leave blank)
 
             score_value = _to_sheet_value(score_value)
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging
-from typing import Dict, Optional, cast
+from typing import Dict, List, Optional, cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -32,6 +32,8 @@ class ScoringService:
 
     def __init__(self, db: Session):
         self.db = db
+        # Latest math warnings keyed by initiative_key (populated on compute_* calls)
+        self.latest_math_warnings: Dict[str, List[str]] = {}
 
     def score_initiative(
         self,
@@ -75,6 +77,7 @@ class ScoringService:
         initiative.scoring_updated_at = now  # type: ignore[assignment]
 
         # Also store per-framework scores (for multi-framework comparison and Product Ops sheet)
+        key_str = str(getattr(initiative, "initiative_key", "") or "")
         if framework == ScoringFramework.RICE:
             initiative.rice_value_score = result.value_score  # type: ignore[assignment]
             initiative.rice_effort_score = result.effort_score  # type: ignore[assignment]
@@ -87,6 +90,8 @@ class ScoringService:
             initiative.math_value_score = result.value_score  # type: ignore[assignment]
             initiative.math_effort_score = result.effort_score  # type: ignore[assignment]
             initiative.math_overall_score = result.overall_score  # type: ignore[assignment]
+            if key_str:
+                self.latest_math_warnings[key_str] = list(result.warnings)
 
         # If activating, update active fields and provenance flags
         if activate:
@@ -100,6 +105,9 @@ class ScoringService:
                 initiative.score_approved_by_user = bool(inputs.extra.get("math_model_approved", False))  # type: ignore[assignment]
 
         # Log warnings
+        if framework == ScoringFramework.MATH_MODEL and key_str:
+            self.latest_math_warnings[key_str] = list(result.warnings)
+
         for warn in result.warnings:
             logger.warning(
                 "scoring.warning",
@@ -185,8 +193,6 @@ class ScoringService:
             initiative.math_value_score = result.value_score  # type: ignore[assignment]
             initiative.math_effort_score = result.effort_score  # type: ignore[assignment]
             initiative.math_overall_score = result.overall_score  # type: ignore[assignment]
-            # Store warnings for ProductOps sheet visibility
-            initiative.math_warnings = "; ".join(result.warnings) if result.warnings else None  # type: ignore[assignment]
 
         for warn in result.warnings:
             logger.warning(
@@ -400,6 +406,7 @@ class ScoringService:
             extra={"total": total},
         )
 
+        self.latest_math_warnings = {}
         processed = 0
         for idx, initiative in enumerate(initiatives, start=1):
             try:
@@ -454,6 +461,7 @@ class ScoringService:
         if not initiative_keys:
             return 0
         batch_size = commit_every or settings.SCORING_BATCH_COMMIT_EVERY
+        self.latest_math_warnings = {}
 
         stmt = select(Initiative).where(Initiative.initiative_key.in_(initiative_keys)).order_by(Initiative.id)
         initiatives = self.db.execute(stmt).scalars().all()

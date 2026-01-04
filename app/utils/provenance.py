@@ -30,6 +30,10 @@ class Provenance(str, Enum):
     FLOW4_SEED_PARAMS = "flow4.seed_params"
     FLOW4_PROTECT_SHEETS = "flow4.protect_sheets"
 
+    # Flow 5: KPI registry + contributions
+    FLOW5_SYNC_METRICS_CONFIG = "flow5.sync_metrics_config"
+    FLOW5_SYNC_KPI_CONTRIBUTIONS = "flow5.sync_kpi_contributions"
+
 
 def token(prov: Provenance, run_id: Optional[str] = None) -> str:
     """Render a provenance token, optionally appending a run identifier later if needed."""
