@@ -30,6 +30,9 @@ from app.sheets.models import (
 
 logger = logging.getLogger(__name__)
 
+# Batch size guardrail to avoid Sheets API payload/range limits
+_BATCH_UPDATE_CHUNK_SIZE = 200
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -87,14 +90,13 @@ def write_scores_to_productops_sheet(
     if not spreadsheet_id:
         raise ValueError("spreadsheet_id is required")
 
-    # Step 1: Read sheet to get header row and find score column indices
-    # Use explicit A1 range to ensure consistent header + body retrieval
-    values = client.get_values(spreadsheet_id, f"{tab_name}!A1:ZZ")
-    if not values or len(values) < 2:
+    # Step 1: Read header row only to map column indices
+    header_values = client.get_values(spreadsheet_id, f"{tab_name}!1:1")
+    if not header_values or not header_values[0]:
         logger.warning("productops_writer.empty_sheet", extra={"tab": tab_name})
         return 0
 
-    headers = values[0]
+    headers = header_values[0]
     norm_headers = [_normalize_header(h) for h in headers]
 
     # Build alias lookup: normalized alias -> canonical field
@@ -125,7 +127,23 @@ def write_scores_to_productops_sheet(
 
     key_col = col_map["initiative_key"]
 
-    # Step 3: Load initiatives from DB into memory (keyed by initiative_key)
+    # Step 3: Fetch only the needed columns (initiative_key + score/provenance columns)
+    needed_cols = sorted(col_map.values())
+    ranges: List[str] = []
+    for col_idx in needed_cols:
+        col_letter = _col_index_to_a1(col_idx + 1)
+        ranges.append(f"{tab_name}!{col_letter}2:{col_letter}")
+
+    value_ranges = client.batch_get_values(spreadsheet_id, ranges)
+
+    # Map column index -> list of values (starting at row 2)
+    col_values: Dict[int, List[Any]] = {}
+    for col_idx, vr in zip(needed_cols, value_ranges):
+        col_values[col_idx] = vr.get("values", []) if vr else []
+
+    max_rows = len(col_values.get(key_col, []))
+
+    # Step 4: Load initiatives from DB into memory (keyed by initiative_key)
     # Optimize: if initiative_keys provided, query only those keys
     if initiative_keys is not None and initiative_keys:
         initiatives_list = db.query(Initiative).filter(Initiative.initiative_key.in_(initiative_keys)).all()
@@ -138,7 +156,7 @@ def write_scores_to_productops_sheet(
         extra={"count": len(initiatives), "score_columns": len(col_map) - 1},
     )
 
-    # Step 4: Build batch update with all cell updates
+    # Step 5: Build batch update with all cell updates
     # Collect all updates into a single batch request for efficiency
     batch_updates: List[Dict[str, Any]] = []
     updated_initiatives: set = set()
@@ -147,15 +165,29 @@ def write_scores_to_productops_sheet(
     if initiative_keys is not None:
         allowed = set(k for k in initiative_keys if k)
 
-    for row_idx, row_data in enumerate(values[1:], start=2):  # Start at row 2 (row 1 = headers)
+    blank_run = 0
+    blank_run_cutoff = 50  # stop if we see too many consecutive blank keys
+
+    for offset in range(max_rows):
+        row_idx = offset + 2  # Sheet row number
+
         # Extract initiative key from this row
-        key = (
-            (row_data[key_col] if key_col < len(row_data) else "").strip()
-            if key_col < len(row_data)
-            else ""
-        )
+        key_cell = col_values.get(key_col, [])
+        if offset < len(key_cell):
+            cell_entry = key_cell[offset]
+            if isinstance(cell_entry, list):
+                key = cell_entry[0] if cell_entry else ""
+            else:
+                key = cell_entry
+        else:
+            key = ""
+        key = str(key).strip()
         if not key:
+            blank_run += 1
+            if blank_run >= blank_run_cutoff:
+                break
             continue
+        blank_run = 0
         if allowed is not None and key not in allowed:
             continue
 
@@ -220,16 +252,18 @@ def write_scores_to_productops_sheet(
                     "values": [[ts]],
                 })
 
-    # Step 5: Execute single batch update if we have any updates
+    # Step 6: Execute batch updates in safe chunks
     if batch_updates:
         try:
-            client.batch_update_values(spreadsheet_id, batch_updates)
+            for i in range(0, len(batch_updates), _BATCH_UPDATE_CHUNK_SIZE):
+                chunk = batch_updates[i : i + _BATCH_UPDATE_CHUNK_SIZE]
+                client.batch_update_values(spreadsheet_id, chunk)
             logger.info(
                 "productops_writer.done",
                 extra={
                     "updated_initiatives": len(updated_initiatives),
                     "total_cells_updated": len(batch_updates),
-                    "total_rows": len(values) - 1,
+                    "total_rows": max_rows,
                 },
             )
         except Exception:
@@ -241,7 +275,7 @@ def write_scores_to_productops_sheet(
     else:
         logger.info(
             "productops_writer.no_updates",
-            extra={"total_rows": len(values) - 1},
+            extra={"total_rows": max_rows},
         )
 
     return len(updated_initiatives)
@@ -258,12 +292,12 @@ def write_status_to_productops_sheet(
     Finds the initiative_key and Status columns, and writes short messages for keys present
     in status_by_key. If Status column is missing, logs a warning and returns 0.
     """
-    values = client.get_values(spreadsheet_id, f"{tab_name}!A1:ZZ")
-    if not values or len(values) < 2:
+    header_values = client.get_values(spreadsheet_id, f"{tab_name}!1:1")
+    if not header_values or not header_values[0]:
         logger.warning("productops_writer.status.empty_sheet", extra={"tab": tab_name})
         return 0
 
-    headers = values[0]
+    headers = header_values[0]
     norm_headers = [_normalize_header(h) for h in headers]
 
     # Locate initiative_key and Status columns
@@ -285,17 +319,46 @@ def write_status_to_productops_sheet(
         logger.warning("productops_writer.status.no_status_column", extra={"tab": tab_name})
         return 0
 
+    needed_cols = [key_col, status_col]
+    if updated_at_col is not None:
+        needed_cols.append(updated_at_col)
+    needed_cols = sorted(set(needed_cols))
+
+    ranges: List[str] = []
+    for col_idx in needed_cols:
+        col_letter = _col_index_to_a1(col_idx + 1)
+        ranges.append(f"{tab_name}!{col_letter}2:{col_letter}")
+
+    value_ranges = client.batch_get_values(spreadsheet_id, ranges)
+    col_values: Dict[int, List[Any]] = {}
+    for col_idx, vr in zip(needed_cols, value_ranges):
+        col_values[col_idx] = vr.get("values", []) if vr else []
+
+    max_rows = len(col_values.get(key_col, []))
+
     # Build batch updates only for keys we have messages for
     batch_updates: List[Dict[str, Any]] = []
     written = 0
-    for row_idx, row_data in enumerate(values[1:], start=2):
-        key = (
-            (row_data[key_col] if key_col < len(row_data) else "").strip()
-            if key_col < len(row_data)
-            else ""
-        )
+    blank_run = 0
+    blank_run_cutoff = 50
+    for offset in range(max_rows):
+        row_idx = offset + 2
+        key_cell = col_values.get(key_col, [])
+        if offset < len(key_cell):
+            entry = key_cell[offset]
+            if isinstance(entry, list):
+                key = entry[0] if entry else ""
+            else:
+                key = entry
+        else:
+            key = ""
+        key = str(key).strip()
         if not key:
+            blank_run += 1
+            if blank_run >= blank_run_cutoff:
+                break
             continue
+        blank_run = 0
         msg = status_by_key.get(key)
         if msg is None:
             continue
@@ -314,7 +377,9 @@ def write_status_to_productops_sheet(
 
     if batch_updates:
         try:
-            client.batch_update_values(spreadsheet_id, batch_updates)
+            for i in range(0, len(batch_updates), _BATCH_UPDATE_CHUNK_SIZE):
+                chunk = batch_updates[i : i + _BATCH_UPDATE_CHUNK_SIZE]
+                client.batch_update_values(spreadsheet_id, chunk)
         except Exception:
             logger.exception("productops_writer.status.batch_update_failed", extra={"num_updates": len(batch_updates)})
             return 0

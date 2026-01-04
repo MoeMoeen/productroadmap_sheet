@@ -52,6 +52,31 @@ class SheetsClient:
         )
         return resp.get("values", [])
 
+    def batch_get_values(
+        self,
+        spreadsheet_id: str,
+        ranges: list[str],
+        value_render_option: str = "UNFORMATTED_VALUE",
+    ) -> list[dict]:
+        """Batch get multiple ranges in a single API call.
+
+        Returns the raw valueRanges list from the API response, preserving the
+        order of the requested ranges.
+        """
+        if not ranges:
+            return []
+        resp = (
+            self.service.spreadsheets()
+            .values()
+            .batchGet(
+                spreadsheetId=spreadsheet_id,
+                ranges=ranges,
+                valueRenderOption=value_render_option,
+            )
+            .execute()
+        )
+        return resp.get("valueRanges", [])
+
     def update_values(
         self,
         spreadsheet_id: str,

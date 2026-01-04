@@ -94,6 +94,204 @@ KPI_CONTRIBUTIONS_EDITABLE_FIELDS: List[str] = [
     "notes",
 ]
 
+# Optimization Center header maps (ProductOps Optimization Center sheet)
+OPT_CANDIDATES_HEADER_MAP: Dict[str, List[str]] = {
+    "initiative_key": ["initiative_key", "Initiative Key", "key"],
+    "title": ["title", "Title"],
+    "country": ["country", "Country"],
+    "department": ["department", "Department"],
+    "category": ["category", "Category"],
+    "engineering_tokens": ["engineering_tokens", "Engineering Tokens", "capacity_tokens", "Capacity Tokens"],
+    "deadline_date": ["deadline_date", "Deadline Date", "deadline"],
+    "is_mandatory": ["is_mandatory", "Is Mandatory", "mandatory"],
+    "mandate_reason": ["mandate_reason", "Mandate Reason", "mandatory_reason"],
+    "bundle_key": ["bundle_key", "Bundle Key", "bundle"],
+    "prerequisite_keys": ["prerequisite_keys", "Prerequisite Keys", "prerequisites"],
+    "exclusion_keys": ["exclusion_keys", "Exclusion Keys", "exclusions"],
+    "program_key": ["program_key", "Program Key"],
+    "synergy_group_keys": ["synergy_group_keys", "Synergy Group Keys", "synergy_groups"],
+    "active_scoring_framework": ["active_scoring_framework", "Active Scoring Framework"],
+    "active_overall_score": ["active_overall_score", "Active Overall Score"],
+    "north_star_contribution": ["north_star_contribution", "North Star Contribution", "north_star"],
+    "strategic_kpi_contributions": ["strategic_kpi_contributions", "Strategic KPI Contributions"],
+    "immediate_kpi_key": ["immediate_kpi_key", "Immediate KPI Key"],
+    "status": ["status", "Status"],
+    "notes": ["notes", "Notes"],
+    "is_selected_for_run": ["is_selected_for_run", "Is Selected For Run", "selected"],
+    "run_status": RUN_STATUS_ALIASES,
+    "updated_source": UPDATED_SOURCE_ALIASES,
+    "updated_at": UPDATED_AT_ALIASES,
+}
+
+OPT_SCENARIO_CONFIG_HEADER_MAP: Dict[str, List[str]] = {
+    "scenario_name": ["scenario_name", "Scenario Name", "scenario"],
+    "period_key": ["period_key", "Period Key", "period"],
+    "capacity_total_tokens": ["capacity_total_tokens", "Capacity Total Tokens", "capacity", "total_tokens"],
+    "objective_mode": ["objective_mode", "Objective Mode"],
+    "objective_weights_json": ["objective_weights_json", "Objective Weights JSON", "objective_weights"],
+    "notes": ["notes", "Notes"],
+    "run_status": RUN_STATUS_ALIASES,
+    "updated_source": UPDATED_SOURCE_ALIASES,
+    "updated_at": UPDATED_AT_ALIASES,
+}
+
+OPT_CONSTRAINTS_HEADER_MAP: Dict[str, List[str]] = {
+    "constraint_type": ["constraint_type", "Constraint Type", "type"],
+    "dimension": ["dimension", "Dimension"],
+    "key": ["key", "Key", "dimension_key"],
+    "min_tokens": ["min_tokens", "Min Tokens", "min"],
+    "max_tokens": ["max_tokens", "Max Tokens", "max"],
+    "target_kpi_key": ["target_kpi_key", "Target KPI Key"],
+    "target_value": ["target_value", "Target Value"],
+    "notes": ["notes", "Notes"],
+    "run_status": RUN_STATUS_ALIASES,
+    "updated_source": UPDATED_SOURCE_ALIASES,
+    "updated_at": UPDATED_AT_ALIASES,
+}
+
+OPT_TARGETS_HEADER_MAP: Dict[str, List[str]] = {
+    "market": ["market", "Market"],
+    "kpi_key": ["kpi_key", "KPI Key"],
+    "target_value": ["target_value", "Target Value"],
+    "floor_or_goal": ["floor_or_goal", "Floor Or Goal", "floor_goal"],
+    "notes": ["notes", "Notes"],
+    "run_status": RUN_STATUS_ALIASES,
+    "updated_source": UPDATED_SOURCE_ALIASES,
+    "updated_at": UPDATED_AT_ALIASES,
+}
+
+OPT_RUNS_HEADER_MAP: Dict[str, List[str]] = {
+    "run_id": ["run_id", "Run Id", "run"],
+    "scenario_name": ["scenario_name", "Scenario Name"],
+    "period_key": ["period_key", "Period Key", "period"],
+    "status": ["status", "Status"],
+    "created_at": ["created_at", "Created At"],
+    "finished_at": ["finished_at", "Finished At"],
+    "selected_count": ["selected_count", "Selected Count"],
+    "total_objective": ["total_objective", "Total Objective"],
+    "capacity_used": ["capacity_used", "Capacity Used"],
+    "gap_summary": ["gap_summary", "Gap Summary"],
+    "results_tab_ref": ["results_tab_ref", "Results Tab Ref"],
+    "run_status": RUN_STATUS_ALIASES,
+    "updated_source": UPDATED_SOURCE_ALIASES,
+    "updated_at": UPDATED_AT_ALIASES,
+}
+
+OPT_RESULTS_HEADER_MAP: Dict[str, List[str]] = {
+    "initiative_key": ["initiative_key", "Initiative Key", "key"],
+    "selected": ["selected", "Selected"],
+    "allocated_tokens": ["allocated_tokens", "Allocated Tokens", "tokens"],
+    "market": ["market", "Market"],
+    "department": ["department", "Department"],
+    "category": ["category", "Category"],
+    "north_star_gain": ["north_star_gain", "North Star Gain"],
+    "active_overall_score": ["active_overall_score", "Active Overall Score"],
+    "mandate_reason": ["mandate_reason", "Mandate Reason"],
+    "bundle_key": ["bundle_key", "Bundle Key"],
+    "dependency_status": ["dependency_status", "Dependency Status"],
+    "notes": ["notes", "Notes"],
+    "run_status": RUN_STATUS_ALIASES,
+    "updated_source": UPDATED_SOURCE_ALIASES,
+    "updated_at": UPDATED_AT_ALIASES,
+}
+
+OPT_GAPS_ALERTS_HEADER_MAP: Dict[str, List[str]] = {
+    "market": ["market", "Market"],
+    "kpi_key": ["kpi_key", "KPI Key"],
+    "target": ["target", "Target"],
+    "achieved": ["achieved", "Achieved"],
+    "gap": ["gap", "Gap"],
+    "severity": ["severity", "Severity"],
+    "notes": ["notes", "Notes"],
+    "recommendation": ["recommendation", "Recommendation"],
+    "run_status": RUN_STATUS_ALIASES,
+    "updated_source": UPDATED_SOURCE_ALIASES,
+    "updated_at": UPDATED_AT_ALIASES,
+}
+
+OPT_CANDIDATES_EDITABLE_FIELDS: List[str] = [
+    "engineering_tokens",
+    "deadline_date",
+    "is_mandatory",
+    "mandate_reason",
+    "bundle_key",
+    "prerequisite_keys",
+    "exclusion_keys",
+    "program_key",
+    "synergy_group_keys",
+    "notes",
+    "is_selected_for_run",
+    "status",
+]
+
+OPT_SCENARIO_CONFIG_EDITABLE_FIELDS: List[str] = [
+    "scenario_name",
+    "period_key",
+    "capacity_total_tokens",
+    "objective_mode",
+    "objective_weights_json",
+    "notes",
+]
+
+OPT_CONSTRAINTS_EDITABLE_FIELDS: List[str] = [
+    "constraint_type",
+    "dimension",
+    "key",
+    "min_tokens",
+    "max_tokens",
+    "target_kpi_key",
+    "target_value",
+    "notes",
+]
+
+OPT_TARGETS_EDITABLE_FIELDS: List[str] = [
+    "market",
+    "kpi_key",
+    "target_value",
+    "floor_or_goal",
+    "notes",
+]
+
+OPT_RUNS_EDITABLE_FIELDS: List[str] = [
+    "run_id",
+    "scenario_name",
+    "period_key",
+    "status",
+    "created_at",
+    "finished_at",
+    "selected_count",
+    "total_objective",
+    "capacity_used",
+    "gap_summary",
+    "results_tab_ref",
+]
+
+OPT_RESULTS_EDITABLE_FIELDS: List[str] = [
+    "initiative_key",
+    "selected",
+    "allocated_tokens",
+    "market",
+    "department",
+    "category",
+    "north_star_gain",
+    "active_overall_score",
+    "mandate_reason",
+    "bundle_key",
+    "dependency_status",
+    "notes",
+]
+
+OPT_GAPS_ALERTS_EDITABLE_FIELDS: List[str] = [
+    "market",
+    "kpi_key",
+    "target",
+    "achieved",
+    "gap",
+    "severity",
+    "notes",
+    "recommendation",
+]
+
 # ProductOps MathModels tab columns and header aliases
 MATHMODELS_HEADER_MAP = {
     "initiative_key": ["initiative_key"],
@@ -247,6 +445,20 @@ __all__ = [
     "METRICS_CONFIG_EDITABLE_FIELDS",
     "KPI_CONTRIBUTIONS_HEADER_MAP",
     "KPI_CONTRIBUTIONS_EDITABLE_FIELDS",
+    "OPT_CANDIDATES_HEADER_MAP",
+    "OPT_SCENARIO_CONFIG_HEADER_MAP",
+    "OPT_CONSTRAINTS_HEADER_MAP",
+    "OPT_TARGETS_HEADER_MAP",
+    "OPT_RUNS_HEADER_MAP",
+    "OPT_RESULTS_HEADER_MAP",
+    "OPT_GAPS_ALERTS_HEADER_MAP",
+    "OPT_CANDIDATES_EDITABLE_FIELDS",
+    "OPT_SCENARIO_CONFIG_EDITABLE_FIELDS",
+    "OPT_CONSTRAINTS_EDITABLE_FIELDS",
+    "OPT_TARGETS_EDITABLE_FIELDS",
+    "OPT_RUNS_EDITABLE_FIELDS",
+    "OPT_RESULTS_EDITABLE_FIELDS",
+    "OPT_GAPS_ALERTS_EDITABLE_FIELDS",
     "MATHMODELS_HEADER_MAP",
     "PARAMS_HEADER_MAP",
     "INTAKE_HEADER_MAP",
@@ -259,6 +471,13 @@ __all__ = [
     "KPIContributionRow",
     "MathModelRow",
     "ParamRow",
+    "OptCandidateRow",
+    "OptScenarioConfigRow",
+    "OptConstraintRow",
+    "OptTargetRow",
+    "OptRunRow",
+    "OptResultRow",
+    "OptGapAlertRow",
 ]
 
 
@@ -367,6 +586,148 @@ class ParamRow(BaseModel):
         elif self.param_display and not self.display:
             self.display = self.param_display
         return self
+
+
+class OptCandidateRow(BaseModel):
+    """Optimization Center Candidates tab row."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    initiative_key: str
+    title: Optional[str] = None
+    country: Optional[str] = None
+    department: Optional[str] = None
+    category: Optional[str] = None
+    engineering_tokens: Optional[float] = None
+    deadline_date: Optional[str] = None
+    is_mandatory: Optional[bool] = None
+    mandate_reason: Optional[str] = None
+    bundle_key: Optional[str] = None
+    prerequisite_keys: Optional[List[str]] = None
+    exclusion_keys: Optional[List[str]] = None
+    program_key: Optional[str] = None
+    synergy_group_keys: Optional[List[str]] = None
+    active_scoring_framework: Optional[str] = None
+    active_overall_score: Optional[float] = None
+    north_star_contribution: Optional[float] = None
+    strategic_kpi_contributions: Optional[str] = None
+    immediate_kpi_key: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+    is_selected_for_run: Optional[bool] = None
+    run_status: Optional[str] = None
+    updated_source: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class OptScenarioConfigRow(BaseModel):
+    """Optimization Center Scenario_Config tab row."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    scenario_name: str
+    period_key: Optional[str] = None
+    capacity_total_tokens: Optional[float] = None
+    objective_mode: Optional[str] = None
+    objective_weights_json: Optional[Any] = None
+    notes: Optional[str] = None
+    run_status: Optional[str] = None
+    updated_source: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class OptConstraintRow(BaseModel):
+    """Optimization Center Constraints tab row."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    constraint_type: str
+    dimension: str
+    key: Optional[str] = None
+    min_tokens: Optional[float] = None
+    max_tokens: Optional[float] = None
+    target_kpi_key: Optional[str] = None
+    target_value: Optional[float] = None
+    notes: Optional[str] = None
+    run_status: Optional[str] = None
+    updated_source: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class OptTargetRow(BaseModel):
+    """Optimization Center Targets tab row."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    market: str
+    kpi_key: str
+    target_value: Optional[float] = None
+    floor_or_goal: Optional[str] = None
+    notes: Optional[str] = None
+    run_status: Optional[str] = None
+    updated_source: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class OptRunRow(BaseModel):
+    """Optimization Center Runs tab row."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    run_id: str
+    scenario_name: Optional[str] = None
+    period_key: Optional[str] = None
+    status: Optional[str] = None
+    created_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    selected_count: Optional[int] = None
+    total_objective: Optional[float] = None
+    capacity_used: Optional[float] = None
+    gap_summary: Optional[str] = None
+    results_tab_ref: Optional[str] = None
+    run_status: Optional[str] = None
+    updated_source: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class OptResultRow(BaseModel):
+    """Optimization Center Results tab row."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    initiative_key: str
+    selected: Optional[bool] = None
+    allocated_tokens: Optional[float] = None
+    market: Optional[str] = None
+    department: Optional[str] = None
+    category: Optional[str] = None
+    north_star_gain: Optional[float] = None
+    active_overall_score: Optional[float] = None
+    mandate_reason: Optional[str] = None
+    bundle_key: Optional[str] = None
+    dependency_status: Optional[str] = None
+    notes: Optional[str] = None
+    run_status: Optional[str] = None
+    updated_source: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class OptGapAlertRow(BaseModel):
+    """Optimization Center Gaps_and_alerts tab row."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    market: str
+    kpi_key: str
+    target: Optional[float] = None
+    achieved: Optional[float] = None
+    gap: Optional[float] = None
+    severity: Optional[str] = None
+    notes: Optional[str] = None
+    recommendation: Optional[str] = None
+    run_status: Optional[str] = None
+    updated_source: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 # Central Backlog editable columns mapping (used by protected ranges logic)

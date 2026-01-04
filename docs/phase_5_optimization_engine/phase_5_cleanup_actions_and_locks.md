@@ -850,3 +850,182 @@ One-sentence summary
 
 
 ---
+
+18. Pipline Mental Model
+
+
+Intake (market teams) → Central Backlog (canonical view + minimal overrides) → Scoring Center (math model + KPI registry + contributions) → Optimization Center (portfolio governance + selection + scenario) → (later) publish roadmap.
+
+What Candidates must become then:
+
+Candidates is not “read-only view + selection” anymore. It becomes:
+
+> Optimization governance entry surface + selection surface, for a PM-curated subset.
+
+
+But then we must be explicit about which fields are owned here vs elsewhere.
+
+
+
+If Candidates becomes editable for tokens/bundles/etc, you must ensure:
+
+those same fields are not also edited in Central Backlog
+
+and are not also edited in ProductOps (unless you deliberately allow overrides)
+
+
+So the system stays sane.
+
+
+
+Recommended “ownership split” if Candidates is editable (clean + minimal):
+
+Keep in ProductOps (scoring + measurement)
+
+immediate_kpi_key + metric_chain_text (MathModels)
+
+metric_chain_json persisted to Initiative
+
+kpi_contribution_json (KPI_Contributions)
+
+Metrics registry (Metrics_Config)
+
+Params
+
+
+These remain scoring/measurement control center.
+
+Make Candidates the entry surface for optimization governance fields
+
+Editable in OptimizationCenter/Candidates:
+
+engineering_tokens
+
+deadline_date
+
+is_mandatory
+
+mandate_reason
+
+bundle_key
+
+prerequisite_keys
+
+exclusion_keys
+
+program_key
+
+synergy_group_keys
+
+notes
+
+is_selected_for_run
+
+
+Read-only (formula-copied) in Candidates:
+
+initiative_key
+
+title
+
+country
+
+department
+
+category
+
+active_scoring_framework
+
+active_overall_score
+
+north_star_contribution (derived)
+
+strategic_kpi_contributions (derived)
+
+
+This respects the pipeline mental model: scoring outputs come from scoring center; governance comes in optimization stage.
+
+
+
+Where do these Candidates-entered fields persist?
+
+To keep everything consistent and queryable by the solver, they must persist to DB on save:
+
+Persist into Initiative fields:
+
+engineering_tokens
+
+deadline_date
+
+is_mandatory + mandate_reason
+
+bundle_key
+
+prerequisite_keys
+
+exclusion_keys
+
+program_key
+
+synergy_group_keys
+
+
+
+That’s not “polluting the backlog.” It’s just persisting the initiative attributes so the optimizer can run from DB snapshot.
+
+
+
+Practical consequence for the scaffolding design
+
+If Candidates is editable, then:
+
+✅ We do need:
+
+Candidates reader (parse these fields)
+
+Candidates sync service (write these fields to Initiative)
+
+Candidates writer (DB→sheet writeback) should only overwrite owned columns you decide (or avoid writing back except status/provenance)
+
+
+❌ We should not treat Candidates as “just view + checkbox.”
+
+So my earlier recommendation was based on the other contract; with your new contract, we just update the spec.
+
+
+
+The “challenge” to this view (one thing you should decide)
+
+Do we want these governance fields to be global initiative attributes or scenario-specific?
+
+Example:
+
+engineering_tokens is likely initiative-level and stable.
+
+deadline_date might be stable. But:
+
+is_mandatory could be scenario-specific sometimes.
+
+bundle_key could be scenario-specific too.
+
+
+We can still keep them initiative-level for v1 (practical), but just know it’s a modeling choice:
+
+v1: store on Initiative (simplest)
+
+v2: move scenario-specific governance to a Scenario/ConstraintSet overlay table
+
+
+Given the current model, v1 = Initiative-level is consistent and fine.
+
+
+
+
+What we will lock right now
+
+
+1. Candidates tab is an entry surface for optimization governance fields (listed above).
+2. Those fields persist to Initiative on save_selected(Candidates).
+3. ProductOps remains the entry surface for KPI registry, chain, and contributions.
+4. Backlog remains mostly view; optional editing does not include these governance fields (to avoid conflicts).
+
