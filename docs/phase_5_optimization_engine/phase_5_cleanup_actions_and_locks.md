@@ -1029,3 +1029,73 @@ What we will lock right now
 3. ProductOps remains the entry surface for KPI registry, chain, and contributions.
 4. Backlog remains mostly view; optional editing does not include these governance fields (to avoid conflicts).
 
+
+
+---
+
+19. Lock this: when we say a sheet column is editable we mean PM-editable, not backend-editable i.e., PMs can edit them not backend. Backend writes are allowed only to system-owned columns.
+
+
+---
+
+
+20. A few more lock ins:
+
+
+      1. Status semantics: clarified and de-conflicted
+
+      ✅ Lifecycle vs Run vs System status
+
+      LifecycleStatus
+
+      Renamed from ambiguous status
+
+      Represents initiative lifecycle / progress
+
+      PM-owned concept, but:
+
+      In Candidates tab it is formula-fed from Central Backlog / DB
+
+      Not manually edited by PMs in Optimization Center
+
+
+
+      run_status
+
+      Sheet-facing execution / run feedback
+
+      Written by backend (Flow / Writer)
+
+
+      System-owned status fields
+
+      Renamed internal variable from misleading PMStatusFields → _SYSTEM_STATUS_FIELDS
+
+      Explicitly includes:
+
+      ["run_status", "updated_source", "updated_at"]
+
+
+
+      This removed the long-standing ambiguity between:
+
+      PM intent (“what stage is this initiative in?”)
+
+      System execution (“what happened in this run?”)
+
+
+
+      ---
+
+      2. Output fields vs editable fields: made explicit and consistent
+
+      Clear rule introduced
+
+      Editable fields = PM-editable in sheet
+
+      Output fields = written by backend only
+
+      System status fields = always written by backend, composable
+
+
+---

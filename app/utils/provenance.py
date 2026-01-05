@@ -34,6 +34,9 @@ class Provenance(str, Enum):
     FLOW5_SYNC_METRICS_CONFIG = "flow5.sync_metrics_config"
     FLOW5_SYNC_KPI_CONTRIBUTIONS = "flow5.sync_kpi_contributions"
 
+    # Flow 6: Optimization Center sheets
+    FLOW6_SYNC_OPT_CENTER = "flow6.sync_opt_center"
+
 
 def token(prov: Provenance, run_id: Optional[str] = None) -> str:
     """Render a provenance token, optionally appending a run identifier later if needed."""

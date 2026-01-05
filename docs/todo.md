@@ -53,18 +53,18 @@ Immediate next steps (per Phase 5 roadmap, given current code state):
      * Candidates/Results keyed by initiative_key
      * Scenario_Config keyed by scenario_name
      * Constraints keyed by (constraint_type, dimension, key) string key
-     * Targets keyed by (market, kpi_key)
+     * Targets keyed by (country, kpi_key)
      * Runs keyed by run_id
-     * Gaps_and_alerts keyed by (market, kpi_key)
+     * Gaps_and_alerts keyed by (country, kpi_key)
 
 4) Sync services (sheet → DB)
    - candidates_sync_service: upsert OptimizationCandidate (or similar) fields; validate initiative exists; apply provenance, updated_at; respect is_selected_for_run.
    - scenario_config_sync_service: upsert ScenarioConfig (period_key, capacity_total_tokens, objective_mode, objective_weights_json).
    - constraints_sync_service: upsert Constraint rows keyed by (constraint_type, dimension, key); validate min/max/target numeric.
-   - targets_sync_service: upsert Target rows keyed by (market, kpi_key); validate floor_or_goal enum.
+   - targets_sync_service: upsert Target rows keyed by (country, kpi_key); validate floor_or_goal enum.
    - runs_sync_service: upsert run metadata (run_id, scenario_name, status timestamps).
    - results_sync_service: upsert OptimizationResult rows (selected, allocated_tokens, gains, notes).
-   - gaps_alerts_sync_service: upsert gaps/alerts keyed by (market, kpi_key); severity optional enum.
+   - gaps_alerts_sync_service: upsert gaps/alerts keyed by (country, kpi_key); severity optional enum.
 
    Common patterns:
    - Use blank-run cutoff when scanning keys.
@@ -73,7 +73,7 @@ Immediate next steps (per Phase 5 roadmap, given current code state):
    - Return counts (row_count, upserts, failures).
 
 5) Status writebacks
-   - For each tab, support a Status column if present (or run_status column you already have). Writer should only touch the status column; minimal read (header + key + status col), blank-run cutoff, chunked updates.
+   - For each tab, support a Run Status column if present (or run_status column you already have). Writer should only touch the status column; minimal read (header + key + status col), blank-run cutoff, chunked updates.
    - Hook into ActionRunner substeps to write per-row status on errors/success where applicable.
 
 6) ActionRunner wiring

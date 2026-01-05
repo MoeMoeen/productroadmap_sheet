@@ -100,7 +100,7 @@ class Initiative(Base):
     candidate_period_key = Column(String(50), nullable=True, index=True)
 
     # I. Lifecycle & workflow
-    status = Column(String(50), nullable=False, default="new")
+    lifecycle_status = Column(String(50), nullable=False, default="new")
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     # Source that last updated this row (e.g., "intake", "backlog", "system")

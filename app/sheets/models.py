@@ -32,9 +32,6 @@ RUN_STATUS_ALIASES = [
     "run_status",
     "Run Status",
     "RUN STATUS",
-    "status",
-    "Status",
-    "STATUS",
     "last_run_status",
     "Last Run Status",
 ]
@@ -115,7 +112,7 @@ OPT_CANDIDATES_HEADER_MAP: Dict[str, List[str]] = {
     "north_star_contribution": ["north_star_contribution", "North Star Contribution", "north_star"],
     "strategic_kpi_contributions": ["strategic_kpi_contributions", "Strategic KPI Contributions"],
     "immediate_kpi_key": ["immediate_kpi_key", "Immediate KPI Key"],
-    "status": ["status", "Status"],
+    "lifecycle_status": ["lifecycle_status", "Lifecycle Status"],
     "notes": ["notes", "Notes"],
     "is_selected_for_run": ["is_selected_for_run", "Is Selected For Run", "selected"],
     "run_status": RUN_STATUS_ALIASES,
@@ -150,7 +147,7 @@ OPT_CONSTRAINTS_HEADER_MAP: Dict[str, List[str]] = {
 }
 
 OPT_TARGETS_HEADER_MAP: Dict[str, List[str]] = {
-    "market": ["market", "Market"],
+    "country": ["market", "Market", "country", "Country"],
     "kpi_key": ["kpi_key", "KPI Key"],
     "target_value": ["target_value", "Target Value"],
     "floor_or_goal": ["floor_or_goal", "Floor Or Goal", "floor_goal"],
@@ -164,7 +161,7 @@ OPT_RUNS_HEADER_MAP: Dict[str, List[str]] = {
     "run_id": ["run_id", "Run Id", "run"],
     "scenario_name": ["scenario_name", "Scenario Name"],
     "period_key": ["period_key", "Period Key", "period"],
-    "status": ["status", "Status"],
+    "optimization_db_status": ["db_status", "db status", "optimization_db_status", "Optimization DB Status"],
     "created_at": ["created_at", "Created At"],
     "finished_at": ["finished_at", "Finished At"],
     "selected_count": ["selected_count", "Selected Count"],
@@ -181,7 +178,7 @@ OPT_RESULTS_HEADER_MAP: Dict[str, List[str]] = {
     "initiative_key": ["initiative_key", "Initiative Key", "key"],
     "selected": ["selected", "Selected"],
     "allocated_tokens": ["allocated_tokens", "Allocated Tokens", "tokens"],
-    "market": ["market", "Market"],
+    "country": ["market", "Market", "country", "Country"],
     "department": ["department", "Department"],
     "category": ["category", "Category"],
     "north_star_gain": ["north_star_gain", "North Star Gain"],
@@ -196,7 +193,7 @@ OPT_RESULTS_HEADER_MAP: Dict[str, List[str]] = {
 }
 
 OPT_GAPS_ALERTS_HEADER_MAP: Dict[str, List[str]] = {
-    "market": ["market", "Market"],
+    "country": ["market", "Market", "country", "Country"],
     "kpi_key": ["kpi_key", "KPI Key"],
     "target": ["target", "Target"],
     "achieved": ["achieved", "Achieved"],
@@ -208,7 +205,7 @@ OPT_GAPS_ALERTS_HEADER_MAP: Dict[str, List[str]] = {
     "updated_source": UPDATED_SOURCE_ALIASES,
     "updated_at": UPDATED_AT_ALIASES,
 }
-
+# Editable fields means PM-editable in the sheet; others are system-managed.
 OPT_CANDIDATES_EDITABLE_FIELDS: List[str] = [
     "engineering_tokens",
     "deadline_date",
@@ -221,9 +218,8 @@ OPT_CANDIDATES_EDITABLE_FIELDS: List[str] = [
     "synergy_group_keys",
     "notes",
     "is_selected_for_run",
-    "status",
 ]
-
+# Editable fields means PM-editable in the sheet; others are system-managed.
 OPT_SCENARIO_CONFIG_EDITABLE_FIELDS: List[str] = [
     "scenario_name",
     "period_key",
@@ -232,7 +228,7 @@ OPT_SCENARIO_CONFIG_EDITABLE_FIELDS: List[str] = [
     "objective_weights_json",
     "notes",
 ]
-
+# Editable fields means PM-editable in the sheet; others are system-managed.
 OPT_CONSTRAINTS_EDITABLE_FIELDS: List[str] = [
     "constraint_type",
     "dimension",
@@ -243,20 +239,26 @@ OPT_CONSTRAINTS_EDITABLE_FIELDS: List[str] = [
     "target_value",
     "notes",
 ]
-
+# Editable fields means PM-editable in the sheet; others are system-managed.
 OPT_TARGETS_EDITABLE_FIELDS: List[str] = [
-    "market",
+    "country",
     "kpi_key",
     "target_value",
     "floor_or_goal",
     "notes",
 ]
+# Editable fields means PM-editable in the sheet; others are system-managed.
+OPT_RESULTS_EDITABLE_FIELDS: List[str] = ["notes"]
 
-OPT_RUNS_EDITABLE_FIELDS: List[str] = [
+# Editable fields means PM-editable in the sheet; others are system-managed.
+OPT_GAPS_ALERTS_EDITABLE_FIELDS: List[str] = ["notes", "recommendation"]
+
+# Output fields means these are written by the system, during the optimization execution, to the sheet, not by PMs.
+OPT_RUNS_OUTPUT_FIELDS: List[str] = [
     "run_id",
     "scenario_name",
     "period_key",
-    "status",
+    "optimization_db_status",
     "created_at",
     "finished_at",
     "selected_count",
@@ -264,13 +266,14 @@ OPT_RUNS_EDITABLE_FIELDS: List[str] = [
     "capacity_used",
     "gap_summary",
     "results_tab_ref",
+    "run_status",
 ]
-
-OPT_RESULTS_EDITABLE_FIELDS: List[str] = [
+# Output fields means these are written by the system, during the optimization execution, to the sheet, not by PMs.
+OPT_RESULTS_OUTPUT_FIELDS: List[str] = [
     "initiative_key",
     "selected",
     "allocated_tokens",
-    "market",
+    "country",
     "department",
     "category",
     "north_star_gain",
@@ -278,18 +281,15 @@ OPT_RESULTS_EDITABLE_FIELDS: List[str] = [
     "mandate_reason",
     "bundle_key",
     "dependency_status",
-    "notes",
 ]
-
-OPT_GAPS_ALERTS_EDITABLE_FIELDS: List[str] = [
-    "market",
+# Output fields means these are written by the system, during the optimization execution, to the sheet, not by PMs.
+OPT_GAPS_ALERTS_OUTPUT_FIELDS: List[str] = [
+    "country",
     "kpi_key",
     "target",
     "achieved",
     "gap",
     "severity",
-    "notes",
-    "recommendation",
 ]
 
 # ProductOps MathModels tab columns and header aliases
@@ -383,7 +383,7 @@ CENTRAL_BACKLOG_HEADER: List[str] = [
     "Requester Email",
     "Country",
     "Product Area",
-    "Status",
+    "Lifecycle Status",
     "Customer Segment",
     "Initiative Type",
     "Hypothesis",
@@ -416,7 +416,7 @@ CENTRAL_HEADER_TO_FIELD: Dict[str, str] = {
     "Requester Email": "requester_email",
     "Country": "country",
     "Product Area": "product_area",
-    "Status": "status",
+    "Lifecycle Status": "lifecycle_status",
     "Customer Segment": "customer_segment",
     "Initiative Type": "initiative_type",
     "Hypothesis": "hypothesis",
@@ -456,9 +456,9 @@ __all__ = [
     "OPT_SCENARIO_CONFIG_EDITABLE_FIELDS",
     "OPT_CONSTRAINTS_EDITABLE_FIELDS",
     "OPT_TARGETS_EDITABLE_FIELDS",
-    "OPT_RUNS_EDITABLE_FIELDS",
-    "OPT_RESULTS_EDITABLE_FIELDS",
-    "OPT_GAPS_ALERTS_EDITABLE_FIELDS",
+    "OPT_RUNS_OUTPUT_FIELDS",
+    "OPT_RESULTS_OUTPUT_FIELDS",
+    "OPT_GAPS_ALERTS_OUTPUT_FIELDS",
     "MATHMODELS_HEADER_MAP",
     "PARAMS_HEADER_MAP",
     "INTAKE_HEADER_MAP",
@@ -612,7 +612,7 @@ class OptCandidateRow(BaseModel):
     north_star_contribution: Optional[float] = None
     strategic_kpi_contributions: Optional[str] = None
     immediate_kpi_key: Optional[str] = None
-    status: Optional[str] = None
+    lifecycle_status: Optional[str] = None
     notes: Optional[str] = None
     is_selected_for_run: Optional[bool] = None
     run_status: Optional[str] = None
@@ -659,7 +659,7 @@ class OptTargetRow(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    market: str
+    country: str
     kpi_key: str
     target_value: Optional[float] = None
     floor_or_goal: Optional[str] = None
@@ -698,7 +698,7 @@ class OptResultRow(BaseModel):
     initiative_key: str
     selected: Optional[bool] = None
     allocated_tokens: Optional[float] = None
-    market: Optional[str] = None
+    country: Optional[str] = None
     department: Optional[str] = None
     category: Optional[str] = None
     north_star_gain: Optional[float] = None
@@ -717,7 +717,7 @@ class OptGapAlertRow(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    market: str
+    country: str
     kpi_key: str
     target: Optional[float] = None
     achieved: Optional[float] = None
@@ -730,7 +730,7 @@ class OptGapAlertRow(BaseModel):
     updated_at: Optional[str] = None
 
 
-# Central Backlog editable columns mapping (used by protected ranges logic)
+# Central Backlog PM-editable columns mapping (used by protected ranges logic)
 # Keys are exact header names in CENTRAL_BACKLOG_HEADER that are editable by users.
 CENTRAL_EDITABLE_FIELDS: List[str] = [
     "Title",
@@ -739,7 +739,7 @@ CENTRAL_EDITABLE_FIELDS: List[str] = [
     "Requester Email",
     "Country",
     "Product Area",
-    "Status",
+    "Lifecycle Status",
     "Customer Segment",
     "Initiative Type",
     "Hypothesis",

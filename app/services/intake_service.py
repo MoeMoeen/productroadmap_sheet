@@ -297,7 +297,7 @@ class IntakeService:
             if field_name == "status":
                 if str(value).strip().lower() not in {s.lower() for s in ALLOWED_INTAKE_STATUSES}:
                     continue
-                current = (initiative.status or "").strip().lower()
+                current = (initiative.lifecycle_status or "").strip().lower()
                 new = (str(value) or "").strip().lower()
                 if not allow_status_override and current == "withdrawn" and new == "new":
                     logger.info(
