@@ -133,13 +133,14 @@ OPT_SCENARIO_CONFIG_HEADER_MAP: Dict[str, List[str]] = {
 }
 
 OPT_CONSTRAINTS_HEADER_MAP: Dict[str, List[str]] = {
+    "scenario_name": ["scenario_name", "Scenario Name", "scenario"],
+    "constraint_set_name": ["constraint_set_name", "Constraint Set Name", "constraint_set", "set"],
     "constraint_type": ["constraint_type", "Constraint Type", "type"],
     "dimension": ["dimension", "Dimension"],
-    "key": ["key", "Key", "dimension_key"],
+    "dimension_key": ["dimension_key", "Dimension Key", "key", "Key"],
     "min_tokens": ["min_tokens", "Min Tokens", "min"],
     "max_tokens": ["max_tokens", "Max Tokens", "max"],
-    "target_kpi_key": ["target_kpi_key", "Target KPI Key"],
-    "target_value": ["target_value", "Target Value"],
+    "bundle_member_keys": ["bundle_member_keys", "Bundle Member Keys", "bundle_members"],
     "notes": ["notes", "Notes"],
     "run_status": RUN_STATUS_ALIASES,
     "updated_source": UPDATED_SOURCE_ALIASES,
@@ -147,7 +148,10 @@ OPT_CONSTRAINTS_HEADER_MAP: Dict[str, List[str]] = {
 }
 
 OPT_TARGETS_HEADER_MAP: Dict[str, List[str]] = {
-    "country": ["market", "Market", "country", "Country"],
+    "scenario_name": ["scenario_name", "Scenario Name", "scenario"],
+    "constraint_set_name": ["constraint_set_name", "Constraint Set Name", "constraint_set", "set"],
+    "dimension": ["dimension", "Dimension"],
+    "dimension_key": ["dimension_key", "Dimension Key", "country", "Country", "market", "Market"],
     "kpi_key": ["kpi_key", "KPI Key"],
     "target_value": ["target_value", "Target Value"],
     "floor_or_goal": ["floor_or_goal", "Floor Or Goal", "floor_goal"],
@@ -232,16 +236,16 @@ OPT_SCENARIO_CONFIG_EDITABLE_FIELDS: List[str] = [
 OPT_CONSTRAINTS_EDITABLE_FIELDS: List[str] = [
     "constraint_type",
     "dimension",
-    "key",
+    "dimension_key",
     "min_tokens",
     "max_tokens",
-    "target_kpi_key",
-    "target_value",
+    "bundle_member_keys",
     "notes",
 ]
 # Editable fields means PM-editable in the sheet; others are system-managed.
 OPT_TARGETS_EDITABLE_FIELDS: List[str] = [
-    "country",
+    "dimension",
+    "dimension_key",
     "kpi_key",
     "target_value",
     "floor_or_goal",
@@ -641,13 +645,14 @@ class OptConstraintRow(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    scenario_name: str
+    constraint_set_name: str
     constraint_type: str
     dimension: str
-    key: Optional[str] = None
+    dimension_key: Optional[str] = None
     min_tokens: Optional[float] = None
     max_tokens: Optional[float] = None
-    target_kpi_key: Optional[str] = None
-    target_value: Optional[float] = None
+    bundle_member_keys: Optional[str] = None
     notes: Optional[str] = None
     run_status: Optional[str] = None
     updated_source: Optional[str] = None
@@ -659,7 +664,10 @@ class OptTargetRow(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    country: str
+    scenario_name: str
+    constraint_set_name: str
+    dimension: Optional[str] = "country"
+    dimension_key: str
     kpi_key: str
     target_value: Optional[float] = None
     floor_or_goal: Optional[str] = None

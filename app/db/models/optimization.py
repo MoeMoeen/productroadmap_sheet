@@ -96,7 +96,10 @@ class OptimizationConstraintSet(Base):
     targets_json = Column(JSON, nullable=True)
     mandatory_initiatives_json = Column(JSON, nullable=True)
     bundles_json = Column(JSON, nullable=True)
-    exclusions_json = Column(JSON, nullable=True)
+    exclusions_initiatives_json = Column(JSON, nullable=True)
+    exclusions_pairs_json = Column(JSON, nullable=True)
+    prerequisites_json = Column(JSON, nullable=True)
+    synergy_bonuses_json = Column(JSON, nullable=True)
     notes = Column(Text, nullable=True)
 
     created_at = Column(

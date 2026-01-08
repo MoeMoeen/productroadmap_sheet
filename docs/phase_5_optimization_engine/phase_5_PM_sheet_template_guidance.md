@@ -139,8 +139,7 @@ Define **governance and feasibility rules**.
 * `key`
 * `min_tokens`
 * `max_tokens`
-* `target_kpi_key`
-* `target_value`
+* `bundle_member_keys`
 * `notes`
 
 ### PM-only helper columns
