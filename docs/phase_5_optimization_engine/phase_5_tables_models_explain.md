@@ -99,9 +99,11 @@ Here’s the “clean graph” you now have, with relationships:
 
 * defines objective_mode, weights, capacity
 
-**OptimizationConstraintSet** (0..N, optionally linked to scenario)
+**OptimizationConstraintSet** (0..N, linked to scenario via scenario_id)
 
-* compiled constraints + targets JSON
+* Compiled constraints + targets from sheet rows
+* JSON columns: floors, caps, targets (multi-dimensional nested), mandatory, bundles, exclusions (split into initiatives + pairs), prerequisites, synergies
+* Identified by (scenario_id, name) - one scenario can have multiple constraint sets (e.g., "Baseline", "Aggressive")
 
 **OptimizationRun** (0..N per scenario)
 
@@ -126,16 +128,22 @@ Here’s the “clean graph” you now have, with relationships:
 * join table between Portfolio and Initiative
 * holds selected flag, allocated_tokens, rank, source
 
-### Publishing layer (keep it separate)
+### Publishing layer (keep it separate from optimization outputs)
 
 **Roadmap** (0..N)
 
-* published plan artifact
+* Published plan artifact for stakeholder communication
+* Can be created from a Portfolio ("Publish" action)
+* Versioned, timestamped, human-curated
 
 **RoadmapEntry** (0..N per roadmap)
 
-* join between Roadmap and Initiative
-* should focus on scheduling/locks/notes
+* Join between Roadmap and Initiative
+* Should focus on scheduling/locks/notes/manual overrides
+* NOT the optimization output record (that's PortfolioItem)
+* May diverge from Portfolio due to human adjustments
+
+**Recommended refactor:** Remove optimization provenance fields from RoadmapEntry (is_selected, score snapshots, optimization_run_id). Link to Portfolio instead if lineage tracking needed.
 
 ---
 

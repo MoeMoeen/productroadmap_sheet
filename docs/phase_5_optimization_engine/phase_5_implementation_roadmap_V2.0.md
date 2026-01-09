@@ -349,38 +349,89 @@ These run in worker with ActionRun ledger, consistent summary semantics, and per
    * llm_suggested_metric_chain_text (sheet-only)
    * update MathModelSyncService to parse + persist Initiative.metric_chain_json
 
-### Phase 5.2 — Optimization Center spreadsheet plumbing
+### Phase 5.2 — Optimization Center spreadsheet plumbing ✅ COMPLETE
 
-9. Create Optimization Center workbook with locked tabs + headers
-10. Implement readers/writers + header maps
-11. Implement scenario/constraints/targets sync services
+9. ✅ Create Optimization Center workbook with locked tabs + headers
+10. ✅ Implement readers/writers + header maps (ConstraintsReader, TargetsReader, ConstraintsWriter, TargetsWriter)
+11. ✅ Implement constraint/target compilation and sync services:
+    * `app/services/optimization_compiler.py` - pure compilation logic (zero I/O)
+    * `app/services/optimization_sync_service.py` - I/O orchestration (sheets → compiler → DB)
+    * Schema validation via discriminated unions in `app/schemas/optimization_center.py`
+    * Writers use composite keys to prevent collisions
+12. ✅ Apply production-grade fixes:
+    * Rename `key` → `dimension_key` across all layers
+    * Multi-dimensional targets with nested JSON: `{dimension: {dimension_key: {kpi_key: {...}}}}`
+    * Bundle member deduplication (schema-level)
+    * Exclusion pair normalization (sorted pairs)
+    * Split exclusions into `exclusions_initiatives_json` + `exclusions_pairs_json`
+    * CapacityDimension literal type for type safety
+    * Full composite key scoping in writers
 
-### Phase 5.3 — Optimization engine
+### Phase 5.3 — Solver interface design (NEXT)
 
-12. Implement OptimizationService (MILP via OR-Tools)
-13. Implement objective modes:
+13. Design solver adapter interface:
+    * Define `OptimizationProblem` schema (candidates + objective + constraints)
+    * Define `OptimizationSolution` schema (selected + allocations + KPI achievements)
+    * Define `SolverAdapter` protocol
+14. Implement feasibility checker (pre-solver validation):
+    * Detect hard contradictions (mandatory + excluded, prerequisite cycles)
+    * Detect capacity impossibilities (sum(floors) > cap)
+    * Return `FeasibilityReport` with errors/warnings
+15. Implement solver adapter stub (mock solutions for testing)
 
-* north_star (native)
-* weighted_kpis (normalized by targets)
-* lexicographic
+### Phase 5.4 — THE ACTUAL SOLVER (THE HEART OF THE SYSTEM)
 
-14. Implement governance constraints (mandatory, bundles, prereqs, exclusions)
+16. **Implement the optimization solver** (`app/services/optimization_solver.py`):
+    * **Build MILP model** using OR-Tools CP-SAT or PuLP:
+      * Binary decision variables: x_i for each candidate initiative
+      * Objective function construction (north_star / weighted_kpis / lexicographic)
+      * Capacity constraints (sum tokens by dimension <= caps, >= floors)
+      * Governance constraints:
+        * Mandatory: x_i = 1 for mandatory initiatives
+        * Bundles: all-or-nothing (if any x_i in bundle = 1, all must = 1)
+        * Exclusions pairs: x_i + x_j <= 1
+        * Exclusions initiatives: x_i = 0 for excluded initiatives
+        * Prerequisites: x_dependent <= x_required (or equivalently: x_dependent => x_required)
+        * Synergy bonuses (optional): add bonus terms to objective when both x_i = 1 and x_j = 1
+      * Target constraints (multi-dimensional):
+        * KPI floor constraints: sum(contributions[dimension][dimension_key][kpi]) >= target_value
+        * KPI goal constraints: soft penalties or second-stage optimization
+    * **Solve the model**:
+      * Call solver.Solve()
+      * Check solver status (OPTIMAL, FEASIBLE, INFEASIBLE, UNBOUNDED)
+      * Extract solution: selected initiative keys, allocated tokens per dimension, achieved KPI values
+    * **Compute results**:
+      * Total objective value
+      * Capacity used (total and by dimension)
+      * KPI achievements (by dimension)
+      * Gaps vs targets
+      * Solver diagnostics (solve time, iterations, etc.)
+    * **Return `OptimizationSolution`** with all results
 
-### Phase 5.4 — Execution jobs (ActionRun)
+17. **Wire solver into optimization service**:
+    * `optimization_service.py` calls feasibility checker first
+    * If feasible, calls solver with `OptimizationProblem`
+    * Persists `OptimizationRun` + `Portfolio` + `PortfolioItem` records
+    * Returns run_id and summary
 
-15. Add PM job actions to action_runner + worker orchestration
-16. Add Apps Script UI menus in Optimization Center
+18. Run 2-3 smoke test scenarios end-to-end (simple, conflicting, multi-dimensional)
 
-### Phase 5.5 — Portfolio persistence + publish roadmap outputs
+### Phase 5.5 — Execution jobs (ActionRun)
 
-17. Persist Portfolio + PortfolioItems per run
-18. Create Roadmap spreadsheet + publishing flow
-19. Add what-if scenario runner (clone scenario + rerun)
+19. Add PM job actions to action_runner + worker orchestration
+20. Add Apps Script UI menus in Optimization Center
+
+### Phase 5.6 — Portfolio persistence + publish roadmap outputs
+
+21. Persist Portfolio + PortfolioItems per run (already covered in 5.4)
+22. Create Roadmap spreadsheet + publishing flow
+23. Add what-if scenario runner (clone scenario + rerun)
 
 ## Phase 5.F — Advanced features from narrative
-15. Synergy group bonuses
-16. Horse trading assistant: “if we force X, what drops?”
-17. Multi-roadmap generation: run multiple frameworks / weights to produce multiple portfolios
-18. Gap signals + collaboration prompts
+
+24. Enhanced synergy group bonuses (complex scoring models)
+25. Horse trading assistant: "if we force X, what drops?"
+26. Multi-roadmap generation: run multiple frameworks / weights to produce multiple portfolios
+27. Gap signals + collaboration prompts
 
 ---

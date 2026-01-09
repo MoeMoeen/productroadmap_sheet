@@ -132,15 +132,20 @@ Define **governance and feasibility rules**.
 
 ### Recommended columns (backend-recognized)
 
+* `scenario_name` (grouping key for compilation)
+* `constraint_set_name` (e.g., "Baseline", "Aggressive", "Relaxed")
 * `constraint_type`
-  (`floor` | `cap` | `mandatory` | `dependency` | `bundle` | `exclusion` | `target`)
+  (`capacity_floor` | `capacity_cap` | `mandatory` | `bundle` | `exclude_pair` | `exclude_initiative` | `prerequisite` | `synergy_bonus`)
 * `dimension`
-  (`market` | `department` | `category` | `global` | `kpi`)
-* `key`
-* `min_tokens`
-* `max_tokens`
-* `bundle_member_keys`
+  (for capacity: `country` | `product` | `department` | `category` | `program` | `all`)
+  (for governance: `initiative`)
+* `dimension_key` (the specific value: UK, Growth, INIT-000123, etc.)
+* `min_tokens` (capacity_floor only)
+* `max_tokens` (capacity_cap only)
+* `bundle_member_keys` (pipe-separated: "INIT-001|INIT-002|INIT-003")
 * `notes`
+
+**Note:** Targets moved to separate Targets tab. Each constraint row represents one rule; many rows share the same (scenario_name, constraint_set_name) and get compiled together.
 
 ### PM-only helper columns
 
@@ -160,16 +165,22 @@ Define **governance and feasibility rules**.
 **Purpose:**
 Define **KPI targets**, used for:
 
-* constraints
-* normalization (weighted objective)
+* constraints (all optimization modes)
+* normalization scale (weighted_kpis mode)
+* achievement tracking (gaps)
 
 ### Recommended columns (backend-recognized)
 
-* `market` (`GLOBAL` allowed)
-* `kpi_key`
-* `target_value`
+* `scenario_name` (grouping key for compilation)
+* `constraint_set_name` (must match Constraints tab)
+* `dimension` (e.g., `country`, `product`, `all` for global)
+* `dimension_key` (e.g., `UK`, `Payments`, empty for `all`)
+* `kpi_key` (must exist in ProductOps → Metrics_Config)
 * `floor_or_goal` (`floor` | `goal`)
+* `target_value` (numeric, in native KPI units)
 * `notes`
+
+**Multi-dimensional targets supported:** You can set country-level targets, product-level targets, cross-sectional targets (country+product), or global targets (dimension="all"). Targets compile to nested JSON: `{dimension: {dimension_key: {kpi_key: {type, value, notes?}}}}`.
 
 ### PM-only helper columns
 

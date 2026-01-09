@@ -127,7 +127,9 @@ def compile_constraint_sets(
         elif isinstance(parsed, RequirePrereqRowSchema):
             parts = [p.strip() for p in (parsed.dimension_key or "").split("|") if p.strip()]
             if parts:
-                constraint_set.prerequisites.append(parts)
+                dependent = parts[0]
+                prereqs = parts[1:]
+                constraint_set.prerequisites[dependent] = prereqs
         elif isinstance(parsed, SynergyBonusRowSchema):
             parts = [p.strip() for p in (parsed.dimension_key or "").split("|") if p.strip()]
             if len(parts) >= 2:

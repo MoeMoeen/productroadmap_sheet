@@ -49,10 +49,10 @@ Below is a **first-pass glossary** for every Phase 5 field/column we discussed (
 ### F) Metric chain + contributions (impact model)
 
 * **immediate_kpi_key**: The direct metric this initiative most immediately moves (closest causal metric).
-* **primary_kpi_key**: The main KPI the initiative is primarily accountable for improving (one level up, more strategic).
-* **north_star_kpi_key**: The ultimate business north star KPI used for the portfolio objective (often global, not per initiative).
-* **metric_chain_json**: A structured graph describing how the initiative’s impact flows through intermediate KPIs to the north star.
-* **kpi_contribution_json**: A dictionary of estimated numeric contributions of this initiative to KPIs (including north star if available).
+* **metric_chain_json**: A structured graph describing how the initiative's impact flows through intermediate KPIs to the north star.
+* **kpi_contribution_json**: A dictionary of estimated numeric contributions of this initiative to KPIs (keys restricted to north_star + strategic KPIs only).
+
+**Note:** `primary_kpi_key` has been removed from the system. KPI alignment is now expressed via `immediate_kpi_key` and the keys present in `kpi_contribution_json`.
 
 ### G) OptimizationScenario fields
 
@@ -66,11 +66,18 @@ Below is a **first-pass glossary** for every Phase 5 field/column we discussed (
 
 ### H) OptimizationConstraintSet fields
 
-* **floors_json**: Rules requiring minimum token allocation for certain dimensions (market/department/category).
-* **caps_json**: Rules limiting maximum token allocation for certain dimensions (market/department/category).
-* **targets_json**: KPI target requirements (treated as minimum constraints in lexicographic/target modes).
-* **mandatory_initiatives_json**: Optional cached list of mandatory initiative keys for fast evaluation/visibility.
+* **floors_json**: Minimum token allocations by dimension: `{dimension: {dimension_key: min_tokens}}`.
+* **caps_json**: Maximum token allocations by dimension: `{dimension: {dimension_key: max_tokens}}`.
+* **targets_json**: KPI target requirements with nested multi-dimensional structure: `{dimension: {dimension_key: {kpi_key: {type, value, notes?}}}}`.
+* **mandatory_initiatives_json**: List of initiative keys that must be included: `[initiative_key, ...]`.
+* **bundles_json**: All-or-nothing initiative groups: `[{bundle_key, members: [...]}, ...]`.
+* **exclusions_initiatives_json**: Initiative keys that cannot be selected: `[initiative_key, ...]`.
+* **exclusions_pairs_json**: Pairs of initiatives where both cannot be selected: `[[key1, key2], ...]` (pairs normalized/sorted).
+* **prerequisites_json**: Prerequisite dependencies as a dict: `{dependent_key: [prereq1, prereq2, ...], ...}` where if dependent is selected, all its prerequisites must be selected.
+* **synergy_bonuses_json**: Initiative pairs that yield bonus when both selected: `[[key1, key2], ...]`.
 * **notes**: Human explanation for why constraints exist and how to interpret them.
+
+**Note:** All JSON fields use `dimension_key` (not `key`) for dimensional constraints. Exclusions split into separate initiatives vs pairs columns.
 
 ### I) OptimizationRun fields
 
@@ -100,13 +107,14 @@ Below is a **first-pass glossary** for every Phase 5 field/column we discussed (
 
 ### Constraints tab columns
 
-* **constraint_type**: The type of constraint rule (floor/cap/target/mandatory/dependency/bundle/exclusion).
-* **dimension**: The dimension the constraint applies to (market/department/category/global/kpi).
-* **key**: The value within the dimension (e.g., UK, Growth, Infra).
-* **min_tokens**: Minimum tokens required for that dimension key (floor constraint).
-* **max_tokens**: Maximum tokens allowed for that dimension key (cap constraint).
-* **target_kpi_key**: Which KPI a target constraint is about.
-* **target_value**: Numeric target for that KPI.
+* **scenario_name**: The scenario this constraint belongs to (grouping key for compilation).
+* **constraint_set_name**: The named constraint set this rule belongs to (e.g., "Baseline", "Aggressive").
+* **constraint_type**: The type of constraint rule (capacity_floor/capacity_cap/mandatory/bundle/exclude_pair/exclude_initiative/prerequisite/synergy_bonus).
+* **dimension**: The dimension the constraint applies to (country/product/department/category/program/initiative/all for capacity; initiative for governance constraints).
+* **dimension_key**: The value within the dimension (e.g., UK, Growth, Infra, INIT-000123).
+* **min_tokens**: Minimum tokens required for that dimension+dimension_key (capacity_floor constraint only).
+* **max_tokens**: Maximum tokens allowed for that dimension+dimension_key (capacity_cap constraint only).
+* **bundle_member_keys**: Pipe-separated list of initiative keys for bundle constraints (e.g., "INIT-001|INIT-002|INIT-003").
 * **notes**: Human-readable explanation of this constraint row.
 
 ### Results_Portfolio tab columns

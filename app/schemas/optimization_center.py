@@ -292,17 +292,6 @@ class ExcludePairRowSchema(ConstraintRowBase):
         sorted_pair = sorted([a, b])
         self.dimension_key = "|".join(sorted_pair)
         return self
-            raise ValueError("exclude_pair requires two non-empty initiative keys")
-        if a == b:
-            raise ValueError("exclude_pair cannot exclude an initiative from itself")
-        # Normalize to sorted order to prevent A|B vs B|A duplicates
-        sorted_pair = sorted([a, b])
-        self.dimension_key = "|".join(sorted_pair)
-        return self
-            raise ValueError("exclude_pair initiatives must be non-empty")
-        if a == b:
-            raise ValueError("exclude_pair initiatives must differ")
-        return self
 
 
 class ExcludeInitiativeRowSchema(ConstraintRowBase):
@@ -474,7 +463,7 @@ class ConstraintSetCompiled(BaseModel):
     bundles: List["BundleCompiled"] = Field(default_factory=list)
     exclusions_initiatives: List[str] = Field(default_factory=list)
     exclusions_pairs: List[List[str]] = Field(default_factory=list)
-    prerequisites: List[List[str]] = Field(default_factory=list)
+    prerequisites: Dict[str, List[str]] = Field(default_factory=dict)
     synergy_bonuses: List[List[str]] = Field(default_factory=list)
     notes: Optional[str] = None
 

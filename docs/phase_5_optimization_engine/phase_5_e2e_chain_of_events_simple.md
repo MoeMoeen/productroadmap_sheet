@@ -8,7 +8,7 @@ PMs work in the **Optimization Center workbook**:
 
 * **Scenario_Config**: scenario_name, period_key, capacity_total_tokens, objective_mode, objective_weights_json, notes
 * **Constraints**: scenario_name, constraint_set_name, constraint_type, dimension, key, min/max tokens, target_kpi_key/target_value, notes
-* **Targets**: scenario_name, constraint_set_name, country, kpi_key, target_value, floor_or_goal, notes
+* **Targets**: constraint_set_name, scenario_name, dimension, dimension_key, kpi_key, target_value, floor_or_goal, notes
 * **Candidates**: engineering_tokens, deadline_date, mandatory/bundles/prereqs/exclusions etc, selection flags, notes (plus formula-fed read-only columns)
 
 **System output tabs (DB → Sheet)**
