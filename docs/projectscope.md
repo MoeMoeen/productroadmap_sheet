@@ -178,8 +178,14 @@ All flows (0–4) are now **triggerable from Google Sheets** via a custom menu:
 
 ### **Phase 5+: Portfolio Optimization & Roadmap Generation**
 
-7. **Backend computes optimized portfolio** based on constraints (capacity, dependencies, strategic themes)
-8. **Roadmap entries** are generated, versioned, and published.
+7. **PM defines optimization scenario** in Optimization Center sheet:
+   - Objective mode (north_star, weighted_kpis, lexicographic)
+   - Objective weights (if weighted_kpis mode)
+   - Capacity constraints (total tokens, per-dimension floors/caps)
+   - KPI targets (constraints for all optimization modes, normalization scale for weighted_kpis mode)
+   - Governance rules (mandatory initiatives, bundles, exclusions, prerequisites, synergy bonuses)
+8. **Backend computes optimized portfolio** based on constraints (capacity, dependencies, strategic themes)
+9. **Roadmap entries** are generated, versioned, and published.
 
 ---
 
@@ -241,16 +247,33 @@ All flows (0–4) are now **triggerable from Google Sheets** via a custom menu:
 
 ---
 
-## **9. Phase 5 Preview (After Phase 4.5)**
+## **9. Phase 5 Status (In Progress - January 2026)**
 
-Once Phase 4.5 is stable:
+Phase 5 foundational work has begun:
 
-* **Optimization Engine**: Linear/nonlinear solver for portfolio selection
-* **Roadmap Generation**: Produce quarterly roadmap from optimization results
-* **Scenario Simulation**: "What-if" weightings (revenue-heavy, risk-avoidance, etc.)
-* **Monte Carlo**: Uncertainty modeling for robust portfolio selection
+**Completed:**
+* **Data Models & Schemas**: OptimizationScenario, OptimizationConstraintSet, OptimizationRun (DB models + Pydantic schemas)
+* **Constraint Types**: Discriminated union with 9 types (capacity_floor, capacity_cap, mandatory, bundle, exclusion_pair, exclusion_initiative, prerequisite, synergy_bonus, targets)
+* **Prerequisites Refactoring**: Migrated from `List[List[str]]` to `Dict[str, List[str]]` for O(1) lookup and semantic clarity (migration r20260109_prereq_dict)
+* **Multi-Dimensional Targets**: Nested 3-level structure `{dimension: {dimension_key: {kpi_key: {type, value, notes?}}}}` supporting country, product, cross-sectional, and global targets
+* **Sheet Readers/Writers**: Optimization Center tabs (Scenario_Config, Constraints, Targets) with header alias support and composite key scoping
+* **Constraint Compiler**: Pure compilation service (validates, normalizes, buckets, deduplicates sheet rows into JSON constraint set)
+* **Documentation**: Complete JSON shapes, PM guidance, glossary, implementation roadmap, status check-in
 
-All triggered via Phase 4.5 control plane menu → `flow5.run_optimization`.
+**Not Started (Architectural but Non-Blocking):**
+* ProductOps Metrics_Config tab (KPI universe: keys, names, levels, units)
+* ProductOps KPI_Contributions tab (kpi_contribution_json entry surface)
+* OrganizationMetricsConfig DB model
+
+**Next: Optimization Engine**
+* Solver adapter interface design (OptimizationProblem, SolverAdapter protocol)
+* Linear solver integration (pulp or ortools)
+* Portfolio selection algorithm with capacity + dependency constraints
+* Multi-objective scenario support
+* Results publishing to sheets
+* Sheet-native execution via `pm.run_optimization` action
+
+All optimization runs will be triggered via Phase 4.5 control plane menu → `pm.run_optimization`.
 
 ---
 
@@ -740,11 +763,36 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
      - Enables full custom-formula workflows alongside RICE/WSJF
      - Ready for production use via sheet UI
 
-**Phase 5 – Portfolio Optimization & Roadmap Generation** *(ENABLED BY 4.5)*
-   * Linear / mixed-integer optimization solver (pulp, ortools)
-   * Multi-objective weighted-sum scenarios
-   * Capacity-constrained roadmap generation
-   * Roadmap sheet generation with selected initiatives
+**Phase 5 – Portfolio Optimization & Roadmap Generation** *(IN PROGRESS - JAN 2026)*
+   * **Status: CONSTRAINTS PIPELINE COMPLETE** – Data structures, readers, writers, compiler ready. Solver integration next.
+   * **Completed Components (Jan 2026)**:
+     - **Phase 5.0 (Cleanup)**: DB cleanup migrations, schema alignment
+     - **Phase 5.2 (Optimization Center Pipeline)**: Complete ✅
+       - OptimizationScenario, OptimizationConstraintSet, OptimizationRun DB models
+       - ConstraintSetCompiled Pydantic schema with discriminated union constraint types (9 types)
+       - Prerequisites refactored to dict structure: `Dict[str, List[str]]` (migration r20260109_prereq_dict)
+       - Optimization Center sheet readers/writers (Scenario_Config, Constraints, Targets tabs)
+       - Constraint compilation service (validates, normalizes, buckets, deduplicates)
+       - Multi-dimensional targets support (country, product, cross-sectional, global)
+       - Composite key scoping in writers (prevents row collision)
+       - Documentation complete: shapes, PM guidance, glossary, status docs
+   * **Not Started (Phase 5.1 - ProductOps Config Tabs)**:
+     - Metrics_Config tab (KPI universe definition: keys, names, levels, units)
+     - KPI_Contributions tab (kpi_contribution_json entry surface)
+     - OrganizationMetricsConfig DB model
+     - These are architectural prerequisites but not blocking solver work
+   * **Remaining (Phase 5.3+ - Optimization Engine)**:
+     - Solver adapter interface design (OptimizationProblem schema, SolverAdapter protocol)
+     - Linear solver integration (pulp, ortools)
+     - Multi-objective weighted-sum scenarios
+     - Capacity-constrained portfolio selection
+     - Roadmap sheet generation with selected initiatives
+     - Sheet-native execution integration (pm.run_optimization action)
+   * **Key Design Decisions**:
+     - Prerequisites as dict provides O(1) lookup, semantic clarity, self-documenting structure
+     - Targets use nested 3-level structure `{dimension: {dimension_key: {kpi_key: {}}}}` for consistency
+     - Constraints apply to ALL optimization modes (not just lexicographic)
+     - "all"."all" nesting maintains structural consistency (no special cases needed)
 
 **Phase 6 – LLM Enrichment for General Operations**
    * Initiative summaries and classification
@@ -885,6 +933,9 @@ Product Ops enters RICE parameters → Flow 3 `--sync` → DB updated → Flow 3
 
 **Score Activation**
 - Process of copying per-framework scores to active fields. Enables framework switching and prevents score pollution from unused frameworks.
+
+**Prerequisites (Optimization)**
+- Dependency constraints in portfolio optimization stored as `Dict[str, List[str]]` mapping dependent initiatives to their required prerequisites. If dependent is selected, ALL prerequisites must be selected. Dict structure provides O(1) lookup, semantic clarity, and self-documenting code vs previous list-of-lists format.
 
 ---
 
