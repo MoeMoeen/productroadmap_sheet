@@ -17,40 +17,6 @@ from pydantic import BaseModel, Field, TypeAdapter, ValidationError, field_valid
 from typing_extensions import Literal
 
 
-# Column -> schema field mappings (sheet columns may be aliases; readers resolve to these)
-CONSTRAINTS_SHEET_FIELD_MAP: Dict[str, str] = {
-    "scenario_name": "scenario_name",
-    "constraint_set_name": "constraint_set_name",
-    "constraint_type": "constraint_type",
-    "dimension": "dimension",
-    "dimension_key": "dimension_key",
-    "min_tokens": "min_tokens",
-    "max_tokens": "max_tokens",
-    "bundle_member_keys": "bundle_member_keys",
-    "notes": "notes",
-}
-
-TARGETS_SHEET_FIELD_MAP: Dict[str, str] = {
-    "scenario_name": "scenario_name",
-    "constraint_set_name": "constraint_set_name",
-    "dimension": "dimension",
-    "dimension_key": "dimension_key",  # country, product, segment, or composite key
-    "kpi_key": "kpi_key",
-    "target_value": "target_value",
-    "floor_or_goal": "floor_or_goal",
-    "notes": "notes",
-}
-
-SCENARIO_CONFIG_FIELD_MAP: Dict[str, str] = {
-    "scenario_name": "name",
-    "period_key": "period_key",
-    "capacity_total_tokens": "capacity_total_tokens",
-    "objective_mode": "objective_mode",
-    "objective_weights_json": "objective_weights_json",
-    "notes": "notes",
-}
-
-
 class ValidationMessage(BaseModel):
     row_num: int
     key: str
@@ -109,6 +75,7 @@ class ConstraintRowBase(BaseModel):
     min_tokens: Optional[float] = None
     max_tokens: Optional[float] = None
     bundle_member_keys: Optional[str] = None
+    prereq_member_keys: Optional[str] = None
     notes: Optional[str] = None
 
     model_config = {"extra": "ignore"}
@@ -163,9 +130,11 @@ class ConstraintRowBase(BaseModel):
         return sv if sv else None
 
     @model_validator(mode="after")
-    def forbid_bundle_members_for_non_bundle(self):
+    def forbid_special_keys_for_wrong_types(self):
         if self.bundle_member_keys and str(self.constraint_type).strip() != "bundle_all_or_nothing":
             raise ValueError("bundle_member_keys is only valid for bundle_all_or_nothing")
+        if self.prereq_member_keys and str(self.constraint_type).strip() != "require_prereq":
+            raise ValueError("prereq_member_keys is only valid for require_prereq")
         return self
 
 
@@ -315,19 +284,29 @@ class RequirePrereqRowSchema(ConstraintRowBase):
 
     @model_validator(mode="after")
     def validate_prereq(self):
-        if not self.dimension_key or "|" not in self.dimension_key:
-            raise ValueError("require_prereq requires dimension_key='INIT|PREREQ1|[PREREQ2|...]'")
-        parts = [part.strip() for part in self.dimension_key.split("|") if part.strip()]
-        if len(parts) < 2:
-            raise ValueError("require_prereq needs at least one prereq after INIT")
-        init = parts[0]
-        prereqs = parts[1:]
-        if not init:
-            raise ValueError("require_prereq INIT must be non-empty")
-        if any(p == init for p in prereqs):
-            raise ValueError("require_prereq prereqs must differ from INIT")
-        if len(set(prereqs)) != len(prereqs):
-            raise ValueError("require_prereq prereqs must be unique")
+        if not self.dimension_key:
+            raise ValueError("require_prereq requires dimension_key (dependent initiative)")
+        dependent = str(self.dimension_key).strip()
+        if not dependent:
+            raise ValueError("require_prereq dimension_key must be non-empty")
+        
+        prereq_source = self.prereq_member_keys or ""
+        prereqs = [part.strip() for part in prereq_source.replace(";", "|").split("|") if part.strip()]
+        if not prereqs:
+            raise ValueError("require_prereq requires at least one prereq_member_key")
+        
+        # Deduplicate while preserving order
+        seen = set()
+        unique_prereqs = []
+        for p in prereqs:
+            if p not in seen:
+                if p == dependent:
+                    raise ValueError("require_prereq: dependent cannot be its own prerequisite")
+                seen.add(p)
+                unique_prereqs.append(p)
+        
+        self.dimension_key = dependent
+        self.prereq_member_keys = "|".join(unique_prereqs)
         return self
 
 
@@ -609,9 +588,6 @@ def validate_scenario_config(row_num: int, data: dict, allowed_objective_modes: 
 
 
 __all__ = [
-    "CONSTRAINTS_SHEET_FIELD_MAP",
-    "TARGETS_SHEET_FIELD_MAP",
-    "SCENARIO_CONFIG_FIELD_MAP",
     "ValidationMessage",
     "ScenarioConfigSchema",
     "ConstraintRow",

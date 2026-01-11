@@ -125,10 +125,11 @@ def compile_constraint_sets(
                 parts = [p.strip() for p in re.split(r"[|;,]", parsed.dimension_key) if p.strip()]
                 constraint_set.exclusions_initiatives.extend(parts)
         elif isinstance(parsed, RequirePrereqRowSchema):
-            parts = [p.strip() for p in (parsed.dimension_key or "").split("|") if p.strip()]
-            if parts:
-                dependent = parts[0]
-                prereqs = parts[1:]
+            # dimension_key = dependent initiative, prereq_member_keys = pipe-separated prerequisites
+            dependent = (parsed.dimension_key or "").strip()
+            prereq_keys = parsed.prereq_member_keys or ""
+            prereqs = [p.strip() for p in prereq_keys.split("|") if p.strip()]
+            if dependent and prereqs:
                 constraint_set.prerequisites[dependent] = prereqs
         elif isinstance(parsed, SynergyBonusRowSchema):
             parts = [p.strip() for p in (parsed.dimension_key or "").split("|") if p.strip()]

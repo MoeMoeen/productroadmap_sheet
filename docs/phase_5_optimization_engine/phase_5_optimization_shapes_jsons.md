@@ -240,6 +240,13 @@ Pairs of initiatives where both cannot be selected together. Schema normalizes p
 
 Prerequisite dependencies as a dict mapping each dependent initiative to its list of required prerequisites. Format: `{dependent_key: [prereq1, prereq2, ...], ...}`. If the dependent initiative is selected, ALL of its prerequisites must also be selected.
 
+**Sheet entry (Constraints tab):**
+- `constraint_type` = `require_prereq`
+- `dimension` = `initiative`
+- `dimension_key` = `INIT-000081` (the dependent)
+- `prereq_member_keys` = `INIT-000012` (the prerequisite)
+
+**Compiled JSON:**
 ```json
 {
   "INIT-000081": ["INIT-000012"],
@@ -254,9 +261,10 @@ In the example above:
 - If INIT-000150 is selected, all three prerequisites (INIT-000100, INIT-000101, INIT-000102) must be selected
 
 This dict structure provides:
-- **Semantic clarity**: direct mapping from dependent to prerequisites
+- **Semantic clarity**: direct mapping from dependent to prerequisites  
 - **O(1) lookup**: efficient prerequisite checking
 - **Self-documenting**: keys are initiatives, values are their prerequisites
+- **Clean UX**: PMs enter dependent in `dimension_key`, prerequisites in `prereq_member_keys` (like bundles)
 
 ### `synergy_bonuses_json`
 

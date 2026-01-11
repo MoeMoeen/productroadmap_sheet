@@ -141,6 +141,7 @@ OPT_CONSTRAINTS_HEADER_MAP: Dict[str, List[str]] = {
     "min_tokens": ["min_tokens", "Min Tokens", "min"],
     "max_tokens": ["max_tokens", "Max Tokens", "max"],
     "bundle_member_keys": ["bundle_member_keys", "Bundle Member Keys", "bundle_members"],
+    "prereq_member_keys": ["prereq_member_keys", "Prereq Member Keys", "prerequisite_keys", "prerequisites"],
     "notes": ["notes", "Notes"],
     "run_status": RUN_STATUS_ALIASES,
     "updated_source": UPDATED_SOURCE_ALIASES,
@@ -653,6 +654,7 @@ class OptConstraintRow(BaseModel):
     min_tokens: Optional[float] = None
     max_tokens: Optional[float] = None
     bundle_member_keys: Optional[str] = None
+    prereq_member_keys: Optional[str] = None
     notes: Optional[str] = None
     run_status: Optional[str] = None
     updated_source: Optional[str] = None

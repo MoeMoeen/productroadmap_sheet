@@ -137,13 +137,24 @@ Define **governance and feasibility rules**.
 * `constraint_type`
   (`capacity_floor` | `capacity_cap` | `mandatory` | `bundle` | `exclude_pair` | `exclude_initiative` | `prerequisite` | `synergy_bonus`)
 * `dimension`
+* `constraint_type`
+  (`capacity_floor` | `capacity_cap` | `mandatory` | `bundle_all_or_nothing` | `exclude_pair` | `exclude_initiative` | `require_prereq` | `synergy_bonus`)
+* `dimension`
   (for capacity: `country` | `product` | `department` | `category` | `program` | `all`)
-  (for governance: `initiative`)
-* `dimension_key` (the specific value: UK, Growth, INIT-000123, etc.)
+  (for governance: `initiative` | `bundle`)
+* `dimension_key` (the specific value: UK, Growth, INIT-000123, BUNDLE-001, etc.)
 * `min_tokens` (capacity_floor only)
 * `max_tokens` (capacity_cap only)
-* `bundle_member_keys` (pipe-separated: "INIT-001|INIT-002|INIT-003")
+* `bundle_member_keys` (bundle_all_or_nothing only: pipe-separated "INIT-001|INIT-002|INIT-003")
+* `prereq_member_keys` (require_prereq only: pipe-separated prerequisites "INIT-001|INIT-019")
 * `notes`
+
+**Prerequisite Example:**
+- `constraint_type` = `require_prereq`
+- `dimension` = `initiative`
+- `dimension_key` = `INIT-0003` (the dependent initiative)
+- `prereq_member_keys` = `INIT-0001|INIT-0019` (required prerequisites)
+- Result: If INIT-0003 is selected, both INIT-0001 and INIT-0019 must also be selected
 
 **Note:** Targets moved to separate Targets tab. Each constraint row represents one rule; many rows share the same (scenario_name, constraint_set_name) and get compiled together.
 
