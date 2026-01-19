@@ -31,24 +31,34 @@ This is a *view + selection surface*, **not** a data entry surface.
 
 All initiative data here is expected to be **formula-copied** from Central Backlog.
 
+**CRITICAL: Constraint Entry Separation**
+- **Constraints are entered ONLY on the Constraints tab**
+- Candidates tab may display constraint indicators (is_mandatory, bundle_key, etc.) but these are **read-only/computed**
+- Backend derives constraint indicators from `OptimizationConstraintSet` compiled JSON and writes them to Candidates for display
+- PMs must never edit constraint columns on Candidates tab - use Constraints tab as the sole entry surface
+
 ### Recommended columns (backend-recognized)
 
+**Identity & Descriptive (formula-copied from Backlog):**
 * `initiative_key`
 * `title`
 * `market`
 * `department`
 * `category`
+
+**Editable Fields (PM can modify):**
 * `engineering_tokens`
 * `deadline_date`
-* `is_mandatory`
-* `mandate_reason`
-* `bundle_key`
-* `prerequisite_keys`
-* `exclusion_keys`
-* `program_key`
-* `synergy_group_keys`
-* `active_scoring_framework`
-* `active_overall_score`
+* `notes` (sheet-only)
+* `is_selected_for_run` (sheet-only checkbox)
+
+**Display-Only Constraint Indicators (derived from Constraints tab):**
+* `is_mandatory` (computed: initiative in compiled mandatory_initiatives_json)
+* `mandate_reason` (computed: notes from corresponding mandatory constraint row)
+* `bundle_key` (computed: bundle_key where initiative appears in bundles_json members)
+* `prerequisite_keys` (computed: prerequisite list from prerequisites_json)
+* `exclusion_keys` (computed: exclusion keys from exclusions_initiatives_json or exclusions_pairs_json)
+* `synergy_group_keys` (computed: synergy keys from synergy_bonuses_json)
 
 **Contribution display (derived, read-only):**
 
@@ -60,31 +70,29 @@ All initiative data here is expected to be **formula-copied** from Central Backl
 **KPI alignment (derived, read-only):**
 
 * `immediate_kpi_key`
-
 * `metric_chain_json`
-
-* `status`
+* `active_scoring_framework`
+* `active_overall_score`
+* `lifecycle_status`
 
 > ❌ `primary_kpi_key` is **removed** and must not appear.
 
+**System columns:**
+* `run_status`, `updated_source`, `updated_at`
+
 ### PM-only helper columns (sheet-only)
 
-* `is_selected_for_run` (checkbox — **the only interactive control here**)
-* `notes`
-* `why_in_candidate_pool` (formula: completeness / graduation logic)
-* `confidence`, `data_quality`, etc. (optional)
+* `confidence`, `data_quality`, `why_in_candidate_pool` (optional formulas)
 
 ### UX tips
 
 * Default filter:
-
   * `is_selected_for_run = TRUE`
   * `run_status != OK`
 * Conditional formatting:
-
   * missing `engineering_tokens`
   * mandatory initiatives missing `mandate_reason`
-  * malformed `prerequisite_keys` (e.g., no `INIT-`)
+* **To add/edit constraints**: Go to Constraints tab, not Candidates tab
 
 ---
 
@@ -134,14 +142,18 @@ Define **governance and feasibility rules**.
 
 * `scenario_name` (grouping key for compilation)
 * `constraint_set_name` (e.g., "Baseline", "Aggressive", "Relaxed")
-* `constraint_type`
-  (`capacity_floor` | `capacity_cap` | `mandatory` | `bundle` | `exclude_pair` | `exclude_initiative` | `prerequisite` | `synergy_bonus`)
-* `dimension`
-* `constraint_type`
-  (`capacity_floor` | `capacity_cap` | `mandatory` | `bundle_all_or_nothing` | `exclude_pair` | `exclude_initiative` | `require_prereq` | `synergy_bonus`)
-* `dimension`
-  (for capacity: `country` | `product` | `department` | `category` | `program` | `all`)
-  (for governance: `initiative` | `bundle`)
+* `constraint_type` — Canonical values:
+  * `capacity_floor`
+  * `capacity_cap`
+  * `mandatory`
+  * `bundle_all_or_nothing`
+  * `exclude_pair`
+  * `exclude_initiative`
+  * `require_prereq`
+  * `synergy_bonus`
+* `dimension` — Canonical values:
+  * For capacity: `country` | `product` | `department` | `category` | `program` | `all`
+  * For governance: `initiative` | `bundle`
 * `dimension_key` (the specific value: UK, Growth, INIT-000123, BUNDLE-001, etc.)
 * `min_tokens` (capacity_floor only)
 * `max_tokens` (capacity_cap only)

@@ -81,13 +81,9 @@ class Initiative(Base):
     # G. Risk, dependencies, constraints
     dependencies_initiatives = Column(JSON, nullable=True)  # list of initiative_keys (or ids)
     dependencies_others = Column(Text, nullable=True)
-    is_mandatory = Column(Boolean, nullable=False, default=False)
-    mandate_reason = Column(Text, nullable=True)
     program_key = Column(String(100), nullable=True)
-    bundle_key = Column(String(100), nullable=True)
-    prerequisite_keys = Column(JSON, nullable=True)
-    exclusion_keys = Column(JSON, nullable=True)
-    synergy_group_keys = Column(JSON, nullable=True)
+    # NOTE: Constraint fields removed - use Optimization Center Constraints tab as entry surface
+    # Removed: is_mandatory, mandate_reason, bundle_key, prerequisite_keys, exclusion_keys, synergy_group_keys
     risk_level = Column(String(50), nullable=True)
     risk_description = Column(Text, nullable=True)
     time_sensitivity_score = Column(Float, nullable=True)

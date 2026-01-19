@@ -32,6 +32,7 @@ from app.utils.provenance import Provenance, token
 logger = logging.getLogger(__name__)
 
 # Fields that are allowed to be written/updated from department intake sheets.
+# NOTE: Only includes fields that exist in current Initiative ORM schema.
 INTAKE_EDITABLE_FIELDS = {
     "title",
     "requesting_team",
@@ -39,31 +40,27 @@ INTAKE_EDITABLE_FIELDS = {
     "requester_email",
     "country",
     "product_area",
+    "market",
+    "department",
+    "category",
     "problem_statement",
-    "current_pain",
-    "desired_outcome",
-    "target_metrics",
     "hypothesis",
-    "strategic_theme",
     "customer_segment",
     "initiative_type",
-    "expected_impact_description",
-    "impact_metric",
-    "impact_unit",
-    "impact_low",
-    "impact_expected",
-    "impact_high",
     "effort_tshirt_size",
     "effort_engineering_days",
     "effort_other_teams_days",
     "infra_cost_estimate",
+    "engineering_tokens",
+    "engineering_tokens_mvp",
+    "engineering_tokens_full",
     "dependencies_others",
-    "is_mandatory",
     "risk_level",
     "risk_description",
-    "time_sensitivity",
+    "time_sensitivity_score",
     "deadline_date",
-    "status",
+    "lifecycle_status",  # ORM field name
+    "status",  # Input alias for lifecycle_status (kept for backward compatibility)
 }
 
 # Allowed statuses configured via settings
@@ -294,7 +291,12 @@ class IntakeService:
         for field_name, value in data.items():
             if field_name not in INTAKE_EDITABLE_FIELDS:
                 continue
-            if field_name == "status":
+            
+            # Map input field to target ORM field
+            target_field = "lifecycle_status" if field_name == "status" else field_name
+            
+            # Status validation and transition guard
+            if field_name in ("status", "lifecycle_status"):
                 if str(value).strip().lower() not in {s.lower() for s in ALLOWED_INTAKE_STATUSES}:
                     continue
                 current = (initiative.lifecycle_status or "").strip().lower()
@@ -309,7 +311,8 @@ class IntakeService:
                         },
                     )
                     continue
-            setattr(initiative, field_name, value)
+            
+            setattr(initiative, target_field, value)
 
     def _backfill_initiative_key(
         self, sheet_id: str, tab_name: str, row_number: int, initiative_key: str

@@ -190,7 +190,8 @@ def map_sheet_row_to_initiative_create(row: Dict[str, Any]) -> InitiativeCreate:
 
 		# Risk, dependencies, constraints
 		dependencies_others=row.get("Dependencies Others") or None,
-		is_mandatory=_to_bool(row.get("Is Mandatory")),
+		# Removed constraint fields: is_mandatory, mandate_reason, bundle_key, prerequisite_keys, exclusion_keys, synergy_group_keys
+		# Use Optimization Center Constraints tab for constraint entry
 		risk_level=row.get("Risk Level") or None,
 		risk_description=row.get("Risk Description") or None,
 		time_sensitivity=row.get("Time Sensitivity") or None,

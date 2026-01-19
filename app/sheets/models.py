@@ -92,6 +92,8 @@ KPI_CONTRIBUTIONS_EDITABLE_FIELDS: List[str] = [
 ]
 
 # Optimization Center header maps (ProductOps Optimization Center sheet)
+# Candidates tab: Read-only reference view + minimal editable fields
+# Constraint columns (is_mandatory, bundle_key, etc.) are DISPLAY-ONLY, derived from Constraints tab
 OPT_CANDIDATES_HEADER_MAP: Dict[str, List[str]] = {
     "initiative_key": ["initiative_key", "Initiative Key", "key"],
     "title": ["title", "Title"],
@@ -100,6 +102,7 @@ OPT_CANDIDATES_HEADER_MAP: Dict[str, List[str]] = {
     "category": ["category", "Category"],
     "engineering_tokens": ["engineering_tokens", "Engineering Tokens", "capacity_tokens", "Capacity Tokens"],
     "deadline_date": ["deadline_date", "Deadline Date", "deadline"],
+    # Display-only constraint indicators (derived from Constraints tab compiled JSON):
     "is_mandatory": ["is_mandatory", "Is Mandatory", "mandatory"],
     "mandate_reason": ["mandate_reason", "Mandate Reason", "mandatory_reason"],
     "bundle_key": ["bundle_key", "Bundle Key", "bundle"],
@@ -210,17 +213,12 @@ OPT_GAPS_ALERTS_HEADER_MAP: Dict[str, List[str]] = {
     "updated_source": UPDATED_SOURCE_ALIASES,
     "updated_at": UPDATED_AT_ALIASES,
 }
-# Editable fields means PM-editable in the sheet; others are system-managed.
+# Editable fields: PM can edit only these fields on Candidates tab
+# Constraint fields (is_mandatory, bundle_key, etc.) are DISPLAY-ONLY on Candidates
+# Entry surface for constraints is exclusively the Constraints tab
 OPT_CANDIDATES_EDITABLE_FIELDS: List[str] = [
     "engineering_tokens",
     "deadline_date",
-    "is_mandatory",
-    "mandate_reason",
-    "bundle_key",
-    "prerequisite_keys",
-    "exclusion_keys",
-    "program_key",
-    "synergy_group_keys",
     "notes",
     "is_selected_for_run",
 ]
@@ -241,6 +239,7 @@ OPT_CONSTRAINTS_EDITABLE_FIELDS: List[str] = [
     "min_tokens",
     "max_tokens",
     "bundle_member_keys",
+    "prereq_member_keys",
     "notes",
 ]
 # Editable fields means PM-editable in the sheet; others are system-managed.

@@ -255,6 +255,12 @@ Phase 5 foundational work has begun:
 * **Data Models & Schemas**: OptimizationScenario, OptimizationConstraintSet, OptimizationRun (DB models + Pydantic schemas)
 * **Constraint Types**: Discriminated union with 9 types (capacity_floor, capacity_cap, mandatory, bundle, exclusion_pair, exclusion_initiative, prerequisite, synergy_bonus, targets)
 * **Prerequisites Refactoring**: Migrated from `List[List[str]]` to `Dict[str, List[str]]` for O(1) lookup and semantic clarity (migration r20260109_prereq_dict)
+* **Constraint Entry Separation** ✅ **(Jan 19, 2026)**:
+  - **Constraints tab is sole entry surface** for all constraint types
+  - **Candidates tab is read-only** for constraints (display-only indicators)
+  - Removed Initiative-level constraint columns: `is_mandatory`, `mandate_reason`, `bundle_key`, `prerequisite_keys`, `exclusion_keys`, `synergy_group_keys`
+  - Migration r20260119_drop_init_constr applied (breaking change - no backward compatibility)
+  - Editable fields on Candidates shrunk to: `engineering_tokens`, `deadline_date`, `notes`, `is_selected_for_run`
 * **Multi-Dimensional Targets**: Nested 3-level structure `{dimension: {dimension_key: {kpi_key: {type, value, notes?}}}}` supporting country, product, cross-sectional, and global targets
 * **Sheet Readers/Writers**: Optimization Center tabs (Scenario_Config, Constraints, Targets) with header alias support and composite key scoping
 * **Constraint Compiler**: Pure compilation service (validates, normalizes, buckets, deduplicates sheet rows into JSON constraint set)
