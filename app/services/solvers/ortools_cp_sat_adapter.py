@@ -208,8 +208,12 @@ class OrtoolsCpSatSolverAdapter:
             },
         )
 
-        # ---- No objective yet: find any feasible solution ----
-        # TODO Step 7: Add objective when implementing objective modes
+        # ---- Step 1 temporary objective: maximize capacity usage (avoid empty solutions) ----
+        # Without an objective, CP-SAT may return the trivial solution (select nothing).
+        # For Step 1, we maximize total tokens used to "fill the capacity" and avoid confusion.
+        # TODO Step 7: Replace with real objective modes (north_star, weighted_kpis, lexicographic)
+        model.Maximize(sum(token_cost[k] * x[k] for k in x.keys()))  # type: ignore[attr-defined]
+        logger.info("Step 1 objective: maximize capacity usage")
         
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = float(self.config.max_time_seconds)

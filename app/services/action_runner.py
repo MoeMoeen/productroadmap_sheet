@@ -287,6 +287,25 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         summary["skipped"] = skipped_no_key + skipped_count
         summary["failed"] = failed_count
     
+    # PM optimization jobs (Flow 5)
+    elif action == "pm.optimize_run_selected_candidates":
+        input_count = result.get("input_candidates_count", 0)
+        selected = result.get("selected_initiatives_count", 0)
+        opt_status = result.get("optimization_status", "unknown")
+        # Total = candidates considered; Success = initiatives selected by solver; Failed = 1 if optimization failed
+        summary["total"] = input_count
+        summary["success"] = selected if opt_status in {"success", "infeasible"} else 0
+        summary["failed"] = 1 if opt_status == "failed" else 0
+    
+    elif action == "pm.optimize_run_all_candidates":
+        input_count = result.get("input_candidates_count", 0)
+        selected = result.get("selected_initiatives_count", 0)
+        opt_status = result.get("optimization_status", "unknown")
+        # Total = all candidates in scenario; Success = initiatives selected by solver; Failed = 1 if optimization failed
+        summary["total"] = input_count
+        summary["success"] = selected if opt_status in {"success", "infeasible"} else 0
+        summary["failed"] = 1 if opt_status == "failed" else 0
+    
     return summary
 
 
@@ -2013,7 +2032,6 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
     from app.jobs.optimization_job import run_flow5_optimization_step1
     
     options = ctx.payload.get("options") or {}
-    selected = ctx.payload.get("selected_rows") or []
     
     # Extract parameters
     scenario_name = options.get("scenario_name")
@@ -2023,29 +2041,34 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
         logger.error("pm.optimize_run_selected_candidates.missing_params")
         return {
             "pm_job": "pm.optimize_run_selected_candidates",
-            "selected_count": len(selected),
-            "status": "failed",
+            "optimization_status": "failed",
             "error": "Missing scenario_name or constraint_set_name in options",
             "substeps": [{"step": "validate", "status": "failed", "reason": "missing_params"}],
         }
     
-    # Extract selected initiative keys
-    keys = []
+    # PRODUCTION FIX: Use scope convention (consistent with pm.score_selected, pm.save_selected)
+    # Prefer scope.initiative_keys, fallback to selected_rows for backward compatibility
+    scope = ctx.payload.get("scope") or {}
+    keys = scope.get("initiative_keys") or []
     skipped_no_key = 0
-    for row in selected:
-        key = row.get("initiative_key")
-        if not key or not key.strip():
-            skipped_no_key += 1
-            continue
-        keys.append(key.strip())
+    
+    if not keys:
+        # Fallback: extract from selected_rows (legacy format)
+        selected = ctx.payload.get("selected_rows") or []
+        for row in selected:
+            key = row.get("initiative_key")
+            if not key or not key.strip():
+                skipped_no_key += 1
+                continue
+            keys.append(key.strip())
     
     if not keys:
         logger.warning("pm.optimize_run_selected_candidates.no_valid_keys")
         return {
             "pm_job": "pm.optimize_run_selected_candidates",
-            "selected_count": len(selected),
+            "input_candidates_count": 0,
             "skipped_no_key": skipped_no_key,
-            "status": "skipped",
+            "optimization_status": "skipped",
             "reason": "No valid initiative keys",
             "substeps": [{"step": "validate", "status": "skipped", "reason": "no_keys"}],
         }
@@ -2071,9 +2094,9 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
             "scenario_name": result["scenario_name"],
             "constraint_set_name": result["constraint_set_name"],
             "scope_type": result["scope_type"],
-            "selected_count": len(keys),
+            "input_candidates_count": len(keys),
             "skipped_no_key": skipped_no_key,
-            "status": result["status"],
+            "optimization_status": result["status"],
             "selected_initiatives_count": result.get("selected_count", 0),
             "capacity_used_tokens": result.get("capacity_used_tokens", 0),
             "solver_status": result.get("solver_status", "unknown"),
@@ -2089,9 +2112,10 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
         logger.exception("pm.optimize_run_selected_candidates.failed")
         return {
             "pm_job": "pm.optimize_run_selected_candidates",
-            "selected_count": len(keys),
+            "input_candidates_count": len(keys),
             "skipped_no_key": skipped_no_key,
-            "status": "failed",
+            "optimization_status": "failed",
+            "selected_initiatives_count": 0,
             "error": str(e)[:100],
             "substeps": [{"step": "solve", "status": "failed", "error": str(e)[:50]}],
         }
@@ -2120,7 +2144,7 @@ def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> D
         logger.error("pm.optimize_run_all_candidates.missing_params")
         return {
             "pm_job": "pm.optimize_run_all_candidates",
-            "status": "failed",
+            "optimization_status": "failed",
             "error": "Missing scenario_name or constraint_set_name in options",
             "substeps": [{"step": "validate", "status": "failed", "reason": "missing_params"}],
         }
@@ -2146,7 +2170,8 @@ def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> D
             "scenario_name": result["scenario_name"],
             "constraint_set_name": result["constraint_set_name"],
             "scope_type": result["scope_type"],
-            "status": result["status"],
+            "optimization_status": result["status"],
+            "input_candidates_count": result.get("candidate_count", 0),
             "selected_initiatives_count": result.get("selected_count", 0),
             "capacity_used_tokens": result.get("capacity_used_tokens", 0),
             "solver_status": result.get("solver_status", "unknown"),
@@ -2162,7 +2187,9 @@ def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> D
         logger.exception("pm.optimize_run_all_candidates.failed")
         return {
             "pm_job": "pm.optimize_run_all_candidates",
-            "status": "failed",
+            "optimization_status": "failed",
+            "input_candidates_count": 0,
+            "selected_initiatives_count": 0,
             "error": str(e)[:100],
             "substeps": [{"step": "solve", "status": "failed", "error": str(e)[:50]}],
         }

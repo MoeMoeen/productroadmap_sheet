@@ -52,13 +52,15 @@ def run_flow5_optimization_step1(
     selected_initiative_keys: Optional[list[str]] = None,
     run_id: Optional[str] = None,
     solver_config: Optional[CpSatConfig] = None,
+    requested_by_email: Optional[str] = None,
+    requested_by_ui: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Flow 5 (Phase 5) - Optimization run orchestration.
 
     Step 1 ONLY:
     - Binary selection + capacity caps (global and by dimension)
-    - No objective yet (feasibility-only solve)
+    - Temporary objective: maximize capacity usage (avoid empty solutions)
 
     Writes durable artifacts:
     - OptimizationRun.inputs_snapshot_json
@@ -72,9 +74,11 @@ def run_flow5_optimization_step1(
         selected_initiative_keys: Required if scope_type="selected_only"
         run_id: Unique run identifier (required)
         solver_config: Optional CP-SAT configuration
+        requested_by_email: Email of user who triggered run (for audit trail)
+        requested_by_ui: UI context that triggered run (e.g., "ProductOps_Control_Tab")
         
     Returns:
-        Dict with run results (run_id, status, selected_count, etc.)
+        Dict with run results (run_id, status, selected_count, candidate_count, etc.)
         
     Raises:
         ValueError: If run_id is missing or configuration is invalid
@@ -123,6 +127,8 @@ def run_flow5_optimization_step1(
         solver_name="OR-Tools CP-SAT",
         solver_version=None,
         status="pending",
+        requested_by_email=requested_by_email,
+        requested_by_ui=requested_by_ui,
     )
 
     # 3) Persist inputs snapshot (also stamps started_at if missing)
@@ -177,6 +183,7 @@ def run_flow5_optimization_step1(
             "scope_type": scope_type,
             "solver_step": "step1_capacity_only",
             "status": opt_run.status,
+            "candidate_count": len(problem.candidates),
             "feasibility_summary": feasibility.summary,
             "errors_count": len(feasibility.errors),
             "warnings_count": len(feasibility.warnings),
@@ -224,6 +231,7 @@ def run_flow5_optimization_step1(
         "scope_type": scope_type,
         "solver_step": "step1_capacity_only",
         "status": opt_run.status,
+        "candidate_count": len(problem.candidates),
         "selected_count": selected_count,
         "capacity_used_tokens": solution.capacity_used_tokens,
         "solver_status": solution.status,

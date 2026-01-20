@@ -133,6 +133,8 @@ def create_run_record(
     solver_name: Optional[str] = None,
     solver_version: Optional[str] = None,
     status: str = "queued",
+    requested_by_email: Optional[str] = None,
+    requested_by_ui: Optional[str] = None,
 ) -> OptimizationRun:
     """
     Create a new OptimizationRun record in the database.
@@ -145,11 +147,13 @@ def create_run_record(
         solver_name: Name of solver engine (e.g., "OR-Tools", "CPLEX")
         solver_version: Solver version string
         status: Initial status (default "queued")
+        requested_by_email: Email of user who triggered run (for audit trail)
+        requested_by_ui: UI context that triggered run (e.g., "ProductOps_Control_Tab")
         
     Returns:
         Newly created OptimizationRun
     """
-    # PRODUCTION FIX: Create run with all required fields
+    # PRODUCTION FIX: Create run with all required fields + audit trail
     run = OptimizationRun(
         run_id=run_id,
         scenario_id=scenario_id,
@@ -157,6 +161,8 @@ def create_run_record(
         status=status,
         solver_name=solver_name,
         solver_version=solver_version,
+        requested_by_email=requested_by_email,
+        requested_by_ui=requested_by_ui,
     )
 
     db.add(run)
