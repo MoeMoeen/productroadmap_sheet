@@ -1,6 +1,10 @@
 TODO:
 
+Where is engineering capacity total tokens per run coming from? Where is the entry surface? 
 
+capacity_total_tokens column on the Scenariog config tab of Product OPs sheet --> 
+
+OptimizationScenario.capacity_total_tokens
 --------------------------------------------------------------------------------------------
 
 

@@ -17,27 +17,29 @@ Below is a **first-pass glossary** for every Phase 5 field/column we discussed (
 
 * **is_optimization_candidate**: Whether this initiative is eligible to be considered by the optimizer.
 * **candidate_period_key**: The period this initiative is intended/eligible for (e.g., `2026-Q1`) to scope candidate pools.
-* **is_mandatory**: Whether the initiative must be included regardless of optimization trade-offs.
-* **mandate_reason**: Human explanation of why the initiative is mandatory (regulatory, contractual, leadership mandate).
-* **program_key**: A label grouping initiatives under a shared program/enabler theme for reporting or constraint rules.
-* **bundle_key**: A label meaning initiatives with the same bundle must be selected together (all-or-nothing).
-* **prerequisite_keys**: A list of initiative_keys that must be selected if this initiative is selected.
-* **exclusion_keys**: A list of initiative_keys that cannot be selected together with this initiative (mutual exclusion).
-* **synergy_group_keys**: A list of groups where selecting all members yields an extra portfolio-level bonus (synergy).
+
+**Note on constraint fields:** The following constraint-related fields (`is_mandatory`, `mandate_reason`, `bundle_key`, `prerequisite_keys`, `exclusion_keys`, `synergy_group_keys`) have been **removed from the Initiative model**. Constraints are now managed exclusively via the **Constraints tab** in the Optimization Center sheet, which compiles into `OptimizationConstraintSet` JSON. This enforces single-source-of-truth: constraints are scenario-specific, not initiative properties.
+
+* **program_key**: Optional cross-functional or cross-departmental program identifier (e.g., "CheckoutRevamp", "PlatformModernization"). Entry surface: Optimization Center Candidates tab (PM assigns during planning). Used for: (1) grouping related initiatives across departments, (2) program-level capacity constraints (e.g., "allocate 50-100 tokens to CheckoutRevamp program"), (3) tracking program budget allocation. Multiple initiatives can belong to one program.
 
 ### C) Effort/capacity fields
 
-* **effort_engineering_days**: Human-friendly estimate of engineering effort expressed in days (existing, used for understanding).
-* **engineering_tokens**: The optimizer’s primary consumption unit representing engineering capacity usage (float, comparable across initiatives).
-* **engineering_tokens_mvp**: Tokens required for an MVP version of the initiative (optional variant).
-* **engineering_tokens_full**: Tokens required for a full version of the initiative (optional variant).
+* **effort_engineering_days**: Human-friendly estimate of engineering effort expressed in days (existing, used for understanding and budget planning).
+* **effort_other_teams_days**: Non-engineering effort (design, QA, data, etc.) expressed in days for full resource planning.
+* **engineering_tokens**: The optimizer's primary consumption unit representing engineering capacity usage (float, comparable across initiatives). Entry surface: Optimization Center Candidates tab (PM input).
+* **engineering_tokens_mvp**: Tokens required for an MVP version of the initiative (optional variant for scenario planning).
+* **engineering_tokens_full**: Tokens required for a full version of the initiative (optional variant for scenario planning).
 * **scope_mode**: Which scope variant is being optimized for (`mvp`, `full`, or `custom`) to choose the token cost basis.
 
-### D) Ownership/dimension fields (constraint axes)
+### D) Ownership/dimension fields (constraint axes + classification)
 
-* **market**: Normalized market identifier used for constraints and capacity slicing (e.g., UK, UAE, Global).
-* **department**: Normalized department identifier used for constraints/caps (e.g., Growth, Ops, Core).
-* **category**: Normalized initiative category used for floors/caps (e.g., Infra, UX, Hygiene, Experiment).
+* **department**: Organizational unit that owns the initiative (e.g., "Engineering", "Product", "Marketing", "Finance"). Entry surface: Intake sheets, Central Backlog. Used for: (1) capacity constraints ("max 100 tokens for Engineering department"), (2) cross-departmental coordination, (3) reporting. More coarse-grained than requester_team.
+* **requester_team** / **requesting_team**: Specific team within department that requested the initiative (e.g., "Payments Team", "Growth Team", "Checkout Squad"). Entry surface: Intake sheets, Central Backlog. Used for: fine-grained attribution, team-level reporting, dependency coordination. Multiple teams exist within one department.
+* **market**: Normalized market identifier used for constraints and capacity slicing (e.g., UK, UAE, Global). Synonym: **country** (often used interchangeably in current implementation).
+* **category**: Type/nature of work being done (e.g., "UX Enhancement", "New Functionality", "Tech Debt", "Internal Tooling", "Platform Infrastructure"). Entry surface: Optimization Center Candidates tab (PM categorizes during optimization planning). Used for: portfolio composition analysis, capacity balancing (e.g., "allocate at least 20% to Tech Debt"), reporting. **Different from initiative_type** (which describes scope/stage).
+* **initiative_type**: Scope/stage/approach of the initiative (e.g., "MVP", "V1", "Experiment", "Proof of Concept", "Incremental Enhancement"). Entry surface: Intake sheets, Central Backlog. Used for: effort estimation guidance, risk assessment, prioritization logic. **Different from category** (which describes work type).
+* **product_area**: Product domain or functional area (e.g., "Payments", "Checkout", "User Profile"). Entry surface: Intake sheets, Central Backlog. Used for: product-specific prioritization.
+* **customer_segment**: Target customer group (e.g., "B2C", "B2B", "Enterprise", "SMB"). Entry surface: Intake sheets, Central Backlog. Used for: segment-specific prioritization.
 
 ### E) Time fields
 

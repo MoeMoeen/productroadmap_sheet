@@ -219,6 +219,8 @@ OPT_GAPS_ALERTS_HEADER_MAP: Dict[str, List[str]] = {
 OPT_CANDIDATES_EDITABLE_FIELDS: List[str] = [
     "engineering_tokens",
     "deadline_date",
+    "category",  # PM input: work type (UX Enhancement, Tech Debt, New Feature, etc.)
+    "program_key",  # PM input: assign to cross-functional program (optional)
     "notes",
     "is_selected_for_run",
 ]
@@ -340,6 +342,7 @@ PARAMS_HEADER_MAP = {
 # Only include well-known, stable fields here to avoid collisions.
 INTAKE_HEADER_MAP: Dict[str, List[str]] = {
     "initiative_key": ["Initiative Key", "InitiativeKey", "initiative_key", "initiative key"],
+    "department": ["Department", "department", "dept", "Dept"],
     "updated_at": ["Updated At", "updated_at", "updated at"],
 }
 
@@ -387,6 +390,7 @@ CENTRAL_BACKLOG_HEADER: List[str] = [
     "Requester Email",
     "Country",
     "Product Area",
+    "Department",
     "Lifecycle Status",
     "Customer Segment",
     "Initiative Type",
@@ -748,6 +752,7 @@ CENTRAL_EDITABLE_FIELDS: List[str] = [
     "Requester Email",
     "Country",
     "Product Area",
+    "Department",
     "Lifecycle Status",
     "Customer Segment",
     "Initiative Type",
