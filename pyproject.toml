@@ -12,6 +12,7 @@ dependencies = [
     "google-auth-httplib2>=0.2.1",
     "google-auth-oauthlib>=1.2.2",
     "openai>=2.11.0",
+    "ortools>=9.11.4210",
     "psycopg2-binary>=2.9.11",
     "pydantic>=2.12.4",
     "pydantic-settings>=2.12.0",

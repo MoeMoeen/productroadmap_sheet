@@ -84,7 +84,6 @@ class Candidate(BaseModel):
     # Dimensions used by floors/caps/targets slicing
     # PRODUCTION FIX: All dimensions optional (not all initiatives have all dimensions)
     country: Optional[str] = None
-    region: Optional[str] = None  # Note: currently not on Initiative model
     segment: Optional[str] = None  # Maps from Initiative.customer_segment
     product: Optional[str] = None  # Maps from Initiative.product_area
     department: Optional[str] = None

@@ -234,7 +234,6 @@ def build_optimization_problem(
                 program=i.program_key,  # type: ignore[arg-type]  # Initiative.program_key → Candidate.program
                 product=i.product_area,  # type: ignore[arg-type]  # Initiative.product_area → Candidate.product
                 segment=i.customer_segment,  # type: ignore[arg-type]  # Initiative.customer_segment → Candidate.segment
-                region=None,  # PRODUCTION FIX: region doesn't exist on Initiative model
                 # KPI contributions (cleaned)
                 kpi_contributions=cleaned_contrib,
                 # Optional display fields
@@ -365,6 +364,13 @@ def _validate_governance_references(
                 errors.append(
                     f"Prerequisite '{prereq}' (for '{dependent}') is not in candidate pool"
                 )
+
+    # Check single-initiative exclusions
+    for key in constraint_payload.exclusions_initiatives:
+        if key not in candidate_keys:
+            errors.append(
+                f"Excluded initiative '{key}' is not in candidate pool"
+            )
 
     # Check exclusion pairs
     for pair in constraint_payload.exclusions_pairs:

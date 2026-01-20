@@ -105,7 +105,7 @@ def run_flow3_sync_inputs_to_initiatives(
       - Use Math Model → Initiative.use_math_model
       - Strategic Priority Coefficient → Initiative.strategic_priority_coefficient
       - Risk Level → Initiative.risk_level
-      - Time Sensitivity → Initiative.time_sensitivity
+      - Time Sensitivity Score → Initiative.time_sensitivity_score
       
     RICE parameters:
       - RICE: Reach → Initiative.rice_reach
@@ -162,8 +162,9 @@ def run_flow3_sync_inputs_to_initiatives(
         rl = row.extras.get("risk_level")
         ini.risk_level = str(rl) if rl else None  # type: ignore[assignment]
         
-        ts = row.extras.get("time_sensitivity")
-        ini.time_sensitivity = str(ts) if ts else None  # type: ignore[assignment]
+        # SCHEMA FIX: time_sensitivity_score is Float, not string
+        ts = row.extras.get("time_sensitivity_score")
+        ini.time_sensitivity_score = float(ts) if ts is not None else None  # type: ignore[assignment]
 
         # framework inputs (unified naming: sheet → reader → DB all use rice_reach, wsjf_job_size, etc.)
         rice = row.framework_inputs.get("RICE")

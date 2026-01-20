@@ -416,7 +416,7 @@ class FeasibilityChecker:
     def _compute_slice_token_totals(self, problem: OptimizationProblem) -> Dict[Tuple[str, str], float]:
         """
         Compute sum(tokens) per (dimension, dimension_key) based on candidate attributes.
-        Supports the dimensions present on Candidate: country, department, category, program, region, segment, product, all.
+        Supports the dimensions present on Candidate: country, department, category, program, segment, product, all.
         """
         totals: Dict[Tuple[str, str], float] = {("all", "all"): 0.0}
         for c in problem.candidates:
@@ -428,7 +428,6 @@ class FeasibilityChecker:
                 ("department", c.department),
                 ("category", c.category),
                 ("program", c.program),
-                ("region", c.region),
                 ("segment", c.segment),
                 ("product", c.product),
             ]:
@@ -517,8 +516,6 @@ class FeasibilityChecker:
                     add("category", str(c.category), str(kpi_key), v)
                 if c.program:
                     add("program", str(c.program), str(kpi_key), v)
-                if c.region:
-                    add("region", str(c.region), str(kpi_key), v)
                 if c.segment:
                     add("segment", str(c.segment), str(kpi_key), v)
                 if c.product:

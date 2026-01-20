@@ -96,7 +96,7 @@ def persist_result(
         error_text: Optional error message if status != "success"
         
     Returns:
-        Updated OptimizationRun (refreshed from DB)
+        Updated OptimizationRun (refreshed from DB after finished_at is set)
     """
     # PRODUCTION FIX: Store result and update status atomically
     optimization_run.result_json = result_json  # type: ignore[assignment]
@@ -105,9 +105,9 @@ def persist_result(
     if error_text:
         optimization_run.error_text = error_text  # type: ignore[assignment]
 
-    # PRODUCTION FIX: Set completed_at timestamp
-    if optimization_run.completed_at is None:
-        optimization_run.completed_at = datetime.now(timezone.utc)  # type: ignore[assignment]
+    # PRODUCTION FIX: Set finished_at timestamp
+    if optimization_run.finished_at is None:
+        optimization_run.finished_at = datetime.now(timezone.utc)  # type: ignore[assignment]
 
     db.add(optimization_run)
     db.commit()

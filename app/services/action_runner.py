@@ -1997,6 +1997,177 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
     # (No fallback needed; all branches return above)
 
 
+def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext) -> Dict[str, Any]:
+    """PM Job: Run optimization (Step 1 capacity-only solver) on selected candidates from Control tab.
+    
+    Payload:
+      - sheet_context: {spreadsheet_id, tab}
+      - options: {scenario_name, constraint_set_name}
+      - selected_rows: list of row objects with initiative_key
+    
+    Orchestration:
+      1. Extract selected initiative keys
+      2. Call run_flow5_optimization_step1 with scope_type="selected_only"
+      3. Return result with run_id, status, selected_count, solver_status
+    """
+    from app.jobs.optimization_job import run_flow5_optimization_step1
+    
+    options = ctx.payload.get("options") or {}
+    selected = ctx.payload.get("selected_rows") or []
+    
+    # Extract parameters
+    scenario_name = options.get("scenario_name")
+    constraint_set_name = options.get("constraint_set_name")
+    
+    if not scenario_name or not constraint_set_name:
+        logger.error("pm.optimize_run_selected_candidates.missing_params")
+        return {
+            "pm_job": "pm.optimize_run_selected_candidates",
+            "selected_count": len(selected),
+            "status": "failed",
+            "error": "Missing scenario_name or constraint_set_name in options",
+            "substeps": [{"step": "validate", "status": "failed", "reason": "missing_params"}],
+        }
+    
+    # Extract selected initiative keys
+    keys = []
+    skipped_no_key = 0
+    for row in selected:
+        key = row.get("initiative_key")
+        if not key or not key.strip():
+            skipped_no_key += 1
+            continue
+        keys.append(key.strip())
+    
+    if not keys:
+        logger.warning("pm.optimize_run_selected_candidates.no_valid_keys")
+        return {
+            "pm_job": "pm.optimize_run_selected_candidates",
+            "selected_count": len(selected),
+            "skipped_no_key": skipped_no_key,
+            "status": "skipped",
+            "reason": "No valid initiative keys",
+            "substeps": [{"step": "validate", "status": "skipped", "reason": "no_keys"}],
+        }
+    
+    # Generate run_id (use local helper)
+    run_id = _make_run_id()
+    
+    # Run optimization
+    try:
+        result = run_flow5_optimization_step1(
+            db=db,
+            scenario_name=scenario_name,
+            constraint_set_name=constraint_set_name,
+            scope_type="selected_only",
+            selected_initiative_keys=keys,
+            run_id=run_id,
+            solver_config=None,  # Use default config
+        )
+        
+        return {
+            "pm_job": "pm.optimize_run_selected_candidates",
+            "run_id": result["run_id"],
+            "scenario_name": result["scenario_name"],
+            "constraint_set_name": result["constraint_set_name"],
+            "scope_type": result["scope_type"],
+            "selected_count": len(keys),
+            "skipped_no_key": skipped_no_key,
+            "status": result["status"],
+            "selected_initiatives_count": result.get("selected_count", 0),
+            "capacity_used_tokens": result.get("capacity_used_tokens", 0),
+            "solver_status": result.get("solver_status", "unknown"),
+            "feasibility_warnings": result.get("feasibility_warnings_count", 0),
+            "substeps": [
+                {"step": "build_problem", "status": "ok"},
+                {"step": "feasibility_check", "status": "ok", "warnings": result.get("feasibility_warnings_count", 0)},
+                {"step": "solve", "status": result["status"], "solver": result.get("solver_status", "unknown")},
+            ],
+        }
+    
+    except Exception as e:
+        logger.exception("pm.optimize_run_selected_candidates.failed")
+        return {
+            "pm_job": "pm.optimize_run_selected_candidates",
+            "selected_count": len(keys),
+            "skipped_no_key": skipped_no_key,
+            "status": "failed",
+            "error": str(e)[:100],
+            "substeps": [{"step": "solve", "status": "failed", "error": str(e)[:50]}],
+        }
+
+
+def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> Dict[str, Any]:
+    """PM Job: Run optimization (Step 1 capacity-only solver) on all candidates in scenario.
+    
+    Payload:
+      - sheet_context: {spreadsheet_id, tab}
+      - options: {scenario_name, constraint_set_name}
+    
+    Orchestration:
+      1. Call run_flow5_optimization_step1 with scope_type="all_candidates"
+      2. Return result with run_id, status, selected_count, solver_status
+    """
+    from app.jobs.optimization_job import run_flow5_optimization_step1
+    
+    options = ctx.payload.get("options") or {}
+    
+    # Extract parameters
+    scenario_name = options.get("scenario_name")
+    constraint_set_name = options.get("constraint_set_name")
+    
+    if not scenario_name or not constraint_set_name:
+        logger.error("pm.optimize_run_all_candidates.missing_params")
+        return {
+            "pm_job": "pm.optimize_run_all_candidates",
+            "status": "failed",
+            "error": "Missing scenario_name or constraint_set_name in options",
+            "substeps": [{"step": "validate", "status": "failed", "reason": "missing_params"}],
+        }
+    
+    # Generate run_id (use local helper)
+    run_id = _make_run_id()
+    
+    # Run optimization
+    try:
+        result = run_flow5_optimization_step1(
+            db=db,
+            scenario_name=scenario_name,
+            constraint_set_name=constraint_set_name,
+            scope_type="all_candidates",
+            selected_initiative_keys=None,
+            run_id=run_id,
+            solver_config=None,  # Use default config
+        )
+        
+        return {
+            "pm_job": "pm.optimize_run_all_candidates",
+            "run_id": result["run_id"],
+            "scenario_name": result["scenario_name"],
+            "constraint_set_name": result["constraint_set_name"],
+            "scope_type": result["scope_type"],
+            "status": result["status"],
+            "selected_initiatives_count": result.get("selected_count", 0),
+            "capacity_used_tokens": result.get("capacity_used_tokens", 0),
+            "solver_status": result.get("solver_status", "unknown"),
+            "feasibility_warnings": result.get("feasibility_warnings_count", 0),
+            "substeps": [
+                {"step": "build_problem", "status": "ok"},
+                {"step": "feasibility_check", "status": "ok", "warnings": result.get("feasibility_warnings_count", 0)},
+                {"step": "solve", "status": result["status"], "solver": result.get("solver_status", "unknown")},
+            ],
+        }
+    
+    except Exception as e:
+        logger.exception("pm.optimize_run_all_candidates.failed")
+        return {
+            "pm_job": "pm.optimize_run_all_candidates",
+            "status": "failed",
+            "error": str(e)[:100],
+            "substeps": [{"step": "solve", "status": "failed", "error": str(e)[:50]}],
+        }
+
+
 ## ---------- Action Registry ----------
 
 _ACTION_REGISTRY: Dict[str, ActionFn] = {
@@ -2028,4 +2199,8 @@ _ACTION_REGISTRY: Dict[str, ActionFn] = {
     "pm.save_selected": _action_pm_save_selected,
     "pm.suggest_math_model_llm": _action_pm_suggest_math_model_llm,
     "pm.seed_math_params": _action_pm_seed_math_params,
+    
+    # PM Jobs (V3 Optimization)
+    "pm.optimize_run_selected_candidates": _action_pm_optimize_run_selected_candidates,
+    "pm.optimize_run_all_candidates": _action_pm_optimize_run_all_candidates,
 }

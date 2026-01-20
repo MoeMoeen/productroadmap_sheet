@@ -153,7 +153,6 @@ ConstraintType = Literal[
 CapacityDimension = Literal[
     "all",
     "country",
-    "region",
     "segment",
     "product",
     "category",
@@ -166,7 +165,6 @@ Dimension = Literal[
     "initiative",
     "country",
     "segment",
-    "region",
     "product",
     "bundle",
     "program",
@@ -350,7 +348,6 @@ TargetDimension = Literal[
     "country",
     "product",
     "segment",
-    "region",
     "department",
     "country_product",
     "all",
