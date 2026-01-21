@@ -29,7 +29,7 @@ class OrganizationMetricConfig(Base):
     id = Column(Integer, primary_key=True, index=True)
     kpi_key = Column(String(100), nullable=False, unique=True, index=True)
     kpi_name = Column(String(255), nullable=False)
-    kpi_level = Column(String(50), nullable=False)  # north_star or strategic
+    kpi_level = Column(String(50), nullable=False)  # north_star or strategic or immediate
     unit = Column(String(50), nullable=True)
     metadata_json = Column(JSON, nullable=True)
 

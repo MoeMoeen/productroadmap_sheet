@@ -3,13 +3,15 @@
 OR-Tools CP-SAT solver adapter for Phase 5 optimization.
 
 Implements constraints in order:
-1. ✅ Binary selection + capacity caps (global and by dimension)
+1. ✅ Binary selection variables (x_i ∈ {0,1} for each candidate)
 2. ✅ Mandatory initiatives (x_i = 1 for each mandatory)
 3. ✅ Exclusions (single: x_i = 0, pair: x_a + x_b <= 1)
 4. ✅ Prerequisites (x_dep <= x_req for each prerequisite edge)
 5. ✅ Bundles (all-or-nothing: x_m1 = x_m2 = ... = x_mk)
-6. ✅ Target floors (sum(contrib_i * x_i) >= floor for each floor target)
-7. TODO: Objective modes (north_star, weighted_kpis, lexicographic)
+6. ✅ Capacity caps (sum(tokens_i * x_i) <= max_tokens for global and per-dimension)
+7. ✅ Capacity floors (sum(tokens_i * x_i) >= min_tokens for each dimension slice)
+8. ✅ Target floors (sum(contrib_i * x_i) >= floor for each KPI floor target)
+9. TODO: Objective modes (north_star, weighted_kpis, lexicographic)
 
 CP-SAT is integer-based, so we scale floats by TOKEN_SCALE.
 """
@@ -111,14 +113,15 @@ class OrtoolsCpSatSolverAdapter:
 
     def solve(self, problem: "OptimizationProblem") -> "OptimizationSolution":
         """
-        STEP 1+2+3+4+5+6:
+        STEP 1+2+3+4+5+6+6.5:
         - binary decision x_i ∈ {0,1}
         - mandatory initiatives: x_i = 1 for each mandatory initiative
         - exclusions: x_i = 0 for each excluded initiative, x_a + x_b <= 1 for each excluded pair
         - prerequisites: x_dep <= x_req for each prerequisite edge (if dependent selected, prerequisite must be selected)
         - bundles: x_m1 = x_m2 = ... = x_mk for each bundle (all-or-nothing)
-        - target floors: sum(contrib_i * x_i) >= floor for each floor target (scaled to int)
         - capacity caps: global cap and per-dimension caps from constraint_set.caps
+        - capacity floors: per-dimension minimum token allocations from constraint_set.floors
+        - target floors: sum(contrib_i * x_i) >= floor for each floor target (scaled to int)
         - temporary objective: maximize capacity usage (avoid empty solutions)
 
         Returns:
@@ -127,7 +130,7 @@ class OrtoolsCpSatSolverAdapter:
         from app.schemas.optimization_solution import OptimizationSolution, SelectedItem
         
         logger.info(
-            "Building CP-SAT model (Step 1+2+3+4+5: capacity + mandatory + exclusions + prereqs + bundles)",
+            "Building CP-SAT model: Step 1+2+3+4+5+6+6.5 (capacity, mandatory, exclusions, prerequisites, bundles, capacity floors, target floors)",
             extra={
                 "candidate_count": len(problem.candidates),
                 "scenario": problem.scenario_name,
@@ -448,6 +451,98 @@ class OrtoolsCpSatSolverAdapter:
             },
         )
 
+        # ---- Capacity floors (Step 6.5) ----
+        floors = problem.constraint_set.floors or {}
+        floors_total = 0
+        floors_applied = 0
+        floors_invalid = 0
+        floors_empty_slice = 0
+        floors_skipped_trivial = 0
+
+        for dim, dim_map in floors.items():
+            dim_s = str(dim).strip().lower()
+            if not isinstance(dim_map, dict):
+                floors_invalid += 1
+                continue
+
+            for dim_key, min_tokens in (dim_map or {}).items():
+                if min_tokens is None:
+                    floors_invalid += 1
+                    continue
+
+                try:
+                    floor_val = float(min_tokens)
+                except Exception:
+                    floors_invalid += 1
+                    continue
+
+                floors_total += 1
+                floor_int = _scaled_int(floor_val, TOKEN_SCALE)
+
+                # Trivial floors (<= 0) don't need a constraint
+                if floor_int <= 0:
+                    floors_skipped_trivial += 1
+                    continue
+
+                dkey_s = str(dim_key).strip()
+
+                # Build slice token sum
+                slice_keys: List[str] = []
+                for c in problem.candidates:
+                    v = _get_candidate_dim_value(c, dim_s)
+                    if v is None:
+                        continue
+
+                    if dim_s == "all":
+                        if dkey_s != "all":
+                            continue
+                        slice_keys.append(c.initiative_key)
+                    else:
+                        # Floors match exact dimension_key (same semantics as caps)
+                        if str(v) == dkey_s:
+                            slice_keys.append(c.initiative_key)
+
+                if not slice_keys:
+                    floors_empty_slice += 1
+                    logger.warning(
+                        "Capacity floor has no candidates in slice (immediately infeasible)",
+                        extra={
+                            "dimension": dim_s,
+                            "dimension_key": dkey_s,
+                            "min_tokens": floor_val,
+                        },
+                    )
+                    return OptimizationSolution(
+                        status="infeasible",
+                        diagnostics={
+                            "error": "capacity_floor_empty_slice",
+                            "dimension": dim_s,
+                            "dimension_key": dkey_s,
+                            "min_tokens": floor_val,
+                        },
+                    )
+
+                # Enforce: sum(tokens_i * x_i) >= floor
+                model.Add(sum(token_cost[k] * x[k] for k in slice_keys) >= floor_int)  # type: ignore[attr-defined]
+                floors_applied += 1
+
+        if floors_invalid:
+            logger.warning(
+                "Invalid capacity floor entries encountered (ignored)",
+                extra={"count": floors_invalid},
+            )
+
+        logger.info(
+            "Capacity floors processed",
+            extra={
+                "floors_total": floors_total,
+                "floors_applied": floors_applied,
+                "floors_skipped_trivial": floors_skipped_trivial,
+                "floors_invalid": floors_invalid,
+                "floors_empty_slice": floors_empty_slice,
+                "token_scale": TOKEN_SCALE,
+            },
+        )
 
         # ---- Target floors (Step 6) ----
         targets = problem.constraint_set.targets or {}
@@ -654,6 +749,8 @@ class OrtoolsCpSatSolverAdapter:
                 "excluded_pairs_count": len(problem.constraint_set.exclusions_pairs or []),
                 "prereq_dependents_count": len(problem.constraint_set.prerequisites or {}),
                 "bundles_count": len(problem.constraint_set.bundles or []),
+                "capacity_floors_total": floors_total,
+                "capacity_floors_applied": floors_applied,
                 "target_floors_total": target_floors_total,
                 "target_floors_applied": target_floors_applied,
                 "kpi_scale": KPI_SCALE,

@@ -628,8 +628,8 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
   * Automatic scoring write-back to Central Backlog
   * Framework-specific field preservation
   
-- **Phase 3.D (Config Tab)** ⏳ **Deferred**
-  * Config-driven system behaviors planned for future
+- **Phase 3.D (Config Tab)** ⏸️ **EXISTS BUT UNUSED**
+  * Config tab exists in ProductOps sheet but contains no data (reserved for future config-driven system behaviors)
 
 ### **✅ COMPLETED:**
 
@@ -642,9 +642,9 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
      - ActionRun Ledger: DB-backed execution tracking with full audit trail (run_id, action, status, payload_json, result_json, error_text, started_at, finished_at, requested_by)
      - Worker Process: Continuously polls DB for queued ActionRun rows; executes single job per ActionRun; atomic result capture
      - Two-process architecture: FastAPI web process (enqueues) + async worker process (executes) communicating via DB
-     - Action Registry: 15 total actions (Flow 0-4 legacy + 6 PM Jobs)
+     - Action Registry: Flow actions (Flow 0-5 including optimization) + 8 PM Jobs (backlog_sync, score_selected, switch_framework, save_selected, suggest_math_model_llm, seed_math_params, optimize_run_selected_candidates, optimize_run_all_candidates)
 
-   * **PM Jobs (V2 – All 6 Implemented End-to-End)**:
+   * **PM Jobs (V2 – All 8 Implemented End-to-End)**:
      
      **Core Jobs (V1)**:
      - `pm.backlog_sync` – Sync all intake sheets to Central Backlog (no selection). Runs Flow 1 full sync pipeline.
@@ -684,6 +684,17 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
        - Behavior: For rows with formula_text and approved_by_user=TRUE, parse formula → extract identifiers → seed new Params rows
        - Summary: selected_count, seeded_count, skipped_not_approved, skipped_no_formula, failed_count
        - Usage flow: Approve formula → Seed Params → Fill values on Params tab → pm.save_selected (Params) → pm.score_selected
+     
+     **Optimization Jobs (V2 – NEW)**:
+     - `pm.optimize_run_selected_candidates` – Run portfolio optimization on user-selected candidates (Step 1+2+3: capacity + governance + targets).
+       - UI: Optimization Center Candidates tab → Roadmap AI menu → "Optimize Selected"
+       - Behavior: Selection scope → feasibility check → OR-Tools CP-SAT solver → write Results tab
+       - Summary: selected_count, solved_count, feasibility_errors, selected_initiatives, total_objective
+     
+     - `pm.optimize_run_all_candidates` – Run portfolio optimization on ALL candidates in scenario (Step 1 capacity-only: no governance, no targets).
+       - UI: Optimization Center Scenario_Config tab → Roadmap AI menu → "Optimize All"
+       - Behavior: Scenario scope → fast capacity-constrained solver → write Results tab
+       - Summary: candidate_count, solved_count, selected_initiatives, total_objective
 
    * **Apps Script UI Layer** (Bound scripts in ProductOps & Central Backlog sheets)
      - Custom menu "Roadmap AI" with items for all 6 jobs
@@ -747,13 +758,13 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
 
 ### **📋 PLANNED (Future):**
 
-**Phase 4.5.1 – Polish & Hardening** (BACKLOG, LOW PRIORITY)
-   * **Control/RunLog Tab** – Optional: Live dashboard of execution history in ProductOps sheet (ActionRun audit trail)
+**Phase 4.5.1 – Polish & Hardening** (FUTURE/NOT IMPLEMENTED)
+   * **Control/RunLog Tab** – FUTURE FEATURE: Live dashboard of execution history in ProductOps sheet (ActionRun audit trail) - NOT YET IMPLEMENTED
    * **Flow Actions** – Optional: Implement flow-level actions if direct Flow 0-4 triggering needed (currently using PM job wrappers)
-   * **Status**: Not blocking; Phase 4.5 is production-ready without these polish items
+   * **Status**: Not blocking; Phase 4.5 is production-ready without these features
 
-**Phase 4 – MathModel Framework & LLM-Assisted Scoring** *(PARALLEL WITH 4.5 / ACTIVE)*
-   * **Status: IN PROGRESS** – Infrastructure in place; core components complete; polish pending
+**Phase 4 – MathModel Framework & LLM-Assisted Scoring** *(NOT A NUMBERED FLOW - Integrated into Phase 4.5 PM Jobs)*
+   * **Status: COMPLETE** – Math models fully integrated into Phase 4.5 sheet-native execution (pm.suggest_math_model_llm, pm.seed_math_params)
    * **Completed Components**:
      - MathModels sheet reader, writer, DB model (InitiativeMathModel)
      - MathModelFramework scoring engine (safe formula evaluation)
@@ -770,10 +781,19 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
      - Ready for production use via sheet UI
 
 **Phase 5 – Portfolio Optimization & Roadmap Generation** *(IN PROGRESS - JAN 2026)*
-   * **Status: CONSTRAINTS PIPELINE COMPLETE** – Data structures, readers, writers, compiler ready. Solver integration next.
+   * **Status: SOLVER STEPS 1-7 COMPLETE** – OR-Tools CP-SAT adapter implementing capacity-constrained optimization with governance.
    * **Completed Components (Jan 2026)**:
      - **Phase 5.0 (Cleanup)**: DB cleanup migrations, schema alignment
      - **Phase 5.2 (Optimization Center Pipeline)**: Complete ✅
+     - **Phase 5.3 (Solver Implementation)**: Steps 1-7 Complete ✅
+       * Step 1-2: Binary selection variables + capacity caps (engineering tokens per dimension slice)
+       * Step 3: Exclusions (single initiative bans + pairwise mutual exclusions)
+       * Step 4: Prerequisites (x_dep ≤ x_req dependency constraints with Dict[str, List[str]] structure)
+       * Step 5: Bundles (all-or-nothing groupings)
+       * Step 6: Capacity floors (minimum token allocations per dimension slice)
+       * Step 7: Target floors (minimum KPI contribution requirements per dimension/KPI)
+       * Step 8: Objective modes (TODO: north_star, weighted_kpis, lexicographic)
+       * Feasibility checker: Pre-solver validation (cycle detection, reference validation, capacity checks)
        - OptimizationScenario, OptimizationConstraintSet, OptimizationRun DB models
        - ConstraintSetCompiled Pydantic schema with discriminated union constraint types (9 types)
        - Prerequisites refactored to dict structure: `Dict[str, List[str]]` (migration r20260109_prereq_dict)
@@ -941,7 +961,7 @@ Product Ops enters RICE parameters → Flow 3 `--sync` → DB updated → Flow 3
 - Process of copying per-framework scores to active fields. Enables framework switching and prevents score pollution from unused frameworks.
 
 **Prerequisites (Optimization)**
-- Dependency constraints in portfolio optimization stored as `Dict[str, List[str]]` mapping dependent initiatives to their required prerequisites. If dependent is selected, ALL prerequisites must be selected. Dict structure provides O(1) lookup, semantic clarity, and self-documenting code vs previous list-of-lists format.
+- Dependency constraints in portfolio optimization stored as `Dict[str, List[str]]` mapping dependent initiative_key → list of required prerequisite initiative_keys. If dependent is selected, ALL prerequisites must be selected. Dict structure (implemented Jan 2026, migration r20260109_prereq_dict) provides O(1) lookup, semantic clarity, and self-documenting code vs deprecated list-of-lists format.
 
 ---
 
@@ -963,96 +983,20 @@ Python is perfect for:
 
 ## 9. Project Structure:
 
-roadmap_platform/
-├── pyproject.toml / requirements.txt
-├── README.md
-├── .env
-└── app/
-    ├── __init__.py
-    ├── config.py                        # Settings, API keys, sheet IDs, env vars
-    │
-    ├── db/
-    │   ├── __init__.py
-    │   ├── base.py                      # SQLAlchemy Base
-    │   ├── session.py                   # DB engine + SessionLocal
-    │   └── models/
-    │       ├── __init__.py
-    │       ├── initiative.py            # Initiative ORM model
-    │       ├── roadmap.py               # Roadmap ORM
-    │       ├── roadmap_entry.py         # RoadmapEntry ORM
-    │       └── scoring.py               # InitiativeMathModel, InitiativeScore
-    │
-    ├── schemas/
-    │   ├── __init__.py
-    │   ├── initiative.py                # Pydantic schemas for Initiative
-    │   ├── roadmap.py                   # Pydantic schemas for Roadmap
-    │   ├── roadmap_entry.py             # Pydantic schemas for RoadmapEntry
-    │   └── scoring.py                   # Schemas for math models, scoring history
-    │
-    ├── sheets/                          # Google Sheets API integration layer
-    │   ├── __init__.py
-    │   ├── client.py                    # Google Sheets API wrapper
-    │   ├── intake_reader.py             # Reads intake sheets from departments
-    │   ├── backlog_writer.py            # Writes to central backlog sheet
-    │   │
-    │   ├── math_models_reader.py        # Reads MathModels sheet rows
-    │   ├── math_models_writer.py        # Writes LLM suggestions + approvals
-    │   │
-    │   ├── params_reader.py             # Reads Params rows (all frameworks)
-    │   └── params_writer.py             # Writes auto-seeded params + updates
-    │
-    ├── services/                        # Core business logic and orchestration
-    │   ├── __init__.py
-    │   │
-    │   ├── intake_mapper.py             # Row → InitiativeCreate mapping
-    │   ├── initiative_key.py            # Initiative key generator
-    │   ├── intake_service.py            # Syncs sheet rows → DB (upsert)
-    │   │
-    │   ├── validation_service.py        # Missing fields, completeness checks
-    │   │
-    │   ├── scoring/                     # Scoring engine (modular frameworks)
-    │   │   ├── __init__.py
-    │   │   ├── base_framework.py        # Framework interface + ScoreResult
-    │   │   ├── rice_framework.py        # RICE implementation
-    │   │   ├── wsjf_framework.py        # WSJF implementation (optional)
-    │   │   ├── moscow_framework.py      # MoSCoW implementation (optional)
-    │   │   ├── simple_weighted.py       # Generic weighted scoring
-    │   │   └── math_model_framework.py  # Formula-based scoring using math models
-    │   │
-    │   ├── scoring_service.py           # Orchestrates scoring across frameworks
-    │   ├── param_seeding_service.py     # *NEW*: Auto-seeds params from formula/framework
-    │   │
-    │   ├── optimization_service.py      # Linear, nonlinear, multi-objective optimization
-    │   └── roadmap_service.py           # Roadmap generation, scenario creation
-    │
-    ├── llm/                             # LLM integration
-    │   ├── __init__.py
-    │   ├── client.py                    # Wrapper for OpenAI/Anthropic/etc.
-    │   ├── enrichment.py                # Summaries, classification, hypothesis
-    │   ├── scoring_assistant.py         # Formula generation, parameter suggestions
-    │   └── prompts.py                   # Prompt templates for all LLM tasks
-    │
-    ├── jobs/                            # Scheduled / batch jobs
-    │   ├── __init__.py
-    │   ├── sync_intake_job.py           # Intake sheets → DB sync
-    │   ├── validation_job.py            # Populates missing_fields, nudges requesters
-    │   ├── math_model_generation_job.py # Reads MathModels, calls LLM, writes suggestions
-    │   ├── param_seeding_job.py         # Seeds Params from formulas or framework
-    │   │── optimisation_job.py
-    │   └── scoring_job.py               # Batch run scoring, writes results to backlog
-    │
-    ├── api/ (optional for future REST endpoints)
-    │   ├── __init__.py
-    │   ├── deps.py
-    │   ├── routes_initiatives.py
-    │   └── routes_roadmaps.py
-    │
-    └── utils/                           # Helpers (optional)
-        ├── safe_eval.py                 # Safe expression evaluation for math models
-        └── formula_parser.py            # Parse formula_text_final into an AST or DSL
+**NOTE**: For the complete, up-to-date project structure, see the **Codebase Registry** section below (auto-generated from `app/` directory via AST parsing).
 
+The codebase follows a clean architecture with clear separation:
+- **`app/db/`** - SQLAlchemy models and database session management
+- **`app/schemas/`** - Pydantic schemas for validation and serialization
+- **`app/sheets/`** - Google Sheets API integration (readers, writers, client)
+- **`app/services/`** - Core business logic (intake, scoring, optimization, sync services)
+- **`app/jobs/`** - Batch job orchestration (Flow 1-5 jobs)
+- **`app/llm/`** - LLM integration for math model suggestions
+- **`app/api/`** - FastAPI REST endpoints for Action API
+- **`app/workers/`** - Background worker processes (ActionRun execution)
+- **`app/utils/`** - Shared utilities (safe_eval, header normalization, provenance)
 
-# **Core end-to-end flows**
+---
 
 
 Let's review 4 main scenarios:
@@ -1612,10 +1556,2826 @@ overall_score: composite (e.g. value/effort or weighted sum) used by optimizatio
 Sheet ID: unique Google Sheets document identifier (in URL).  
 Tab name: worksheet title inside that document (e.g. “UK_Intake”, “Central_Backlog”, “Params”). Backend uses (sheet_id, tab_name) to trace original row locations.
 
+## Live Sheets Registry
+*Last synced: 2026-01-21 16:10 UTC*
+
+This section is auto-generated by `scripts/sync_sheets_registry.py`.
+First 3 rows per tab: Row 1 = main header, Rows 2-3 = metadata/comments.
+
+### Intake Sheets
+
+#### Intake Sheet: intake_emea
+- **Spreadsheet ID**: `1mQLVtMhgC-09fQ2xczyxghiIwZFb2e5ac5JVODkyJsU`
+- **Region**: EMEA
+- **Description**: Test EMEA intake sheet
+
+##### Tab: `Marketing_EMEA`
+- **Department**: Marketing
+- **Active**: True
+  - **Total Columns**: 7
+
+  - **Column A**: `Title`
+    - Row 1 (Header): `Title`
+    - Row 2 (Meta1): `Test initiative 1`
+    - Row 3 (Meta2): `data 2`
+
+  - **Column B**: `Department`
+    - Row 1 (Header): `Department`
+    - Row 2 (Meta1): ``
+    - Row 3 (Meta2): ``
+
+  - **Column C**: `Requesting Team`
+    - Row 1 (Header): `Requesting Team`
+    - Row 2 (Meta1): `Growth`
+    - Row 3 (Meta2): `data 3`
+
+  - **Column D**: `Requester Name`
+    - Row 1 (Header): `Requester Name`
+    - Row 2 (Meta1): `Alice`
+    - Row 3 (Meta2): `data 4`
+
+  - **Column E**: `Lifecycle_status`
+    - Row 1 (Header): `Lifecycle_status`
+    - Row 2 (Meta1): `new`
+    - Row 3 (Meta2): `data 5`
+
+  - **Column F**: `Country`
+    - Row 1 (Header): `Country`
+    - Row 2 (Meta1): `UK`
+    - Row 3 (Meta2): `data 6`
+
+  - **Column G**: `Initiative Key`
+    - Row 1 (Header): `Initiative Key`
+    - Row 2 (Meta1): `INIT-000001`
+    - Row 3 (Meta2): `INIT-000002`
 
 
+##### Tab: `Sales_EMEA`
+- **Department**: N/A
+  - *No data found*
+
+### Central Backlog Sheet(s)
+
+#### Central Backlog: global
+- **Spreadsheet ID**: `1dd5ux4iapJtHWNb1E0gK7wQF644csy30M40dhs_XGH8`
+
+##### Tab: `Backlog` (Primary)
+  - **Total Columns**: 31
+
+  - **Column A**: `Initiative Key`
+    - Row 1 (Header): `Initiative Key`
+    - Row 2 (Meta1): `Initiative.initiative_key`
+    - Row 3 (Meta2): `Backend → Sheet`
+
+  - **Column B**: `Title`
+    - Row 1 (Header): `Title`
+    - Row 2 (Meta1): `Initiative.title`
+    - Row 3 (Meta2): `Intake sheet → DB → Backlog Sync - PM can edit`
+
+  - **Column C**: `Department`
+    - Row 1 (Header): `Department`
+    - Row 2 (Meta1): `Initiative.department`
+    - Row 3 (Meta2): `Intake sheet → DB → Backlog Sync - PM can edit`
+
+  - **Column D**: `Requesting Team`
+    - Row 1 (Header): `Requesting Team`
+    - Row 2 (Meta1): `Initiative.requesting_team`
+    - Row 3 (Meta2): `Intake sheet → DB → Backlog Sync - PM can edit`
+
+  - **Column E**: `Requester Name`
+    - Row 1 (Header): `Requester Name`
+    - Row 2 (Meta1): `Initiative.requester_name`
+    - Row 3 (Meta2): `Intake sheet → DB → Backlog Sync - PM can edit`
+
+  - **Column F**: `Requester Email`
+    - Row 1 (Header): `Requester Email`
+    - Row 2 (Meta1): `Initiative.requester_email`
+    - Row 3 (Meta2): `Intake → DB → Backlog sync`
+
+  - **Column G**: `Country`
+    - Row 1 (Header): `Country`
+    - Row 2 (Meta1): `Initiative.country`
+    - Row 3 (Meta2): `Intake sheet → DB → Backlog Sync - PM can edit`
+
+  - **Column H**: `Product Area`
+    - Row 1 (Header): `Product Area`
+    - Row 2 (Meta1): `Initiative.product_area`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column I**: `Lifecycle Status`
+    - Row 1 (Header): `Lifecycle Status`
+    - Row 2 (Meta1): `Initiative.lifecycle_status`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column J**: `Customer Segment`
+    - Row 1 (Header): `Customer Segment`
+    - Row 2 (Meta1): `Initiative.customer_segment`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column K**: `Initiative Type`
+    - Row 1 (Header): `Initiative Type`
+    - Row 2 (Meta1): `Initiative.initiative_type`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column L**: `Hypothesis`
+    - Row 1 (Header): `Hypothesis`
+    - Row 2 (Meta1): `Initiative.hypothesis`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column M**: `Problem Statement`
+    - Row 1 (Header): `Problem Statement`
+    - Row 2 (Meta1): `Initiative.problem_statement`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column N**: `Value Score`
+    - Row 1 (Header): `Value Score`
+    - Row 2 (Meta1): `Initiative.value_score`
+    - Row 3 (Meta2): `Backend computes ← DB (scores)`
+
+  - **Column O**: `Effort Score`
+    - Row 1 (Header): `Effort Score`
+    - Row 2 (Meta1): `Initiative.effort_score`
+    - Row 3 (Meta2): `Backend computes ← DB`
+
+  - **Column P**: `Overall Score`
+    - Row 1 (Header): `Overall Score`
+    - Row 2 (Meta1): `Initiative.overall_score`
+    - Row 3 (Meta2): `Backend computes ← DB`
+
+  - **Column Q**: `Active Scoring Framework`
+    - Row 1 (Header): `Active Scoring Framework`
+    - Row 2 (Meta1): `Initiative.active_scoring_framework`
+    - Row 3 (Meta2): `PM choice → DB`
+
+  - **Column R**: `Use Math Model`
+    - Row 1 (Header): `Use Math Model`
+    - Row 2 (Meta1): `Initiative.use_math_model`
+    - Row 3 (Meta2): `PM choice → DB`
+
+  - **Column S**: `Dependencies Initiatives`
+    - Row 1 (Header): `Dependencies Initiatives`
+    - Row 2 (Meta1): `Initiative.dependencies_initiatives`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column T**: `Dependencies Others`
+    - Row 1 (Header): `Dependencies Others`
+    - Row 2 (Meta1): `Initiative.dependencies_others`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column U**: `LLM Summary`
+    - Row 1 (Header): `LLM Summary`
+    - Row 2 (Meta1): `Initiative.llm_summary`
+    - Row 3 (Meta2): `LLM text (editable) → DB`
+
+  - **Column V**: `Strategic Priority Coefficient`
+    - Row 1 (Header): `Strategic Priority Coefficient`
+    - Row 2 (Meta1): `Initiative.strategic_priority_coefficient`
+    - Row 3 (Meta2): `PM input → DB (or default=1.0)`
+
+  - **Column W**: `Updated At`
+    - Row 1 (Header): `Updated At`
+    - Row 2 (Meta1): `Initiative.updated_at`
+    - Row 3 (Meta2): `Backend writes → Sheet (read-only)`
+
+  - **Column X**: `Updated Source`
+    - Row 1 (Header): `Updated Source`
+    - Row 2 (Meta1): `Initiative.updated_source`
+    - Row 3 (Meta2): `Backend writes → Sheet (read-only)`
+
+  - **Column Y**: `Immediate KPI Key`
+    - Row 1 (Header): `Immediate KPI Key`
+    - Row 2 (Meta1): `Initiative.immediate_kpi_key`
+    - Row 3 (Meta2): `ENTRY: ProductOps/MathModels; FLOW: ProductOps→DB→Backlog (read-only).`
+
+  - **Column Z**: `Metric Chain JSON`
+    - Row 1 (Header): `Metric Chain JSON`
+    - Row 2 (Meta1): `Initiative.metric_chain_json`
+    - Row 3 (Meta2): `ENTRY: ProductOps/MathModels; FLOW: ProductOps→DB→Backlog (read-only).`
+
+  - **Column AA**: `engineering_tokens`
+    - Row 1 (Header): `engineering_tokens`
+    - Row 2 (Meta1): `Initiative.engineering_tokens`
+    - Row 3 (Meta2): `Copied from optimization_cetner/candidates tab to Central Backlog optionally too via formula
+Entry surgace is optimization_cetner/candidates`
+
+  - **Column AB**: `deadline_date`
+    - Row 1 (Header): `deadline_date`
+    - Row 2 (Meta1): `Initiative.deadline_date`
+    - Row 3 (Meta2): `Copied from optimization_cetner/candidates tab to Central Backlog optionally too via formula
+Entry surgace is optimization_cetner/candidates`
+
+  - **Column AC**: `is_mandatory`
+    - Row 1 (Header): `is_mandatory`
+    - Row 2 (Meta1): ``
+    - Row 3 (Meta2): `Copied from optimization_cetner/candidates tab to Central Backlog optionally too via formula
+Entry surgace is optimization_cetner/candidates`
+
+  - **Column AD**: `Is Optimization Candidate`
+    - Row 1 (Header): `Is Optimization Candidate`
+    - Row 2 (Meta1): `Initiative.is_optimization_candidate`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column AE**: `Candidate Period Key`
+    - Row 1 (Header): `Candidate Period Key`
+    - Row 2 (Meta1): `Initiative.candidate_period_key`
+    - Row 3 (Meta2): `PM input → DB`
 
 
+##### Tab: `Test`
+  - *No data found*
+
+### ProductOps Sheet
+
+- **Spreadsheet ID**: `1zfxk-qQram2stUWYytiXapOeVh3yNulb32QYVJrOGt8`
+
+#### Tab: `Scoring_Inputs` (Scoring Inputs)
+  - **Total Columns**: 28
+
+  - **Column A**: `initiative_key`
+    - Row 1 (Header): `initiative_key`
+    - Row 2 (Meta1): `Initiative.initiative_key`
+    - Row 3 (Meta2): `ENTRY: Copied via formula from Backlog; FLOW: Sheet→Sheet (formula), read-only.`
+
+  - **Column B**: `updated at`
+    - Row 1 (Header): `updated at`
+    - Row 2 (Meta1): `Initiative.updated_at`
+    - Row 3 (Meta2): `Backend writes → Sheet (timestamp)`
+
+  - **Column C**: `active_scoring_framework`
+    - Row 1 (Header): `active_scoring_framework`
+    - Row 2 (Meta1): `Initiative.active_scoring_framework`
+    - Row 3 (Meta2): `PM input → DB (Flow3 sync)`
+
+  - **Column D**: `use_math_model`
+    - Row 1 (Header): `use_math_model`
+    - Row 2 (Meta1): `Initiative.use_math_model`
+    - Row 3 (Meta2): `PM input → DB (Flow3 sync)`
+
+  - **Column E**: `status`
+    - Row 1 (Header): `status`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Sheet-only status (optional) written by backend`
+
+  - **Column F**: `active_value_score`
+    - Row 1 (Header): `active_value_score`
+    - Row 2 (Meta1): `Initiative.value_score`
+    - Row 3 (Meta2): `Backend writes ← DB (Flow2 activation)`
+
+  - **Column G**: `active_effort_score`
+    - Row 1 (Header): `active_effort_score`
+    - Row 2 (Meta1): `Initiative.effort_score`
+    - Row 3 (Meta2): `Backend writes ← DB`
+
+  - **Column H**: `active_overall_score`
+    - Row 1 (Header): `active_overall_score`
+    - Row 2 (Meta1): `Initiative.overall_score`
+    - Row 3 (Meta2): `Backend writes ← DB`
+
+  - **Column I**: `math_value_score`
+    - Row 1 (Header): `math_value_score`
+    - Row 2 (Meta1): `Initiative.math_value_score`
+    - Row 3 (Meta2): `Backend writes ← DB (Flow3 compute)`
+
+  - **Column J**: `math_effort_score`
+    - Row 1 (Header): `math_effort_score`
+    - Row 2 (Meta1): `Initiative.math_effort_score`
+    - Row 3 (Meta2): `Backend writes ← DB`
+
+  - **Column K**: `math_overall_score`
+    - Row 1 (Header): `math_overall_score`
+    - Row 2 (Meta1): `Initiative.math_overall_score`
+    - Row 3 (Meta2): `Backend writes ← DB`
+
+  - **Column L**: `math_warnings`
+    - Row 1 (Header): `math_warnings`
+    - Row 2 (Meta1): `Initiative.math_warnings`
+    - Row 3 (Meta2): `Backend writes → Sheet (Sheet only)`
+
+  - **Column M**: `rice_reach`
+    - Row 1 (Header): `rice_reach`
+    - Row 2 (Meta1): `Initiative.rice_reach`
+    - Row 3 (Meta2): `PM input → DB (Flow3 sync)`
+
+  - **Column N**: `rice_impact`
+    - Row 1 (Header): `rice_impact`
+    - Row 2 (Meta1): `Initiative.rice_impact`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column O**: `rice_confidence`
+    - Row 1 (Header): `rice_confidence`
+    - Row 2 (Meta1): `Initiative.rice_confidence`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column P**: `rice_effort`
+    - Row 1 (Header): `rice_effort`
+    - Row 2 (Meta1): `Initiative.rice_effort`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column Q**: `wsjf_business_value`
+    - Row 1 (Header): `wsjf_business_value`
+    - Row 2 (Meta1): `Initiative.wsjf_business_value`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column R**: `wsjf_time_criticality`
+    - Row 1 (Header): `wsjf_time_criticality`
+    - Row 2 (Meta1): `Initiative.wsjf_time_criticality`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column S**: `wsjf_risk_reduction`
+    - Row 1 (Header): `wsjf_risk_reduction`
+    - Row 2 (Meta1): `Initiative.wsjf_risk_reduction`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column T**: `wsjf_job_size`
+    - Row 1 (Header): `wsjf_job_size`
+    - Row 2 (Meta1): `Initiative.wsjf_job_size`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column U**: `rice_value_score`
+    - Row 1 (Header): `rice_value_score`
+    - Row 2 (Meta1): `Initiative.rice_value_score`
+    - Row 3 (Meta2): `Backend writes ← DB (Flow3 compute)`
+
+  - **Column V**: `rice_effort_score`
+    - Row 1 (Header): `rice_effort_score`
+    - Row 2 (Meta1): `Initiative.rice_effort_score`
+    - Row 3 (Meta2): `Backend writes ← DB`
+
+  - **Column W**: `rice_overall_score`
+    - Row 1 (Header): `rice_overall_score`
+    - Row 2 (Meta1): `Initiative.rice_overall_score`
+    - Row 3 (Meta2): `Backend writes ← DB`
+
+  - **Column X**: `wsjf_value_score`
+    - Row 1 (Header): `wsjf_value_score`
+    - Row 2 (Meta1): `Initiative.wsjf_value_score`
+    - Row 3 (Meta2): `Backend writes ← DB`
+
+  - **Column Y**: `wsjf_effort_score`
+    - Row 1 (Header): `wsjf_effort_score`
+    - Row 2 (Meta1): `Initiative.wsjf_effort_score`
+    - Row 3 (Meta2): `Backend writes ← DB`
+
+  - **Column Z**: `wsjf_overall_score`
+    - Row 1 (Header): `wsjf_overall_score`
+    - Row 2 (Meta1): `Initiative.wsjf_overall_score`
+    - Row 3 (Meta2): `Backend writes ← DB`
+
+  - **Column AA**: `comment`
+    - Row 1 (Header): `comment`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Sheet-only PM notes`
+
+  - **Column AB**: `Updated Source`
+    - Row 1 (Header): `Updated Source`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (provenance)`
 
 
+#### Tab: `MathModels` (Math Models)
+  - **Total Columns**: 16
+
+  - **Column A**: `initiative_key`
+    - Row 1 (Header): `initiative_key`
+    - Row 2 (Meta1): `Initiative.initiative_key`
+    - Row 3 (Meta2): `PM Copies via formula from Backlog; FLOW: Sheet→Sheet (formula), read-only.`
+
+  - **Column B**: `model_name`
+    - Row 1 (Header): `model_name`
+    - Row 2 (Meta1): `InitiativeMathModel.model_name`
+    - Row 3 (Meta2): `PM input →DB (MathModelSync).`
+
+  - **Column C**: `model_description_free_text`
+    - Row 1 (Header): `model_description_free_text`
+    - Row 2 (Meta1): `InitiativeMathModel.model_description_free_text`
+    - Row 3 (Meta2): `PM input →DB (MathModelSync).`
+
+  - **Column D**: `immediate KPI Key`
+    - Row 1 (Header): `immediate KPI Key`
+    - Row 2 (Meta1): `Initiative.immediate_kpi_key`
+    - Row 3 (Meta2): `PM input → DB (will be used as read only on central backlog too) - source of truth`
+
+  - **Column E**: `metric_chain_text`
+    - Row 1 (Header): `metric_chain_text`
+    - Row 2 (Meta1): `Initiative.metric_chain_json`
+    - Row 3 (Meta2): `PM input → DB (parsed → metric_chain_json) - source of truth`
+
+  - **Column F**: `llm_suggested_metric_chain_text`
+    - Row 1 (Header): `llm_suggested_metric_chain_text`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `LLM writes → Sheet (PM may copy)`
+
+  - **Column G**: `formula_text`
+    - Row 1 (Header): `formula_text`
+    - Row 2 (Meta1): `InitiativeMathModel.formula_text`
+    - Row 3 (Meta2): `PM input → DB - source of truth`
+
+  - **Column H**: `status`
+    - Row 1 (Header): `status`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Sheet-only status (optional) written by backend`
+
+  - **Column I**: `approved_by_user`
+    - Row 1 (Header): `approved_by_user`
+    - Row 2 (Meta1): `InitiativeMathModel.approved_by_user`
+    - Row 3 (Meta2): `PM input approval → DB`
+
+  - **Column J**: `llm_suggested_formula_text`
+    - Row 1 (Header): `llm_suggested_formula_text`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `LLM writes → Sheet (PM may copy)`
+
+  - **Column K**: `llm_notes`
+    - Row 1 (Header): `llm_notes`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `LLM writes → Sheet (sheet only)`
+
+  - **Column L**: `assumptions_text`
+    - Row 1 (Header): `assumptions_text`
+    - Row 2 (Meta1): `InitiativeMathModel.assumptions_text`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column M**: `model_prompt_to_llm`
+    - Row 1 (Header): `model_prompt_to_llm`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `PM input - Sheet only`
+
+  - **Column N**: `suggested_by_llm`
+    - Row 1 (Header): `suggested_by_llm`
+    - Row 2 (Meta1): `InitiativeMathModel.suggested_by_llm`
+    - Row 3 (Meta2): `Backend sets → Sheet →DB (on save)`
+
+  - **Column O**: `Updated Source`
+    - Row 1 (Header): `Updated Source`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes: DB → Sheet (provenance)`
+
+  - **Column P**: `updated at`
+    - Row 1 (Header): `updated at`
+    - Row 2 (Meta1): `InitiativeMathModel.updated_at`
+    - Row 3 (Meta2): `Backend timestamps: DB→Sheet (timestamp)`
+
+
+#### Tab: `Params` (Parameters)
+  - **Total Columns**: 16
+
+  - **Column A**: `initiative_key`
+    - Row 1 (Header): `initiative_key`
+    - Row 2 (Meta1): `Initiative.initiative_key`
+    - Row 3 (Meta2): `Autoseeded by backend Seed Params job OR PM Copies via formula from Backlog sheet in manual entries`
+
+  - **Column B**: `framework`
+    - Row 1 (Header): `framework`
+    - Row 2 (Meta1): `InitiativeParam.framework`
+    - Row 3 (Meta2): `Backend in autoseed cases /PM in manual cases sets → DB`
+
+  - **Column C**: `model name`
+    - Row 1 (Header): `model name`
+    - Row 2 (Meta1): `InitiativeMathModel.model_name`
+    - Row 3 (Meta2): `Backend seeds from model_name; FLOW: Backend→Sheet (read-only).`
+
+  - **Column D**: `param_name`
+    - Row 1 (Header): `param_name`
+    - Row 2 (Meta1): `InitiativeParam.param_name`
+    - Row 3 (Meta2): `Backend seeded / PM edits → DB`
+
+  - **Column E**: `value`
+    - Row 1 (Header): `value`
+    - Row 2 (Meta1): `InitiativeParam.value`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column F**: `approved`
+    - Row 1 (Header): `approved`
+    - Row 2 (Meta1): `InitiativeParam.approved`
+    - Row 3 (Meta2): `PM input approval → DB`
+
+  - **Column G**: `is_auto_seeded`
+    - Row 1 (Header): `is_auto_seeded`
+    - Row 2 (Meta1): `InitiativeParam.is_auto_seeded`
+    - Row 3 (Meta2): `Backend sets (seed) → DB`
+
+  - **Column H**: `param_display`
+    - Row 1 (Header): `param_display`
+    - Row 2 (Meta1): `InitiativeParam.param_display`
+    - Row 3 (Meta2): `LLM seeds metadata → Sheet (editable) → DB (on save)`
+
+  - **Column I**: `description`
+    - Row 1 (Header): `description`
+    - Row 2 (Meta1): `InitiativeParam.description`
+    - Row 3 (Meta2): `LLM seeds metadata → Sheet → DB (editable)`
+
+  - **Column J**: `unit`
+    - Row 1 (Header): `unit`
+    - Row 2 (Meta1): `InitiativeParam.unit`
+    - Row 3 (Meta2): `LLM seeds metadata → Sheet → DB (editable)`
+
+  - **Column K**: `min`
+    - Row 1 (Header): `min`
+    - Row 2 (Meta1): `InitiativeParam.min`
+    - Row 3 (Meta2): `PM input Optional Sheet → DB `
+
+  - **Column L**: `max`
+    - Row 1 (Header): `max`
+    - Row 2 (Meta1): `InitiativeParam.max`
+    - Row 3 (Meta2): `PM input Optional Sheet → DB `
+
+  - **Column M**: `source`
+    - Row 1 (Header): `source`
+    - Row 2 (Meta1): `InitiativeParam.source`
+    - Row 3 (Meta2): `PM input Optional Sheet → DB `
+
+  - **Column N**: `notes`
+    - Row 1 (Header): `notes`
+    - Row 2 (Meta1): `InitiativeParam.notes`
+    - Row 3 (Meta2): `PM input Optional Sheet → DB `
+
+  - **Column O**: `updated source`
+    - Row 1 (Header): `updated source`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (provenance)`
+
+  - **Column P**: `updated at`
+    - Row 1 (Header): `updated at`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend timestamps: DB→Sheet (timestamp)`
+
+
+#### Tab: `Metrics_Config` (Metrics Config)
+  - **Total Columns**: 10
+
+  - **Column A**: `kpi_key`
+    - Row 1 (Header): `kpi_key`
+    - Row 2 (Meta1): `OrganizationMetricsConfig.kpi_key`
+    - Row 3 (Meta2): `PM input Sheet → DB (Save)`
+
+  - **Column B**: `kpi_name`
+    - Row 1 (Header): `kpi_name`
+    - Row 2 (Meta1): `OrganizationMetricsConfig.kpi_name`
+    - Row 3 (Meta2): `PM input Sheet → DB (Save)`
+
+  - **Column C**: `kpi_level`
+    - Row 1 (Header): `kpi_level`
+    - Row 2 (Meta1): `OrganizationMetricsConfig.kpi_level`
+    - Row 3 (Meta2): `PM input Sheet → DB (Save)`
+
+  - **Column D**: `unit`
+    - Row 1 (Header): `unit`
+    - Row 2 (Meta1): `OrganizationMetricsConfig.unit`
+    - Row 3 (Meta2): `PM input Sheet → DB (Save)`
+
+  - **Column E**: `description`
+    - Row 1 (Header): `description`
+    - Row 2 (Meta1): `OrganizationMetricsConfig.description`
+    - Row 3 (Meta2): `PM input Sheet → DB (Save)`
+
+  - **Column F**: `is_active`
+    - Row 1 (Header): `is_active`
+    - Row 2 (Meta1): `OrganizationMetricsConfig.is_active`
+    - Row 3 (Meta2): `PM input Sheet → DB (Save)`
+
+  - **Column G**: `notes`
+    - Row 1 (Header): `notes`
+    - Row 2 (Meta1): `OrganizationMetricsConfig.notes`
+    - Row 3 (Meta2): `PM notes Sheet → DB`
+
+  - **Column H**: `run_status`
+    - Row 1 (Header): `run_status`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (status)`
+
+  - **Column I**: `updated_source`
+    - Row 1 (Header): `updated_source`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (provenance)`
+
+  - **Column J**: `updated_at`
+    - Row 1 (Header): `updated_at`
+    - Row 2 (Meta1): `OrganizationMetricsConfig.updated_at`
+    - Row 3 (Meta2): `Backend writes → Sheet (timestamp)`
+
+
+#### Tab: `KPI_Contributions` (KPI Contributions)
+  - **Total Columns**: 6
+
+  - **Column A**: `initiative_key`
+    - Row 1 (Header): `initiative_key`
+    - Row 2 (Meta1): `Initiative.initiative_key`
+    - Row 3 (Meta2): `PM Copies via formula from Central Backlog; FLOW: Sheet→Sheet (formula), read-only`
+
+  - **Column B**: `kpi_contribution_json`
+    - Row 1 (Header): `kpi_contribution_json`
+    - Row 2 (Meta1): `Initiative.kpi_contribution_json`
+    - Row 3 (Meta2): `PM input edits here; FLOW: ProductOps/KPI_Contributions → DB; validate keys & units vs Metrics_Config`
+
+  - **Column C**: `notes`
+    - Row 1 (Header): `notes`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Sheet-only notes; FLOW: none`
+
+  - **Column D**: `run_status`
+    - Row 1 (Header): `run_status`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend status; FLOW: Backend → Sheet`
+
+  - **Column E**: `updated_source`
+    - Row 1 (Header): `updated_source`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend provenance; FLOW: Backend → Sheet`
+
+  - **Column F**: `updated_at`
+    - Row 1 (Header): `updated_at`
+    - Row 2 (Meta1): `Initiative.updated_at`
+    - Row 3 (Meta2): `Backend timestamp; FLOW: DB → Sheet`
+
+
+#### Tab: `Config` (Config)
+  - *No data found*
+
+### Optimization Center Sheet
+
+- **Spreadsheet ID**: `1ctCxdh4awipo_mXf_gdMTL3aVf8QZVaKAukOwBhygfU`
+
+#### Tab: `Candidates` (Candidates)
+  - **Total Columns**: 25
+
+  - **Column A**: `initiative_key`
+    - Row 1 (Header): `initiative_key`
+    - Row 2 (Meta1): `Initiative.initiative_key`
+    - Row 3 (Meta2): `PM Copies via formula from Backlog; Sheet→Sheet (formula), read-only.`
+
+  - **Column B**: `title`
+    - Row 1 (Header): `title`
+    - Row 2 (Meta1): `Initiative.title`
+    - Row 3 (Meta2): `PM Copies via formula from Backlog; Sheet→Sheet (formula), read-only.`
+
+  - **Column C**: `country`
+    - Row 1 (Header): `country`
+    - Row 2 (Meta1): `Initiative.country`
+    - Row 3 (Meta2): `PM Copies via formula from Backlog; Sheet→Sheet (formula), read-only.`
+
+  - **Column D**: `department`
+    - Row 1 (Header): `department`
+    - Row 2 (Meta1): `Initiative.department`
+    - Row 3 (Meta2): `PM Copies via formula from Backlog; Sheet→Sheet (formula), read-only.`
+
+  - **Column E**: `category`
+    - Row 1 (Header): `category`
+    - Row 2 (Meta1): `Initiative.category`
+    - Row 3 (Meta2): `PM input - categorize work type for optimization`
+
+  - **Column F**: `engineering_tokens`
+    - Row 1 (Header): `engineering_tokens`
+    - Row 2 (Meta1): `Initiative.engineering_tokens`
+    - Row 3 (Meta2): `PM input Sheet → DB + copied from optimization/candidates tab to Central Backlog optionally too via formula`
+
+  - **Column G**: `deadline_date`
+    - Row 1 (Header): `deadline_date`
+    - Row 2 (Meta1): `Initiative.deadline_date`
+    - Row 3 (Meta2): `PM input Sheet → DB + copied from optimization/candidates tab to Central Backlog optionally too via formula`
+
+  - **Column H**: `north_star_contribution`
+    - Row 1 (Header): `north_star_contribution`
+    - Row 2 (Meta1): `(derived from Initiative.kpi_contribution_json[north_star])`
+    - Row 3 (Meta2): `Backend derives ← DB (display only here)
+entry surface is ProductOps/KPI_contributions`
+
+  - **Column I**: `strategic_kpi_contributions`
+    - Row 1 (Header): `strategic_kpi_contributions`
+    - Row 2 (Meta1): `(derived from Initiative.kpi_contribution_json)`
+    - Row 3 (Meta2): `Backend derives ← DB (display only here)
+entry surface is ProductOps/KPI_contributions`
+
+  - **Column J**: `is_mandatory`
+    - Row 1 (Header): `is_mandatory`
+    - Row 2 (Meta1): ``
+    - Row 3 (Meta2): `READ-ONLY. Derived from Constraints tab. Edit constraints on Constraints tab only.`
+
+  - **Column K**: `mandate_reason`
+    - Row 1 (Header): `mandate_reason`
+    - Row 2 (Meta1): ``
+    - Row 3 (Meta2): `?`
+
+  - **Column L**: `bundle_key`
+    - Row 1 (Header): `bundle_key`
+    - Row 2 (Meta1): ``
+    - Row 3 (Meta2): `READ-ONLY. Derived from Constraints tab (bundle_all_or_nothing). Display only.`
+
+  - **Column M**: `prerequisite_keys`
+    - Row 1 (Header): `prerequisite_keys`
+    - Row 2 (Meta1): ``
+    - Row 3 (Meta2): `READ-ONLY. Derived from Constraints tab (require_prereq). Display only.`
+
+  - **Column N**: `exclusion_keys`
+    - Row 1 (Header): `exclusion_keys`
+    - Row 2 (Meta1): ``
+    - Row 3 (Meta2): `READ-ONLY. Derived from Constraints tab (exclude_* constraints). Display only.`
+
+  - **Column O**: `synergy_group_keys`
+    - Row 1 (Header): `synergy_group_keys`
+    - Row 2 (Meta1): ``
+    - Row 3 (Meta2): `READ-ONLY. Derived from Constraints tab (synergy_bonus). Display only.`
+
+  - **Column P**: `program_key`
+    - Row 1 (Header): `program_key`
+    - Row 2 (Meta1): `Initiative.program_key`
+    - Row 3 (Meta2): `PM input - assign initiative to a program for cross-functional tracking`
+
+  - **Column Q**: `active_scoring_framework`
+    - Row 1 (Header): `active_scoring_framework`
+    - Row 2 (Meta1): `Initiative.active_scoring_framework`
+    - Row 3 (Meta2): `Copied from Central Backlog via formula (PM sets in backlog)`
+
+  - **Column R**: `active_overall_score`
+    - Row 1 (Header): `active_overall_score`
+    - Row 2 (Meta1): `Initiative.overall_score`
+    - Row 3 (Meta2): `Copied from Central Backlog via formula (PM sets in backlog)`
+
+  - **Column S**: `immediate_kpi_key`
+    - Row 1 (Header): `immediate_kpi_key`
+    - Row 2 (Meta1): `Initiative.immediate_kpi_key`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column T**: `lifecycle_status`
+    - Row 1 (Header): `lifecycle_status`
+    - Row 2 (Meta1): `Initiative.status`
+    - Row 3 (Meta2): `PM Copies via formula from Backlog; Sheet→Sheet (formula), read-only.`
+
+  - **Column U**: `notes`
+    - Row 1 (Header): `notes`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `PM input: Sheet-only notes`
+
+  - **Column V**: `is_selected_for_run`
+    - Row 1 (Header): `is_selected_for_run`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `PM input: Sheet-only checkbox`
+
+  - **Column W**: `run_status`
+    - Row 1 (Header): `run_status`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (status)`
+
+  - **Column X**: `updated_source`
+    - Row 1 (Header): `updated_source`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (provenance)`
+
+  - **Column Y**: `updated_at`
+    - Row 1 (Header): `updated_at`
+    - Row 2 (Meta1): `Initiative.updated_at`
+    - Row 3 (Meta2): `Backend writes → Sheet (timestamp)`
+
+
+#### Tab: `Scenario_Config` (Scenario_Config)
+  - **Total Columns**: 9
+
+  - **Column A**: `scenario_name`
+    - Row 1 (Header): `scenario_name`
+    - Row 2 (Meta1): `OptimizationScenario.name`
+    - Row 3 (Meta2): `PM input → DB (Save)`
+
+  - **Column B**: `period_key`
+    - Row 1 (Header): `period_key`
+    - Row 2 (Meta1): `OptimizationScenario.period_key`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column C**: `capacity_total_tokens`
+    - Row 1 (Header): `capacity_total_tokens`
+    - Row 2 (Meta1): `OptimizationScenario.capacity_total_tokens`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column D**: `objective_mode`
+    - Row 1 (Header): `objective_mode`
+    - Row 2 (Meta1): `OptimizationScenario.objective_mode`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column E**: `objective_weights_json`
+    - Row 1 (Header): `objective_weights_json`
+    - Row 2 (Meta1): `OptimizationScenario.objective_weights_json`
+    - Row 3 (Meta2): `PM input → DB (KPI keys ∈ {north_star + strategic})`
+
+  - **Column F**: `notes`
+    - Row 1 (Header): `notes`
+    - Row 2 (Meta1): `OptimizationScenario.notes`
+    - Row 3 (Meta2): `PM notes → DB`
+
+  - **Column G**: `run_status`
+    - Row 1 (Header): `run_status`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (status)`
+
+  - **Column H**: `updated_source`
+    - Row 1 (Header): `updated_source`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (provenance)`
+
+  - **Column I**: `updated_at`
+    - Row 1 (Header): `updated_at`
+    - Row 2 (Meta1): `OptimizationScenario.updated_at`
+    - Row 3 (Meta2): `Backend writes → Sheet (timestamp)`
+
+
+#### Tab: `Constraints` (Constraints)
+  - **Total Columns**: 13
+
+  - **Column A**: `constraint_set_name`
+    - Row 1 (Header): `constraint_set_name`
+    - Row 2 (Meta1): `OptimizationConstraintSet.name`
+    - Row 3 (Meta2): `PM input → DB (Save)`
+
+  - **Column B**: `scenario_name`
+    - Row 1 (Header): `scenario_name`
+    - Row 2 (Meta1): `n/a`
+    - Row 3 (Meta2): `PM input (sheet only)`
+
+  - **Column C**: `constraint_type`
+    - Row 1 (Header): `constraint_type`
+    - Row 2 (Meta1): `OptimizationConstraintSet.(rows/json)`
+    - Row 3 (Meta2): `PM input → DB (Save)`
+
+  - **Column D**: `dimension`
+    - Row 1 (Header): `dimension`
+    - Row 2 (Meta1): `OptimizationConstraintSet.(rows/json)`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column E**: `dimension_key`
+    - Row 1 (Header): `dimension_key`
+    - Row 2 (Meta1): `OptimizationConstraintSet.(rows/json)`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column F**: `min_tokens`
+    - Row 1 (Header): `min_tokens`
+    - Row 2 (Meta1): `OptimizationConstraintSet.(rows/json)`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column G**: `max_tokens`
+    - Row 1 (Header): `max_tokens`
+    - Row 2 (Meta1): `OptimizationConstraintSet.(rows/json)`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column H**: `bundle_member_keys`
+    - Row 1 (Header): `bundle_member_keys`
+    - Row 2 (Meta1): `OptimizationConstraintSet.(rows/json)`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column I**: `prereq_member_keys`
+    - Row 1 (Header): `prereq_member_keys`
+    - Row 2 (Meta1): ``
+    - Row 3 (Meta2): ``
+
+  - **Column J**: `notes`
+    - Row 1 (Header): `notes`
+    - Row 2 (Meta1): `OptimizationConstraintSet.notes`
+    - Row 3 (Meta2): `PM notes → DB`
+
+  - **Column K**: `run_status`
+    - Row 1 (Header): `run_status`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (status)`
+
+  - **Column L**: `updated_source`
+    - Row 1 (Header): `updated_source`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (provenance)`
+
+  - **Column M**: `updated_at`
+    - Row 1 (Header): `updated_at`
+    - Row 2 (Meta1): `OptimizationConstraintSet.updated_at`
+    - Row 3 (Meta2): `Backend writes → Sheet (timestamp)`
+
+
+#### Tab: `Targets` (Targets)
+  - **Total Columns**: 11
+
+  - **Column A**: `constraint_set_name`
+    - Row 1 (Header): `constraint_set_name`
+    - Row 2 (Meta1): `OptimizationConstraintSet.name`
+    - Row 3 (Meta2): `PM Copies via formula from Constraints; FLOW: Sheet→Sheet (formula), read-only.`
+
+  - **Column B**: `scenario_name`
+    - Row 1 (Header): `scenario_name`
+    - Row 2 (Meta1): `n/a`
+    - Row 3 (Meta2): `PM Copies via formula from Scenario_Config; FLOW: Sheet→Sheet (formula), read-only.`
+
+  - **Column C**: `dimension`
+    - Row 1 (Header): `dimension`
+    - Row 2 (Meta1): `OptimizationConstraintSet.targets_json[dimension]`
+    - Row 3 (Meta2): `PM input → DB (KPI key restricted)`
+
+  - **Column D**: `dimension_key`
+    - Row 1 (Header): `dimension_key`
+    - Row 2 (Meta1): `OptimizationConstraintSet.targets_json`
+    - Row 3 (Meta2): `PM input → DB (KPI key restricted)`
+
+  - **Column E**: `kpi_key`
+    - Row 1 (Header): `kpi_key`
+    - Row 2 (Meta1): `OptimizationConstraintSet.targets_json`
+    - Row 3 (Meta2): `PM input → DB (KPI key restricted)`
+
+  - **Column F**: `floor_or_goal`
+    - Row 1 (Header): `floor_or_goal`
+    - Row 2 (Meta1): `OptimizationConstraintSet.targets_json`
+    - Row 3 (Meta2): `PM/Analytics input → DB`
+
+  - **Column G**: `target_value`
+    - Row 1 (Header): `target_value`
+    - Row 2 (Meta1): `OptimizationConstraintSet.targets_json`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column H**: `notes`
+    - Row 1 (Header): `notes`
+    - Row 2 (Meta1): `OptimizationConstraintSet.notes`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column I**: `run_status`
+    - Row 1 (Header): `run_status`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (status)`
+
+  - **Column J**: `updated_source`
+    - Row 1 (Header): `updated_source`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (provenance)`
+
+  - **Column K**: `updated_at`
+    - Row 1 (Header): `updated_at`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (timestamp)`
+
+
+#### Tab: `Runs` (Runs)
+  - **Total Columns**: 14
+
+  - **Column A**: `run_id`
+    - Row 1 (Header): `run_id`
+    - Row 2 (Meta1): `OptimizationRun.run_id`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column B**: `scenario_name`
+    - Row 1 (Header): `scenario_name`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column C**: `period_key`
+    - Row 1 (Header): `period_key`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column D**: `optimization_db_status`
+    - Row 1 (Header): `optimization_db_status`
+    - Row 2 (Meta1): `OptimizationRun.status`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column E**: `created_at`
+    - Row 1 (Header): `created_at`
+    - Row 2 (Meta1): `OptimizationRun.started_at`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column F**: `finished_at`
+    - Row 1 (Header): `finished_at`
+    - Row 2 (Meta1): `OptimizationRun.finished_at`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column G**: `selected_count`
+    - Row 1 (Header): `selected_count`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column H**: `total_objective`
+    - Row 1 (Header): `total_objective`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column I**: `capacity_used`
+    - Row 1 (Header): `capacity_used`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column J**: `gap_summary`
+    - Row 1 (Header): `gap_summary`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column K**: `results_tab_ref`
+    - Row 1 (Header): `results_tab_ref`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column L**: `run_status`
+    - Row 1 (Header): `run_status`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (status)`
+
+  - **Column M**: `updated_source`
+    - Row 1 (Header): `updated_source`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (provenance)`
+
+  - **Column N**: `updated_at`
+    - Row 1 (Header): `updated_at`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (timestamp)`
+
+
+#### Tab: `Results` (Results)
+  - **Total Columns**: 15
+
+  - **Column A**: `initiative_key`
+    - Row 1 (Header): `initiative_key`
+    - Row 2 (Meta1): `PortfolioItem.(initiative_key)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column B**: `selected`
+    - Row 1 (Header): `selected`
+    - Row 2 (Meta1): `PortfolioItem.selected`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column C**: `allocated_tokens`
+    - Row 1 (Header): `allocated_tokens`
+    - Row 2 (Meta1): `PortfolioItem.allocated_tokens`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column D**: `country`
+    - Row 1 (Header): `country`
+    - Row 2 (Meta1): `Initiative.country`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column E**: `department`
+    - Row 1 (Header): `department`
+    - Row 2 (Meta1): `Initiative.department`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column F**: `category`
+    - Row 1 (Header): `category`
+    - Row 2 (Meta1): `Initiative.category`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column G**: `north_star_gain`
+    - Row 1 (Header): `north_star_gain`
+    - Row 2 (Meta1): `(derived from kpi_contribution_json[north_star])`
+    - Row 3 (Meta2): `Backend writes → Sheet (derived)`
+
+  - **Column H**: `active_overall_score`
+    - Row 1 (Header): `active_overall_score`
+    - Row 2 (Meta1): `Initiative.overall_score`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column I**: `mandate_reason`
+    - Row 1 (Header): `mandate_reason`
+    - Row 2 (Meta1): ``
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column J**: `bundle_key`
+    - Row 1 (Header): `bundle_key`
+    - Row 2 (Meta1): `Initiative.bundle_key`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column K**: `dependency_status`
+    - Row 1 (Header): `dependency_status`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet (derived)`
+
+  - **Column L**: `notes`
+    - Row 1 (Header): `notes`
+    - Row 2 (Meta1): `PortfolioItem.notes`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column M**: `run_status`
+    - Row 1 (Header): `run_status`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (status)`
+
+  - **Column N**: `updated_source`
+    - Row 1 (Header): `updated_source`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (provenance)`
+
+  - **Column O**: `updated_at`
+    - Row 1 (Header): `updated_at`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (timestamp)`
+
+
+#### Tab: `Gaps_and_Alerts` (Gaps_and_Alerts)
+  - **Total Columns**: 11
+
+  - **Column A**: `country`
+    - Row 1 (Header): `country`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column B**: `kpi_key`
+    - Row 1 (Header): `kpi_key`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column C**: `target`
+    - Row 1 (Header): `target`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column D**: `achieved`
+    - Row 1 (Header): `achieved`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column E**: `gap`
+    - Row 1 (Header): `gap`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column F**: `severity`
+    - Row 1 (Header): `severity`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column G**: `notes`
+    - Row 1 (Header): `notes`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column H**: `recommendation`
+    - Row 1 (Header): `recommendation`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `LLM optional → Sheet (later)`
+
+  - **Column I**: `run_status`
+    - Row 1 (Header): `run_status`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (status)`
+
+  - **Column J**: `updated_source`
+    - Row 1 (Header): `updated_source`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (provenance)`
+
+  - **Column K**: `updated_at`
+    - Row 1 (Header): `updated_at`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (timestamp)`
+
+
+## Codebase Registry
+*Auto-generated: 2026-01-21 15:36 UTC*
+
+This section is auto-generated by `scripts/generate_codebase_registry.py`.
+Comprehensive map of `app/` directory structure, modules, classes, and functions.
+
+### Directory Structure
+```
+app/
+├── api
+│   ├── routes
+│   │   ├── __init__.py
+│   │   └── actions.py
+│   ├── schemas
+│   │   ├── __init__.py
+│   │   └── actions.py
+│   ├── __init__.py
+│   └── deps.py
+├── db
+│   ├── models
+│   │   ├── __init__.py
+│   │   ├── action_run.py
+│   │   ├── initiative.py
+│   │   ├── optimization.py
+│   │   ├── roadmap.py
+│   │   ├── roadmap_entry.py
+│   │   └── scoring.py
+│   ├── __init__.py
+│   ├── base.py
+│   ├── schema_ensure.py
+│   └── session.py
+├── jobs
+│   ├── __init__.py
+│   ├── backlog_sync_job.py
+│   ├── backlog_update_job.py
+│   ├── flow1_full_sync_job.py
+│   ├── flow2_scoring_activation_job.py
+│   ├── flow3_product_ops_job.py
+│   ├── math_model_generation_job.py
+│   ├── optimization_job.py
+│   ├── param_seeding_job.py
+│   ├── sync_intake_job.py
+│   └── validation_job.py
+├── llm
+│   ├── __init__.py
+│   ├── client.py
+│   ├── models.py
+│   └── scoring_assistant.py
+├── schemas
+│   ├── __init__.py
+│   ├── feasibility.py
+│   ├── initiative.py
+│   ├── optimization_center.py
+│   ├── optimization_problem.py
+│   ├── optimization_solution.py
+│   ├── roadmap.py
+│   ├── roadmap_entry.py
+│   └── scoring.py
+├── services
+│   ├── scoring
+│   │   ├── engines
+│   │   │   ├── __init__.py
+│   │   │   ├── math_model.py
+│   │   │   ├── rice.py
+│   │   │   └── wsjf.py
+│   │   ├── __init__.py
+│   │   ├── interfaces.py
+│   │   ├── registry.py
+│   │   └── utils.py
+│   ├── solvers
+│   │   ├── __init__.py
+│   │   └── ortools_cp_sat_adapter.py
+│   ├── __init__.py
+│   ├── action_runner.py
+│   ├── backlog_mapper.py
+│   ├── backlog_service.py
+│   ├── feasibility_checker.py
+│   ├── feasibility_filters.py
+│   ├── feasibility_persistence.py
+│   ├── initiative_key.py
+│   ├── intake_mapper.py
+│   ├── intake_service.py
+│   ├── kpi_contributions_sync_service.py
+│   ├── math_model_service.py
+│   ├── metrics_config_sync_service.py
+│   ├── optimization_compiler.py
+│   ├── optimization_problem_builder.py
+│   ├── optimization_run_persistence.py
+│   ├── optimization_sync_service.py
+│   ├── params_sync_service.py
+│   ├── roadmap_service.py
+│   └── scoring_service.py
+├── sheets
+│   ├── __init__.py
+│   ├── backlog_reader.py
+│   ├── backlog_writer.py
+│   ├── client.py
+│   ├── intake_reader.py
+│   ├── intake_writer.py
+│   ├── kpi_contributions_reader.py
+│   ├── math_models_reader.py
+│   ├── math_models_writer.py
+│   ├── metrics_config_reader.py
+│   ├── models.py
+│   ├── optimization_center_readers.py
+│   ├── optimization_center_writers.py
+│   ├── params_reader.py
+│   ├── params_writer.py
+│   ├── productops_writer.py
+│   ├── scoring_inputs_reader.py
+│   └── sheet_protection.py
+├── utils
+│   ├── __init__.py
+│   ├── header_utils.py
+│   ├── periods.py
+│   ├── provenance.py
+│   └── safe_eval.py
+├── workers
+│   ├── __init__.py
+│   └── action_worker.py
+├── __init__.py
+├── config.py
+└── main.py
+```
+
+### Modules Registry
+
+#### Directory: `app/api/`
+
+##### Module: `__init__.py`
+*Path*: `app/api/__init__.py`
+
+*No classes or functions defined*
+
+##### Module: `deps.py`
+*Path*: `app/api/deps.py`
+
+**Imports from**: __future__, app.config, app.db.session, fastapi, sqlalchemy.orm
+
+**Functions**:
+- **Function `get_db() -> Generator[(Session, None, None)]`**
+- **Function `require_shared_secret(x_roadmap_ai_secret: str | None) -> None`**
+  - *Doc*: v1 security: shared secret header from Apps Script.
+
+#### Directory: `app/api/routes/`
+
+##### Module: `__init__.py`
+*Path*: `app/api/routes/__init__.py`
+
+*No classes or functions defined*
+
+##### Module: `actions.py`
+*Path*: `app/api/routes/actions.py`
+
+**Imports from**: __future__, app.api.deps, app.api.schemas.actions, app.db.models.action_run, app.services.action_runner
+
+**Functions**:
+- **Function `run_action(req: ActionRunRequest, db: Session) -> ActionRunEnqueueResponse`**
+  - *Doc*: Enqueue an action and return run_id immediately.
+- **Function `get_run_status(run_id: str, db: Session) -> ActionRunStatusResponse`**
+  - *Doc*: Get the status of a specific action run by run_id.
+
+#### Directory: `app/api/schemas/`
+
+##### Module: `__init__.py`
+*Path*: `app/api/schemas/__init__.py`
+
+*No classes or functions defined*
+
+##### Module: `actions.py`
+*Path*: `app/api/schemas/actions.py`
+
+**Imports from**: __future__, pydantic, typing
+
+**Classes**:
+- **Class `ActionRunRequest`** (inherits: BaseModel)
+  - *No methods*
+- **Class `ActionRunEnqueueResponse`** (inherits: BaseModel)
+  - *No methods*
+- **Class `ActionRunStatusResponse`** (inherits: BaseModel)
+  - *No methods*
+
+#### Directory: `app/` (root)
+
+##### Module: `__init__.py`
+*Path*: `app/__init__.py`
+
+*No classes or functions defined*
+
+##### Module: `config.py`
+*Path*: `app/config.py`
+
+**Imports from**: dotenv, pathlib, pydantic, pydantic_settings, pythonjsonlogger.json
+
+**Classes**:
+- **Class `CustomJsonFormatter`** (inherits: JsonFormatter)
+  - *Doc*: Custom JSON formatter that only includes fields with non-None values.
+  - `add_fields(self, log_record, record, message_dict)`
+- **Class `IntakeTabConfig`** (inherits: BaseModel)
+  - *No methods*
+- **Class `IntakeSheetConfig`** (inherits: BaseModel)
+  - `active_tabs(self)`
+- **Class `BacklogSheetConfig`** (inherits: BaseModel)
+  - *Doc*: Configuration for a central backlog Google Sheet.
+  - *No methods*
+- **Class `ProductOpsConfig`** (inherits: BaseModel)
+  - *Doc*: Configuration for ProductOps Google Sheet
+  - `validate_spreadsheet_id(cls, v: str)`
+- **Class `Settings`** (inherits: BaseSettings)
+  - `load_intake_sheets_from_file(self)`
+  - `load_product_ops_from_file(self)`
+
+**Functions**:
+- **Function `setup_json_logging(log_level: int) -> None`**
+  - *Doc*: Initialize JSON logging configuration for the application.
+
+##### Module: `main.py`
+*Path*: `app/main.py`
+
+**Imports from**: __future__, app.api.routes.actions, app.config, fastapi
+
+**Functions**:
+- **Function `create_app() -> FastAPI`**
+
+#### Directory: `app/db/`
+
+##### Module: `__init__.py`
+*Path*: `app/db/__init__.py`
+
+*No classes or functions defined*
+
+##### Module: `base.py`
+*Path*: `app/db/base.py`
+
+**Imports from**: app.db, sqlalchemy.orm
+
+*No classes or functions defined*
+
+##### Module: `schema_ensure.py`
+*Path*: `app/db/schema_ensure.py`
+
+**Imports from**: __future__, sqlalchemy, sqlalchemy.engine
+
+**Functions**:
+- **Function `ensure_math_scoring_columns(engine: Engine) -> None`**
+  - *Doc*: Ensure math_* and active_scoring_framework columns exist on initiatives.
+
+##### Module: `session.py`
+*Path*: `app/db/session.py`
+
+**Imports from**: app.config, sqlalchemy, sqlalchemy.orm
+
+*No classes or functions defined*
+
+#### Directory: `app/db/models/`
+
+##### Module: `__init__.py`
+*Path*: `app/db/models/__init__.py`
+
+**Imports from**: action_run, initiative, optimization, roadmap, roadmap_entry
+
+*No classes or functions defined*
+
+##### Module: `action_run.py`
+*Path*: `app/db/models/action_run.py`
+
+**Imports from**: __future__, app.db.base, datetime, sqlalchemy
+
+**Classes**:
+- **Class `ActionRun`** (inherits: Base)
+  - *Doc*: Execution ledger entry for sheet-triggered or system actions.
+  - *No methods*
+
+##### Module: `initiative.py`
+*Path*: `app/db/models/initiative.py`
+
+**Imports from**: app.db.base, datetime, sqlalchemy, sqlalchemy.orm
+
+**Classes**:
+- **Class `Initiative`** (inherits: Base)
+  - *No methods*
+
+##### Module: `optimization.py`
+*Path*: `app/db/models/optimization.py`
+
+**Imports from**: __future__, app.db.base, datetime, sqlalchemy, sqlalchemy.orm
+
+**Classes**:
+- **Class `OrganizationMetricConfig`** (inherits: Base)
+  - *Doc*: Authoritative KPI registry from ProductOps Metrics_Config.
+  - *No methods*
+- **Class `OptimizationScenario`** (inherits: Base)
+  - *Doc*: Scenario config for optimization runs.
+  - *No methods*
+- **Class `OptimizationConstraintSet`** (inherits: Base)
+  - *Doc*: Compiled constraints and targets for a scenario.
+  - *No methods*
+- **Class `OptimizationRun`** (inherits: Base)
+  - *Doc*: Execution record for optimization jobs.
+  - *No methods*
+- **Class `Portfolio`** (inherits: Base)
+  - *Doc*: Persisted portfolio results for a scenario/run.
+  - *No methods*
+- **Class `PortfolioItem`** (inherits: Base)
+  - *Doc*: Membership of initiatives in a portfolio.
+  - *No methods*
+
+##### Module: `roadmap.py`
+*Path*: `app/db/models/roadmap.py`
+
+**Imports from**: app.db.base, datetime, sqlalchemy, sqlalchemy.orm
+
+**Classes**:
+- **Class `Roadmap`** (inherits: Base)
+  - *No methods*
+
+##### Module: `roadmap_entry.py`
+*Path*: `app/db/models/roadmap_entry.py`
+
+**Imports from**: app.db.base, sqlalchemy, sqlalchemy.orm
+
+**Classes**:
+- **Class `RoadmapEntry`** (inherits: Base)
+  - *Doc*: Link between Roadmap and Initiative, with metadata per roadmap.
+  - *No methods*
+
+##### Module: `scoring.py`
+*Path*: `app/db/models/scoring.py`
+
+**Imports from**: app.db.base, datetime, sqlalchemy, sqlalchemy.orm
+
+**Classes**:
+- **Class `InitiativeMathModel`** (inherits: Base)
+  - *Doc*: Stores the full mathematical model for an initiative.
+  - *No methods*
+- **Class `InitiativeScore`** (inherits: Base)
+  - *Doc*: Optional scoring history table (per framework / per run).
+  - *No methods*
+- **Class `InitiativeParam`** (inherits: Base)
+  - *Doc*: Normalized parameter table: one row per (initiative, framework, param_name).
+  - *No methods*
+
+#### Directory: `app/jobs/`
+
+##### Module: `__init__.py`
+*Path*: `app/jobs/__init__.py`
+
+*No classes or functions defined*
+
+##### Module: `backlog_sync_job.py`
+*Path*: `app/jobs/backlog_sync_job.py`
+
+**Imports from**: __future__, app.config, app.sheets.backlog_writer, app.sheets.client, sqlalchemy.orm
+
+**Functions**:
+- **Function `_resolve_backlog_target(spreadsheet_id: Optional[str], tab_name: Optional[str], product_org: Optional[str]) -> BacklogSheetConfig`**
+  - *Doc*: Pick a backlog sheet config based on overrides or settings.
+- **Function `run_backlog_sync(db: Session, spreadsheet_id: str | None, tab_name: str | None, product_org: str | None) -> None`**
+  - *Doc*: Regenerate a backlog Google Sheet from DB Initiatives.
+- **Function `run_all_backlog_sync(db: Session) -> None`**
+  - *Doc*: Regenerate all configured backlog sheets (multi-org scenario).
+
+##### Module: `backlog_update_job.py`
+*Path*: `app/jobs/backlog_update_job.py`
+
+**Imports from**: __future__, app.config, app.services.backlog_service, app.sheets.backlog_reader, app.sheets.client
+
+**Functions**:
+- **Function `_resolve_backlog_target(spreadsheet_id: Optional[str], tab_name: Optional[str], product_org: Optional[str]) -> BacklogSheetConfig`**
+  - *Doc*: Pick a backlog sheet config based on overrides or settings.
+- **Function `run_backlog_update(db: Session, spreadsheet_id: str | None, tab_name: str | None, product_org: str | None, commit_every: int | None, initiative_keys: list[str] | None) -> int`**
+  - *Doc*: Read central backlog and apply updates into DB.
+
+##### Module: `flow1_full_sync_job.py`
+*Path*: `app/jobs/flow1_full_sync_job.py`
+
+*Doc*: Flow 1 is the end-to-end sync cycle for departmental intake sheets feeding into a central backlog sheet.
+
+**Imports from**: __future__, app.jobs.backlog_sync_job, app.jobs.backlog_update_job, app.jobs.sync_intake_job, sqlalchemy.orm
+
+**Classes**:
+- **Class `Flow1SyncResult`** (inherits: TypedDict)
+  - *Doc*: Result of Flow 1 full sync execution.
+  - *No methods*
+
+**Functions**:
+- **Function `run_flow1_full_sync(db: Session) -> Flow1SyncResult`**
+  - *Doc*: Run the full Flow 1 cycle.
+
+##### Module: `flow2_scoring_activation_job.py`
+*Path*: `app/jobs/flow2_scoring_activation_job.py`
+
+*Doc*: Flow 2 Scoring Activation Job
+
+**Imports from**: __future__, app.services.scoring, app.services.scoring_service, sqlalchemy.orm, typing
+
+**Functions**:
+- **Function `run_scoring_batch(db: Session) -> int`**
+  - *Doc*: Run an activation batch for the given framework.
+
+##### Module: `flow3_product_ops_job.py`
+*Path*: `app/jobs/flow3_product_ops_job.py`
+
+**Imports from**: __future__, app.config, app.db.models.initiative, app.sheets.client, app.sheets.productops_writer
+
+**Classes**:
+- **Class `ScoringInputsFormatter`** (inherits: logging.Formatter)
+  - *Doc*: Custom formatter that includes scoring-specific fields when present.
+  - `format(self, record: logging.LogRecord)`
+
+**Functions**:
+- **Function `_get_product_ops_reader(spreadsheet_id: Optional[str], tab_name: Optional[str]) -> ScoringInputsReader`**
+- **Function `run_flow3_preview_inputs() -> List[ScoringInputsRow]`**
+  - *Doc*: Fetch and parse the Product Ops Scoring_Inputs tab; return parsed rows for inspection.
+- **Function `run_flow3_sync_inputs_to_initiatives(db: Session) -> int`**
+  - *Doc*: Strong sync: write Scoring_Inputs values into Initiative fields.
+- **Function `run_flow3_write_scores_to_sheet(db: Session) -> int`**
+  - *Doc*: Flow 3.C Phase 2: Write per-framework scores from DB back to Product Ops sheet.
+
+##### Module: `math_model_generation_job.py`
+*Path*: `app/jobs/math_model_generation_job.py`
+
+**Imports from**: __future__, app.db.models.initiative, app.llm.client, app.llm.scoring_assistant, app.sheets.client
+
+**Functions**:
+- **Function `needs_suggestion(row: object, force: bool) -> bool`**
+- **Function `run_math_model_generation_job(db: Session, sheets_client: SheetsClient, llm_client: LLMClient, spreadsheet_id: str, tab_name: str, max_rows: Optional[int], force: bool, max_llm_calls: int) -> Dict[(str, int)]`**
+
+##### Module: `optimization_job.py`
+*Path*: `app/jobs/optimization_job.py`
+
+*Doc*: Flow 5 (Phase 5) - Optimization run orchestration.
+
+**Imports from**: __future__, app.schemas.feasibility, app.schemas.optimization_solution, app.services.feasibility_checker, app.services.feasibility_persistence
+
+**Functions**:
+- **Function `run_flow5_optimization_step1() -> Dict[(str, Any)]`**
+  - *Doc*: Flow 5 (Phase 5) - Optimization run orchestration.
+
+##### Module: `param_seeding_job.py`
+*Path*: `app/jobs/param_seeding_job.py`
+
+*Doc*: Job to seed Params sheet from approved MathModels formulas.
+
+**Imports from**: __future__, app.config, app.llm.client, app.llm.scoring_assistant, app.sheets.client
+
+**Classes**:
+- **Class `ParamSeedingStats`**
+  - *Doc*: Statistics for param seeding job run.
+  - `__init__(self)`
+  - `summary(self)`
+
+**Functions**:
+- **Function `run_param_seeding_job(sheets_client: SheetsClient, spreadsheet_id: str, mathmodels_tab: str, params_tab: str, llm_client: LLMClient, max_llm_calls: int, limit: int | None) -> ParamSeedingStats`**
+  - *Doc*: Seed Params sheet from approved MathModels.
+
+##### Module: `sync_intake_job.py`
+*Path*: `app/jobs/sync_intake_job.py`
+
+**Imports from**: __future__, app.config, app.services.intake_service, app.sheets.client, app.sheets.intake_reader
+
+**Functions**:
+- **Function `run_sync_for_sheet(db: Session, spreadsheet_id: str, tab_name: str, sheets_service, allow_status_override: bool, commit_every: Optional[int], header_row: int, start_data_row: int, max_rows: Optional[int]) -> None`**
+  - *Doc*: Run intake sync for one sheet tab end-to-end.
+- **Function `run_sync_all_intake_sheets(db: Session, allow_status_override_global: bool) -> None`**
+  - *Doc*: Run intake sync for all configured hierarchical sheets / tabs.
+
+##### Module: `validation_job.py`
+*Path*: `app/jobs/validation_job.py`
+
+*No classes or functions defined*
+
+#### Directory: `app/llm/`
+
+##### Module: `__init__.py`
+*Path*: `app/llm/__init__.py`
+
+*No classes or functions defined*
+
+##### Module: `client.py`
+*Path*: `app/llm/client.py`
+
+**Imports from**: __future__, app.config, app.llm.models, openai, typing
+
+**Classes**:
+- **Class `LLMClient`**
+  - *Doc*: Thin wrapper around OpenAI client for math-model suggestions.
+  - `__init__(self, client: Optional[OpenAI])`
+  - `suggest_math_model(self, payload: MathModelPromptInput)`
+  - `suggest_param_metadata(self, initiative_key: str, identifiers: list[str], formula_text: str)`
+
+**Functions**:
+- **Function `_build_system_prompt() -> str`**
+- **Function `_build_user_prompt(payload: MathModelPromptInput) -> str`**
+
+##### Module: `models.py`
+*Path*: `app/llm/models.py`
+
+**Imports from**: __future__, pydantic, typing
+
+**Classes**:
+- **Class `MathModelPromptInput`** (inherits: BaseModel)
+  - *No methods*
+- **Class `MathModelSuggestion`** (inherits: BaseModel)
+  - *Doc*: LLM response for math-model suggestions.
+  - `formula_text(self)`
+  - `metric_chain_text(self)`
+  - `notes(self)`
+- **Class `ParamSuggestion`** (inherits: BaseModel)
+  - `_coerce_example_value(self)`
+- **Class `ParamMetadataSuggestion`** (inherits: BaseModel)
+  - *No methods*
+
+##### Module: `scoring_assistant.py`
+*Path*: `app/llm/scoring_assistant.py`
+
+**Imports from**: __future__, app.db.models.initiative, app.llm.client, app.llm.models, app.sheets.models
+
+**Functions**:
+- **Function `suggest_math_model_for_initiative(initiative: Initiative, row: MathModelRow, llm: LLMClient) -> MathModelSuggestion`**
+  - *Doc*: Construct prompt input from Initiative + MathModelRow and call LLM.
+- **Function `suggest_param_metadata_for_model(initiative_key: str, identifiers: list[str], formula_text: str, llm: LLMClient) -> ParamMetadataSuggestion`**
+  - *Doc*: Call LLM to suggest param metadata for formula identifiers.
+
+#### Directory: `app/schemas/`
+
+##### Module: `__init__.py`
+*Path*: `app/schemas/__init__.py`
+
+**Imports from**: initiative, optimization_center, roadmap, roadmap_entry, scoring
+
+*No classes or functions defined*
+
+##### Module: `feasibility.py`
+*Path*: `app/schemas/feasibility.py`
+
+*Doc*: Feasibility report schemas for pre-solver validation.
+
+**Imports from**: __future__, pydantic, typing
+
+**Classes**:
+- **Class `FeasibilityIssue`** (inherits: BaseModel)
+  - *Doc*: A single feasibility issue (error or warning).
+  - *No methods*
+- **Class `FeasibilityReport`** (inherits: BaseModel)
+  - *Doc*: Structured feasibility check report.
+  - `from_issues(cls, issues: List[FeasibilityIssue])`
+
+##### Module: `initiative.py`
+*Path*: `app/schemas/initiative.py`
+
+**Imports from**: datetime, pydantic, typing
+
+**Classes**:
+- **Class `InitiativeBase`** (inherits: BaseModel)
+  - *No methods*
+- **Class `InitiativeCreate`** (inherits: InitiativeBase)
+  - *No methods*
+- **Class `InitiativeUpdate`** (inherits: BaseModel)
+  - *No methods*
+- **Class `InitiativeRead`** (inherits: InitiativeBase)
+  - *No methods*
+
+##### Module: `optimization_center.py`
+*Path*: `app/schemas/optimization_center.py`
+
+*Doc*: Pydantic schemas + validation helpers for Optimization Center sheets.
+
+**Imports from**: __future__, pydantic, typing, typing_extensions
+
+**Classes**:
+- **Class `ValidationMessage`** (inherits: BaseModel)
+  - *No methods*
+- **Class `ScenarioConfigSchema`** (inherits: BaseModel)
+  - `to_float(cls, v)`
+  - `validate_weights(cls, v)`
+- **Class `ConstraintRowBase`** (inherits: BaseModel)
+  - `not_blank(cls, v: str)`
+  - `to_float(cls, v)`
+  - `non_negative(cls, v)`
+  - `normalize_type(cls, v: str)`
+  - `normalize_dimension(cls, v: str)`
+  - `normalize_constraint_set(cls, v: str)`
+  - `normalize_dimension_key(cls, v: Optional[str])`
+  - `forbid_special_keys_for_wrong_types(self)`
+- **Class `CapacityFloorRowSchema`** (inherits: ConstraintRowBase)
+  - `validate_capacity_floor(self)`
+- **Class `CapacityCapRowSchema`** (inherits: ConstraintRowBase)
+  - `validate_capacity_cap(self)`
+- **Class `MandatoryRowSchema`** (inherits: ConstraintRowBase)
+  - `validate_mandatory(self)`
+- **Class `BundleRowSchema`** (inherits: ConstraintRowBase)
+  - `validate_bundle(self)`
+- **Class `ExcludePairRowSchema`** (inherits: ConstraintRowBase)
+  - `validate_exclude_pair(self)`
+- **Class `ExcludeInitiativeRowSchema`** (inherits: ConstraintRowBase)
+  - `validate_exclude(self)`
+- **Class `RequirePrereqRowSchema`** (inherits: ConstraintRowBase)
+  - `validate_prereq(self)`
+- **Class `SynergyBonusRowSchema`** (inherits: ConstraintRowBase)
+  - `validate_synergy(self)`
+- **Class `TargetRowSchema`** (inherits: BaseModel)
+  - `not_blank(cls, v: str)`
+  - `normalize_dimension(cls, v: Optional[str])`
+  - `normalize_dimension_key(cls, v: Optional[str])`
+  - `require_value_and_goal(self)`
+  - `to_float(cls, v)`
+  - `non_negative(cls, v)`
+  - `validate_floor_goal(cls, v: Optional[str])`
+- **Class `ConstraintSetCompiled`** (inherits: BaseModel)
+  - *Doc*: Compiled, system-generated representation of a constraint set (not a sheet row).
+  - *No methods*
+- **Class `BundleCompiled`** (inherits: BaseModel)
+  - *No methods*
+- **Class `CapacityFloor`** (inherits: BaseModel)
+  - *No methods*
+- **Class `CapacityCap`** (inherits: BaseModel)
+  - *No methods*
+- **Class `TargetConstraint`** (inherits: BaseModel)
+  - *No methods*
+
+**Functions**:
+- **Function `validate_constraint_row(row_num: int, data: dict) -> ValidationMessage`**
+- **Function `validate_target_row(row_num: int, data: dict, valid_kpis: Optional[set[str]]) -> ValidationMessage`**
+- **Function `validate_scenario_config(row_num: int, data: dict, allowed_objective_modes: Optional[set[str]], weights_required_modes: Optional[set[str]]) -> ValidationMessage`**
+
+##### Module: `optimization_problem.py`
+*Path*: `app/schemas/optimization_problem.py`
+
+*Doc*: Frozen solver-facing problem schema (Phase 5).
+
+**Imports from**: __future__, pydantic, typing
+
+**Classes**:
+- **Class `ObjectiveSpec`** (inherits: BaseModel)
+  - *Doc*: Defines the optimization objective function configuration.
+  - `_validate_objective(self)`
+- **Class `Candidate`** (inherits: BaseModel)
+  - *Doc*: A single initiative candidate for optimization.
+  - *No methods*
+- **Class `ConstraintSetPayload`** (inherits: BaseModel)
+  - *Doc*: Compiled constraint set JSON payload (matches DB structure).
+  - *No methods*
+- **Class `RunScope`** (inherits: BaseModel)
+  - *Doc*: Defines how the candidate pool was selected.
+  - `_validate_scope(self)`
+- **Class `OptimizationProblem`** (inherits: BaseModel)
+  - *Doc*: Complete solver-facing problem object (Phase 5).
+  - *No methods*
+
+##### Module: `optimization_solution.py`
+*Path*: `app/schemas/optimization_solution.py`
+
+*Doc*: Optimization solution schemas for solver output.
+
+**Imports from**: __future__, pydantic, typing, typing_extensions
+
+**Classes**:
+- **Class `SelectedItem`** (inherits: BaseModel)
+  - *Doc*: A single candidate's selection status and allocated resources.
+  - *No methods*
+- **Class `OptimizationSolution`** (inherits: BaseModel)
+  - *Doc*: Structured solver output.
+  - *No methods*
+
+##### Module: `roadmap.py`
+*Path*: `app/schemas/roadmap.py`
+
+**Imports from**: datetime, pydantic, typing
+
+**Classes**:
+- **Class `RoadmapBase`** (inherits: BaseModel)
+  - *No methods*
+- **Class `RoadmapCreate`** (inherits: RoadmapBase)
+  - *No methods*
+- **Class `RoadmapRead`** (inherits: RoadmapBase)
+  - *No methods*
+
+##### Module: `roadmap_entry.py`
+*Path*: `app/schemas/roadmap_entry.py`
+
+**Imports from**: pydantic, typing
+
+**Classes**:
+- **Class `RoadmapEntryBase`** (inherits: BaseModel)
+  - *No methods*
+- **Class `RoadmapEntryCreate`** (inherits: RoadmapEntryBase)
+  - *No methods*
+- **Class `RoadmapEntryRead`** (inherits: RoadmapEntryBase)
+  - *No methods*
+
+##### Module: `scoring.py`
+*Path*: `app/schemas/scoring.py`
+
+**Imports from**: datetime, pydantic, typing
+
+**Classes**:
+- **Class `InitiativeMathModelRead`** (inherits: BaseModel)
+  - *No methods*
+- **Class `InitiativeParamRead`** (inherits: BaseModel)
+  - *No methods*
+- **Class `InitiativeMathModelBase`** (inherits: BaseModel)
+  - *No methods*
+- **Class `InitiativeScoreRead`** (inherits: BaseModel)
+  - *No methods*
+
+#### Directory: `app/services/`
+
+##### Module: `__init__.py`
+*Path*: `app/services/__init__.py`
+
+*No classes or functions defined*
+
+##### Module: `action_runner.py`
+*Path*: `app/services/action_runner.py`
+
+*Doc*: Action runner service for enqueuing and executing sheet-triggered actions.
+
+**Imports from**: __future__, app.config, app.db.models.action_run, app.jobs.backlog_sync_job, app.jobs.backlog_update_job
+
+**Classes**:
+- **Class `ActionContext`**
+  - *Doc*: Convenience wrapper around payload and resolved runtime dependencies.
+  - *No methods*
+
+**Functions**:
+- **Function `_now() -> datetime`**
+- **Function `_make_run_id() -> str`**
+- **Function `enqueue_action_run(db: Session, payload: Dict[(str, Any)]) -> ActionRun`**
+  - *Doc*: Create an ActionRun row with status=queued and return the ORM object.
+- **Function `_build_scope_summary(scope: Any) -> Optional[str]`**
+  - *Doc*: Short human-friendly text for Control tab.
+- **Function `_extract_summary(action: str, result: Dict[(str, Any)]) -> Dict[(str, Any)]`**
+  - *Doc*: Extract standardized summary from action-specific result for UI display.
+- **Function `execute_next_queued_run(db: Session) -> Optional[ActionRun]`**
+  - *Doc*: Atomically claim one queued ActionRun, execute it, update status/result.
+- **Function `_claim_one_queued(db: Session) -> Optional[ActionRun]`**
+  - *Doc*: Claim one queued action run.
+- **Function `_build_action_context(payload: Dict[(str, Any)]) -> ActionContext`**
+  - *Doc*: Build execution context with lazy dependency resolution.
+- **Function `_resolve_action(action: str) -> ActionFn`**
+- **Function `_action_flow3_compute_all(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+- **Function `_action_flow3_write_scores(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+- **Function `_action_flow3_sync_inputs(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+- **Function `_action_flow2_activate(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+- **Function `_action_flow1_backlog_sync(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+- **Function `_action_flow1_full_sync(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+- **Function `_action_flow4_suggest_mathmodels(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+- **Function `_action_flow4_seed_params(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+- **Function `_action_flow4_sync_mathmodels(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+- **Function `_action_flow4_sync_params(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+- **Function `_action_flow0_intake_sync(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+- **Function `_action_pm_backlog_sync(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+  - *Doc*: PM Job #1: Sync intake to backlog.
+- **Function `_action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+  - *Doc*: PM Job #2: Score selected initiatives.
+- **Function `_action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+  - *Doc*: PM Job #4a: Suggest math model formulas via LLM.
+- **Function `_action_pm_seed_math_params(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+  - *Doc*: PM Job #5: Seed math model parameters from approved formulas.
+- **Function `_action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+  - *Doc*: PM Job #3: Switch active scoring framework for selected initiatives.
+- **Function `_action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+  - *Doc*: PM Job #4: Save selected rows from current tab into DB (selection-scoped).
+- **Function `_action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+  - *Doc*: PM Job: Run optimization (Step 1+2+3 solver) on user-selected candidates.
+- **Function `_action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+  - *Doc*: PM Job: Run optimization (Step 1 capacity-only solver) on all candidates in scenario.
+
+##### Module: `backlog_mapper.py`
+*Path*: `app/services/backlog_mapper.py`
+
+**Imports from**: __future__, app.sheets.backlog_reader, typing
+
+**Functions**:
+- **Function `_to_float(value: Any) -> Optional[float]`**
+- **Function `_to_bool(value: Any) -> bool`**
+- **Function `_split_keys(value: Any) -> List[str]`**
+- **Function `backlog_row_to_update_data(row: BacklogRow) -> Dict[(str, Any)]`**
+  - *Doc*: Map central backlog sheet columns to Initiative fields.
+
+##### Module: `backlog_service.py`
+*Path*: `app/services/backlog_service.py`
+
+**Imports from**: __future__, app.config, app.db.models.initiative, app.sheets.backlog_reader, app.sheets.models
+
+**Classes**:
+- **Class `BacklogService`**
+  - *Doc*: Updates Initiatives in the database based on edits in the central backlog sheet.
+  - `__init__(self, db: Session)`
+  - `update_from_backlog_row(self, row: BacklogRow)`
+  - `_extract_initiative_key(row: BacklogRow)`
+  - `update_many(self, rows: List[BacklogRow] | List[tuple[int, BacklogRow]], commit_every: Optional[int])`
+  - `_apply_central_update(initiative: Initiative, data: Dict[(str, Any)])`
+
+##### Module: `feasibility_checker.py`
+*Path*: `app/services/feasibility_checker.py`
+
+*Doc*: Fast, deterministic feasibility checks BEFORE calling the solver.
+
+**Imports from**: __future__, app.schemas.feasibility, app.schemas.optimization_problem, dataclasses, datetime
+
+**Classes**:
+- **Class `PeriodWindow`**
+  - *Doc*: Time period with start and end dates (for future time-aware checks).
+  - *No methods*
+- **Class `FeasibilityChecker`**
+  - *Doc*: Fast, deterministic feasibility checks BEFORE calling the solver.
+  - `check(self, problem: OptimizationProblem, period_window: Optional[PeriodWindow])`
+  - `_check_candidate_tokens(self, problem: OptimizationProblem)`
+  - `_check_mandatory_references(self, problem: OptimizationProblem, candidate_keys: Set[str])`
+  - `_check_exclusions(self, problem: OptimizationProblem, candidate_keys: Set[str])`
+  - `_check_bundles(self, problem: OptimizationProblem, candidate_keys: Set[str])`
+  - `_check_prerequisites(self, problem: OptimizationProblem, candidate_keys: Set[str])`
+  - `_check_synergy_pairs(self, problem: OptimizationProblem, candidate_keys: Set[str])`
+  - `_check_capacity_bounds(self, problem: OptimizationProblem, candidate_keys: Set[str])`
+  - `_compute_slice_token_totals(self, problem: OptimizationProblem)`
+  - `_check_target_floors_upper_bound(self, problem: OptimizationProblem)`
+  - `_compute_optimistic_kpi_totals(self, problem: OptimizationProblem)`
+  - `_detect_prereq_cycles(self, prereqs: Dict[(str, List[str])])`
+
+##### Module: `feasibility_filters.py`
+*Path*: `app/services/feasibility_filters.py`
+
+*Doc*: Pre-solver feasibility filters for candidate initiatives.
+
+**Imports from**: __future__, app.db.models.initiative, datetime
+
+**Functions**:
+- **Function `is_deadline_feasible(initiative: Initiative, period_end: date) -> bool`**
+  - *Doc*: Check if an initiative's deadline is feasible for a given period.
+- **Function `is_time_feasible(initiative: Initiative, period_start: date, period_end: date) -> bool`**
+  - *Doc*: Extended time feasibility check (for future phases).
+
+##### Module: `feasibility_persistence.py`
+*Path*: `app/services/feasibility_persistence.py`
+
+*Doc*: Feasibility report persistence utilities.
+
+**Imports from**: __future__, datetime, typing
+
+**Functions**:
+- **Function `persist_feasibility_report(db: 'Session', optimization_run: 'OptimizationRun', report: 'FeasibilityReport') -> 'OptimizationRun'`**
+  - *Doc*: Persist feasibility output to OptimizationRun.result_json under a stable key.
+
+##### Module: `initiative_key.py`
+*Path*: `app/services/initiative_key.py`
+
+*Doc*: Generate unique initiative keys.
+
+**Imports from**: __future__, app.db.models.initiative, sqlalchemy.orm
+
+**Functions**:
+- **Function `generate_initiative_key(db: Session) -> str`**
+  - *Doc*: Generate a new unique initiative_key.
+
+##### Module: `intake_mapper.py`
+*Path*: `app/services/intake_mapper.py`
+
+*Doc*: Map a single intake sheet row (dict of column -> value) to InitiativeCreate.
+
+**Imports from**: __future__, app.schemas.initiative, datetime, typing
+
+**Functions**:
+- **Function `_to_float(value: Any) -> Optional[float]`**
+  - *Doc*: Convert a cell value to float if possible, otherwise return None.
+- **Function `_to_bool(value: Any) -> bool`**
+  - *Doc*: Convert a cell value to bool using common truthy values.
+- **Function `_to_date(value: Any) -> Any`**
+  - *Doc*: Convert a cell value to date if possible, otherwise return None.
+- **Function `map_sheet_row_to_initiative_create(row: Dict[(str, Any)]) -> InitiativeCreate`**
+  - *Doc*: Map a single Google Sheets intake row (column_name -> value)
+
+##### Module: `intake_service.py`
+*Path*: `app/services/intake_service.py`
+
+*Doc*: IntakeService implementation (Flow 1 - Step 2).
+
+**Imports from**: __future__, app.config, app.db.models.initiative, app.schemas.initiative, app.services.initiative_key
+
+**Classes**:
+- **Class `InitiativeKeyWriter`** (inherits: Protocol)
+  - `write_initiative_key(self, sheet_id: str, tab_name: str, row_number: int, initiative_key: str)`
+- **Class `IntakeService`**
+  - `__init__(self, db: Session, key_writer: Optional[InitiativeKeyWriter])`
+  - `_queue_key_backfill(self, sheet_id: str, tab_name: str, row_number: int, initiative: Initiative)`
+  - `upsert_from_intake_row(self, row: IntakeRow, source_sheet_id: str, source_tab_name: str, source_row_number: int, allow_status_override: bool, auto_commit: bool)`
+  - `upsert_many(self, rows: list[IntakeRow], source_sheet_id: str, source_tab_name: str, start_row_number: int, commit_every: Optional[int], allow_status_override: bool)`
+  - `_find_existing_initiative(self, row: IntakeRow, source_sheet_id: str, source_tab_name: str, source_row_number: int)`
+  - `_extract_initiative_key(row: IntakeRow)`
+  - `_create_from_intake(self, dto: InitiativeCreate, source_sheet_id: str, source_tab_name: str, source_row_number: int)`
+  - `_apply_intake_update(self, initiative: Initiative, dto: InitiativeCreate, allow_status_override: bool)`
+  - `_backfill_initiative_key(self, sheet_id: str, tab_name: str, row_number: int, initiative_key: str)`
+  - `flush_pending_key_backfills(self)`
+
+##### Module: `kpi_contributions_sync_service.py`
+*Path*: `app/services/kpi_contributions_sync_service.py`
+
+**Imports from**: __future__, app.db.models.initiative, app.db.models.optimization, app.sheets.client, app.sheets.kpi_contributions_reader
+
+**Classes**:
+- **Class `KPIContributionsSyncService`**
+  - *Doc*: Sheet → DB sync for ProductOps KPI_Contributions tab.
+  - `__init__(self, client: SheetsClient)`
+  - `preview_rows(self, spreadsheet_id: str, tab_name: str, max_rows: Optional[int])`
+  - `sync_sheet_to_db(self, db: Session, spreadsheet_id: str, tab_name: str, commit_every: int, initiative_keys: Optional[List[str]])`
+  - `_load_allowed_kpis(self, db: Session)`
+  - `_normalize_contribution(self, raw: Any)`
+  - `_values_are_numeric(self, contrib: Dict[(str, float)])`
+
+##### Module: `math_model_service.py`
+*Path*: `app/services/math_model_service.py`
+
+**Imports from**: __future__, app.db.models.initiative, app.db.models.scoring, app.sheets.client, app.sheets.math_models_reader
+
+**Classes**:
+- **Class `MathModelSyncService`**
+  - *Doc*: Sheet ↔ DB sync for MathModels (Sheet → DB for Step 4).
+  - `__init__(self, client: SheetsClient)`
+  - `preview_rows(self, spreadsheet_id: str, tab_name: str, max_rows: Optional[int])`
+  - `sync_sheet_to_db(self, db: Session, spreadsheet_id: str, tab_name: str, commit_every: int, initiative_keys: Optional[List[str]])`
+
+##### Module: `metrics_config_sync_service.py`
+*Path*: `app/services/metrics_config_sync_service.py`
+
+**Imports from**: __future__, app.db.models.optimization, app.sheets.client, app.sheets.metrics_config_reader, sqlalchemy.orm
+
+**Classes**:
+- **Class `MetricsConfigSyncService`**
+  - *Doc*: Sheet → DB sync for ProductOps Metrics_Config tab.
+  - `__init__(self, client: SheetsClient)`
+  - `preview_rows(self, spreadsheet_id: str, tab_name: str, max_rows: Optional[int])`
+  - `sync_sheet_to_db(self, db: Session, spreadsheet_id: str, tab_name: str, commit_every: int, kpi_keys: Optional[List[str]])`
+  - `_validate_unique_keys(self, rows: List[MetricRowPair])`
+  - `_validate_active_north_star(self, rows: List[MetricRowPair])`
+
+##### Module: `optimization_compiler.py`
+*Path*: `app/services/optimization_compiler.py`
+
+*Doc*: Pure compilation logic for Optimization Center constraints.
+
+**Imports from**: __future__, app.schemas.optimization_center, pydantic, typing
+
+**Functions**:
+- **Function `_bucket(compiled: Dict[(Tuple[(str, str)], ConstraintSetCompiled)], scenario: str, cset: str) -> ConstraintSetCompiled`**
+- **Function `compile_constraint_sets(constraint_rows: List[Tuple[(int, Dict[(str, Any)])]], target_rows: List[Tuple[(int, Dict[(str, Any)])]], valid_kpis: Optional[set[str]]) -> Tuple[(Dict[(Tuple[(str, str)], ConstraintSetCompiled)], List[ValidationMessage])]`**
+  - *Doc*: Validate and compile sheet rows into grouped ConstraintSetCompiled objects.
+
+##### Module: `optimization_problem_builder.py`
+*Path*: `app/services/optimization_problem_builder.py`
+
+*Doc*: Builder service for OptimizationProblem objects.
+
+**Imports from**: __future__, app.db.models.initiative, app.db.models.optimization, app.schemas.optimization_problem, app.services.feasibility_filters
+
+**Functions**:
+- **Function `build_optimization_problem(db: Session, scenario_name: str, constraint_set_name: str, scope_type: ScopeType, selected_initiative_keys: Optional[List[str]], period_end_date: Optional[date]) -> OptimizationProblem`**
+  - *Doc*: Build a complete OptimizationProblem ready for solver.
+- **Function `_validate_governance_references(constraint_payload: ConstraintSetPayload, candidate_keys: set[str]) -> None`**
+  - *Doc*: PRODUCTION FIX: Validate that all governance constraint references
+
+##### Module: `optimization_run_persistence.py`
+*Path*: `app/services/optimization_run_persistence.py`
+
+*Doc*: Persistence utilities for OptimizationRun objects.
+
+**Imports from**: __future__, app.db.models.optimization, app.schemas.optimization_problem, datetime, sqlalchemy.orm
+
+**Functions**:
+- **Function `persist_inputs_snapshot(db: Session, optimization_run: OptimizationRun, problem: OptimizationProblem, extra_snapshot_metadata: Optional[Dict[(str, Any)]]) -> OptimizationRun`**
+  - *Doc*: Store the exact solver input into OptimizationRun.inputs_snapshot_json for reproducibility.
+- **Function `persist_result(db: Session, optimization_run: OptimizationRun, result_json: Dict[(str, Any)], status: str, error_text: Optional[str]) -> OptimizationRun`**
+  - *Doc*: Store solver result into OptimizationRun.result_json.
+- **Function `create_run_record(db: Session, run_id: str, scenario_id: int, constraint_set_id: int, solver_name: Optional[str], solver_version: Optional[str], status: str, requested_by_email: Optional[str], requested_by_ui: Optional[str]) -> OptimizationRun`**
+  - *Doc*: Create a new OptimizationRun record in the database.
+
+##### Module: `optimization_sync_service.py`
+*Path*: `app/services/optimization_sync_service.py`
+
+*Doc*: Optimization Center sync orchestration.
+
+**Imports from**: __future__, app.db.models.optimization, app.db.session, app.schemas.optimization_center, app.services.optimization_compiler
+
+**Functions**:
+- **Function `_capacity_to_json(items: Sequence[CapacityFloor | CapacityCap], value_attr: str) -> Dict[(str, Dict[(str, float)])]`**
+- **Function `_targets_to_json(targets: List[TargetConstraint]) -> Dict[(str, Dict[(str, Dict[(str, Any)])])]`**
+  - *Doc*: Convert targets to JSON structure: {dimension: {dimension_key: {kpi_key: {type, value, notes?}}}}
+- **Function `sync_constraint_sets_from_sheets(sheets_client: SheetsClient, spreadsheet_id: str, constraints_tab: str, targets_tab: str, session: Optional[Session]) -> Tuple[(List[OptimizationConstraintSet], List[ValidationMessage])]`**
+  - *Doc*: Read constraints/targets tabs, compile, and upsert OptimizationConstraintSet rows.
+
+##### Module: `params_sync_service.py`
+*Path*: `app/services/params_sync_service.py`
+
+**Imports from**: __future__, app.db.models.initiative, app.db.models.scoring, app.sheets.client, app.sheets.params_reader
+
+**Classes**:
+- **Class `ParamsSyncService`**
+  - *Doc*: Sheet → DB sync for Initiative Parameters (Step 4).
+  - `__init__(self, client: SheetsClient)`
+  - `preview_rows(self, spreadsheet_id: str, tab_name: str, max_rows: Optional[int])`
+  - `sync_sheet_to_db(self, db: Session, spreadsheet_id: str, tab_name: str, commit_every: int, initiative_keys: Optional[List[str]])`
+
+##### Module: `roadmap_service.py`
+*Path*: `app/services/roadmap_service.py`
+
+*No classes or functions defined*
+
+##### Module: `scoring_service.py`
+*Path*: `app/services/scoring_service.py`
+
+**Imports from**: __future__, app.config, app.db.models.initiative, app.db.models.scoring, app.services.scoring
+
+**Classes**:
+- **Class `ScoringService`**
+  - *Doc*: Service layer for computing and persisting initiative scores.
+  - `__init__(self, db: Session)`
+  - `score_initiative(self, initiative: Initiative, framework: ScoringFramework, enable_history: Optional[bool], activate: bool)`
+  - `_compute_framework_scores_only(self, initiative: Initiative, framework: ScoringFramework, enable_history: bool)`
+  - `score_initiative_all_frameworks(self, initiative: Initiative, enable_history: Optional[bool])`
+  - `activate_all(self, framework: Optional[ScoringFramework], commit_every: Optional[int], only_missing_active: bool)`
+  - `compute_all_frameworks(self, commit_every: Optional[int])`
+  - `compute_for_initiatives(self, initiative_keys: list[str], commit_every: Optional[int])`
+  - `activate_initiative_framework(self, initiative: Initiative, framework: ScoringFramework, enable_history: Optional[bool])`
+  - `activate_for_initiatives(self, initiative_keys: list[str], commit_every: Optional[int])`
+  - `_resolve_framework_for_initiative(self, initiative: Initiative, explicit_override: Optional[ScoringFramework])`
+  - `_build_score_inputs(self, initiative: Initiative, framework: ScoringFramework)`
+  - `_build_rice_inputs(self, initiative: Initiative)`
+  - `_build_wsjf_inputs(self, initiative: Initiative)`
+  - `_build_math_model_inputs(self, initiative: Initiative)`
+
+#### Directory: `app/services/scoring/`
+
+##### Module: `__init__.py`
+*Path*: `app/services/scoring/__init__.py`
+
+**Imports from**: interfaces, registry
+
+*No classes or functions defined*
+
+##### Module: `interfaces.py`
+*Path*: `app/services/scoring/interfaces.py`
+
+**Imports from**: __future__, enum, pydantic, typing
+
+**Classes**:
+- **Class `ScoringFramework`** (inherits: str, Enum)
+  - *Doc*: Supported scoring framework identifiers.
+  - *No methods*
+- **Class `ScoreInputs`** (inherits: BaseModel)
+  - *Doc*: Normalized numeric inputs for scoring engines.
+  - *No methods*
+- **Class `ScoreResult`** (inherits: BaseModel)
+  - *Doc*: Result returned by a scoring engine.
+  - *No methods*
+- **Class `ScoringEngine`** (inherits: Protocol)
+  - *Doc*: Protocol that all scoring engines must satisfy.
+  - `compute(self, inputs: ScoreInputs)`
+
+##### Module: `registry.py`
+*Path*: `app/services/scoring/registry.py`
+
+*Doc*: Registry for scoring frameworks and their engines. This module defines available scoring frameworks,
+
+**Imports from**: __future__, app.services.scoring.engines, app.services.scoring.interfaces, dataclasses, typing
+
+**Classes**:
+- **Class `FrameworkInfo`**
+  - *No methods*
+
+**Functions**:
+- **Function `get_engine(framework: ScoringFramework) -> ScoringEngine`**
+
+##### Module: `utils.py`
+*Path*: `app/services/scoring/utils.py`
+
+**Imports from**: __future__, typing
+
+**Functions**:
+- **Function `safe_div(numerator: Optional[float], denominator: Optional[float]) -> Tuple[(float, Optional[str])]`**
+  - *Doc*: Safely divide two optional floats.
+- **Function `clamp(value: Optional[float], min_value: float, max_value: float) -> float`**
+  - *Doc*: Clamp a possibly None float into [min_value, max_value]. None -> min_value.
+
+#### Directory: `app/services/scoring/engines/`
+
+##### Module: `__init__.py`
+*Path*: `app/services/scoring/engines/__init__.py`
+
+**Imports from**: math_model, rice, wsjf
+
+*No classes or functions defined*
+
+##### Module: `math_model.py`
+*Path*: `app/services/scoring/engines/math_model.py`
+
+**Imports from**: __future__, app.services.scoring.interfaces, app.utils.safe_eval, typing
+
+**Classes**:
+- **Class `MathModelScoringEngine`**
+  - *Doc*: Scoring engine for custom math models using safe_eval.
+  - `compute(self, inputs: ScoreInputs)`
+
+##### Module: `rice.py`
+*Path*: `app/services/scoring/engines/rice.py`
+
+**Imports from**: __future__, app.services.scoring.interfaces, app.services.scoring.utils
+
+**Classes**:
+- **Class `RiceScoringEngine`**
+  - *Doc*: RICE scoring engine.
+  - `compute(self, inputs: ScoreInputs)`
+
+##### Module: `wsjf.py`
+*Path*: `app/services/scoring/engines/wsjf.py`
+
+**Imports from**: __future__, app.services.scoring.interfaces, app.services.scoring.utils
+
+**Classes**:
+- **Class `WsjfScoringEngine`**
+  - *Doc*: WSJF scoring engine.
+  - `compute(self, inputs: ScoreInputs)`
+
+#### Directory: `app/services/solvers/`
+
+##### Module: `__init__.py`
+*Path*: `app/services/solvers/__init__.py`
+
+*Doc*: Solver adapters for optimization problems.
+
+*No classes or functions defined*
+
+##### Module: `ortools_cp_sat_adapter.py`
+*Path*: `app/services/solvers/ortools_cp_sat_adapter.py`
+
+*Doc*: OR-Tools CP-SAT solver adapter for Phase 5 optimization.
+
+**Imports from**: __future__, dataclasses, ortools.sat.python, typing
+
+**Classes**:
+- **Class `CpSatConfig`**
+  - *Doc*: Configuration for OR-Tools CP-SAT solver.
+  - *No methods*
+- **Class `OrtoolsCpSatSolverAdapter`**
+  - *Doc*: Phase 5 v1 solver adapter using OR-Tools CP-SAT.
+  - `__init__(self, config: Optional[CpSatConfig])`
+  - `solve(self, problem: 'OptimizationProblem')`
+
+**Functions**:
+- **Function `_scaled_int(value: float, scale: int) -> int`**
+  - *Doc*: Convert float to scaled integer (production-friendly: deterministic rounding).
+- **Function `_get_candidate_dim_value(c: 'Candidate', dimension: str) -> Optional[str]`**
+  - *Doc*: Map constraint dimensions to Candidate attributes.
+- **Function `_get_candidate_dim_value_for_targets(c: 'Candidate', dimension: str) -> Optional[str]`**
+  - *Doc*: Extract dimension value from candidate for target matching.
+
+#### Directory: `app/sheets/`
+
+##### Module: `__init__.py`
+*Path*: `app/sheets/__init__.py`
+
+*No classes or functions defined*
+
+##### Module: `backlog_reader.py`
+*Path*: `app/sheets/backlog_reader.py`
+
+**Imports from**: __future__, app.config, app.sheets.client, app.utils.header_utils, typing
+
+**Classes**:
+- **Class `BacklogReader`**
+  - *Doc*: Reads the central backlog sheet and returns rows as (row_number, dict) pairs.
+  - `__init__(self, client: SheetsClient)`
+  - `get_rows(self, spreadsheet_id: str, tab_name: str, header_row: int, start_data_row: int, max_rows: int | None)`
+  - `_row_to_dict(self, header: List[Any], row_cells: List[Any])`
+  - `_is_empty_row(row_cells: List[Any])`
+  - `_extract_initiative_key(row: BacklogRow)`
+
+**Functions**:
+- **Function `_col_index_to_a1(idx: int) -> str`**
+
+##### Module: `backlog_writer.py`
+*Path*: `app/sheets/backlog_writer.py`
+
+**Imports from**: __future__, app.db.models.initiative, app.sheets.client, app.sheets.models, app.utils.header_utils
+
+**Functions**:
+- **Function `_to_sheet_value(value: Any) -> Any`**
+  - *Doc*: Normalize Python values into something Sheets API can accept.
+- **Function `_list_join(values: Any) -> str`**
+  - *Doc*: Render list-like values as comma-separated string for Sheets.
+- **Function `_initiative_field_value(field: str, initiative: Initiative, now_ts: datetime) -> Any`**
+- **Function `initiative_cell_values(header: List[str], initiative: Initiative, sheet_to_canonical: Dict[(str, str)], now_ts: datetime) -> Dict[(str, Any)]`**
+  - *Doc*: Map header names (owned columns) to outgoing sheet values for this initiative.
+- **Function `_col_index_to_a1(idx: int) -> str`**
+- **Function `write_backlog_from_db(db: Session, client: SheetsClient, backlog_spreadsheet_id: str, backlog_tab_name: str) -> None`**
+  - *Doc*: Upsert initiatives into the backlog sheet without overwriting unknown columns.
+- **Function `_apply_backlog_protected_ranges(client: SheetsClient, spreadsheet_id: str, tab_name: str, header: List[str]) -> None`**
+  - *Doc*: Protect all columns that are NOT in CENTRAL_EDITABLE_FIELDS (warning-only).
+
+##### Module: `client.py`
+*Path*: `app/sheets/client.py`
+
+**Imports from**: __future__, app.config, google.oauth2.service_account, googleapiclient.discovery, typing
+
+**Classes**:
+- **Class `SheetsClient`**
+  - *Doc*: Thin wrapper around Google Sheets API values endpoints.
+  - `__init__(self, service)`
+  - `get_values(self, spreadsheet_id: str, range_: str, value_render_option: str)`
+  - `batch_get_values(self, spreadsheet_id: str, ranges: list[str], value_render_option: str)`
+  - `update_values(self, spreadsheet_id: str, range_: str, values: List[List[Any]], value_input_option: str)`
+  - `get_sheet_grid_size(self, spreadsheet_id: str, tab_name: str)`
+  - `get_sheet_properties(self, spreadsheet_id: str, tab_name: str)`
+  - `append_values(self, spreadsheet_id: str, range_: str, values: List[List[Any]], value_input_option: str)`
+  - `batch_update(self, spreadsheet_id: str, requests: list[dict])`
+  - `batch_update_values(self, spreadsheet_id: str, data: List[Dict[(str, Any)]], value_input_option: str)`
+
+**Functions**:
+- **Function `get_sheets_service() -> Any`**
+  - *Doc*: Create and return a Google Sheets API service client.
+
+##### Module: `intake_reader.py`
+*Path*: `app/sheets/intake_reader.py`
+
+**Imports from**: __future__, app.sheets.client, typing
+
+**Classes**:
+- **Class `IntakeReader`**
+  - *Doc*: Reads department intake sheets and returns rows as (row_number, dict) pairs.
+  - `__init__(self, client: SheetsClient)`
+  - `get_rows_for_sheet(self, spreadsheet_id: str, tab_name: str, header_row: int, start_data_row: int, max_rows: int | None)`
+  - `_row_to_dict(self, header: List[Any], row_cells: List[Any])`
+  - `_is_empty_row(self, row_cells: Iterable[Any])`
+
+**Functions**:
+- **Function `_col_index_to_a1(idx: int) -> str`**
+  - *Doc*: Convert 1-based column index to A1 letter(s).
+
+##### Module: `intake_writer.py`
+*Path*: `app/sheets/intake_writer.py`
+
+**Imports from**: __future__, app.config, app.sheets.client, app.sheets.models, app.utils.header_utils
+
+**Classes**:
+- **Class `GoogleSheetsIntakeWriter`**
+  - *Doc*: Concrete writer for writing initiative_key back to intake sheet.
+  - `__init__(self, client: SheetsClient)`
+  - `_find_key_column_index(self, sheet_id: str, tab_name: str)`
+  - `_find_updated_at_column_index(self, sheet_id: str, tab_name: str)`
+  - `write_initiative_key(self, sheet_id: str, tab_name: str, row_number: int, initiative_key: str)`
+
+**Functions**:
+- **Function `_col_index_to_a1(idx: int) -> str`**
+
+##### Module: `kpi_contributions_reader.py`
+*Path*: `app/sheets/kpi_contributions_reader.py`
+
+*Doc*: KPI_Contributions sheet reader for ProductOps sheet.
+
+**Imports from**: __future__, app.sheets.client, app.sheets.models, app.utils.header_utils, typing
+
+**Classes**:
+- **Class `KPIContributionsReader`**
+  - *Doc*: Reads KPI_Contributions tab from ProductOps sheet.
+  - `__init__(self, client: SheetsClient)`
+  - `get_rows_for_sheet(self, spreadsheet_id: str, tab_name: str, header_row: int, start_data_row: int, max_rows: Optional[int])`
+  - `_row_to_dict(self, header: List[Any], row_cells: List[Any])`
+  - `_parse_contribution(self, value: Any)`
+  - `_is_empty_row(self, row_cells: Iterable[Any])`
+
+**Functions**:
+- **Function `_blank_to_none(v: Any) -> Any`**
+- **Function `_col_index_to_a1(idx: int) -> str`**
+
+##### Module: `math_models_reader.py`
+*Path*: `app/sheets/math_models_reader.py`
+
+*Doc*: MathModels sheet reader for ProductOps sheet.
+
+**Imports from**: __future__, app.sheets.client, app.sheets.models, app.utils.header_utils, typing
+
+**Classes**:
+- **Class `MathModelsReader`**
+  - *Doc*: Reads MathModels tab from ProductOps sheet.
+  - `__init__(self, client: SheetsClient)`
+  - `get_rows_for_sheet(self, spreadsheet_id: str, tab_name: str, header_row: int, start_data_row: int, max_rows: Optional[int])`
+  - `_row_to_dict(self, header: List[Any], row_cells: List[Any])`
+  - `_is_empty_row(self, row_cells: Iterable[Any])`
+
+**Functions**:
+- **Function `_blank_to_none(v) -> Any`**
+- **Function `_coerce_bool(v) -> Any`**
+- **Function `_col_index_to_a1(idx: int) -> str`**
+  - *Doc*: Convert 1-based column index to A1 letter(s).
+
+##### Module: `math_models_writer.py`
+*Path*: `app/sheets/math_models_writer.py`
+
+*Doc*: MathModels sheet writer for ProductOps sheet.
+
+**Imports from**: __future__, app.sheets.client, app.sheets.models, app.utils.header_utils, app.utils.provenance
+
+**Classes**:
+- **Class `MathModelsWriter`**
+  - *Doc*: Writer for LLM suggestions in MathModels tab.
+  - `__init__(self, client: SheetsClient)`
+  - `write_formula_suggestion(self, spreadsheet_id: str, tab_name: str, row_number: int, llm_suggested_formula_text: str)`
+  - `write_llm_notes(self, spreadsheet_id: str, tab_name: str, row_number: int, llm_notes: str)`
+  - `write_suggestions_batch(self, spreadsheet_id: str, tab_name: str, suggestions: List[Dict[(str, Any)]])`
+  - `_find_column_index(self, spreadsheet_id: str, tab_name: str, column_name: str)`
+  - `_get_approved_status_for_rows(self, spreadsheet_id: str, tab_name: str, row_numbers: List[int], approved_col_idx: int)`
+
+**Functions**:
+- **Function `_now_iso() -> str`**
+- **Function `_col_index_to_a1(idx: int) -> str`**
+  - *Doc*: Convert 1-based column index to A1 letter(s).
+
+##### Module: `metrics_config_reader.py`
+*Path*: `app/sheets/metrics_config_reader.py`
+
+*Doc*: Metrics_Config sheet reader for ProductOps sheet.
+
+**Imports from**: __future__, app.sheets.client, app.sheets.models, app.utils.header_utils, typing
+
+**Classes**:
+- **Class `MetricsConfigReader`**
+  - *Doc*: Reads Metrics_Config tab from ProductOps sheet.
+  - `__init__(self, client: SheetsClient)`
+  - `get_rows_for_sheet(self, spreadsheet_id: str, tab_name: str, header_row: int, start_data_row: int, max_rows: Optional[int])`
+  - `_row_to_dict(self, header: List[Any], row_cells: List[Any])`
+  - `_is_empty_row(self, row_cells: Iterable[Any])`
+
+**Functions**:
+- **Function `_blank_to_none(v: Any) -> Any`**
+- **Function `_coerce_bool(v: Any) -> Optional[bool]`**
+- **Function `_col_index_to_a1(idx: int) -> str`**
+
+##### Module: `models.py`
+*Path*: `app/sheets/models.py`
+
+*Doc*: Pydantic models for sheet row representations.
+
+**Imports from**: __future__, datetime, pydantic, typing
+
+**Classes**:
+- **Class `MetricsConfigRow`** (inherits: BaseModel)
+  - *Doc*: Represents a single row from ProductOps Metrics_Config tab.
+  - *No methods*
+- **Class `KPIContributionRow`** (inherits: BaseModel)
+  - *Doc*: Represents a single row from ProductOps KPI_Contributions tab.
+  - *No methods*
+- **Class `MathModelRow`** (inherits: BaseModel)
+  - *Doc*: Represents a single row from MathModels tab in ProductOps sheet.
+  - *No methods*
+- **Class `ParamRow`** (inherits: BaseModel)
+  - *Doc*: Represents a single row from Params tab in ProductOps sheet.
+  - `_sync_display_aliases(self)`
+- **Class `OptCandidateRow`** (inherits: BaseModel)
+  - *Doc*: Optimization Center Candidates tab row.
+  - *No methods*
+- **Class `OptScenarioConfigRow`** (inherits: BaseModel)
+  - *Doc*: Optimization Center Scenario_Config tab row.
+  - *No methods*
+- **Class `OptConstraintRow`** (inherits: BaseModel)
+  - *Doc*: Optimization Center Constraints tab row.
+  - *No methods*
+- **Class `OptTargetRow`** (inherits: BaseModel)
+  - *Doc*: Optimization Center Targets tab row.
+  - *No methods*
+- **Class `OptRunRow`** (inherits: BaseModel)
+  - *Doc*: Optimization Center Runs tab row.
+  - *No methods*
+- **Class `OptResultRow`** (inherits: BaseModel)
+  - *Doc*: Optimization Center Results tab row.
+  - *No methods*
+- **Class `OptGapAlertRow`** (inherits: BaseModel)
+  - *Doc*: Optimization Center Gaps_and_alerts tab row.
+  - *No methods*
+
+##### Module: `optimization_center_readers.py`
+*Path*: `app/sheets/optimization_center_readers.py`
+
+*Doc*: Readers for Optimization Center tabs (Candidates, Scenario_Config, Constraints, Targets, Runs, Results, Gaps_and_alerts).
+
+**Imports from**: __future__, app.sheets.client, app.sheets.models, app.utils.header_utils, datetime
+
+**Classes**:
+- **Class `_BaseOptReader`**
+  - `__init__(self, client: SheetsClient)`
+  - `_read_raw(self, spreadsheet_id: str, tab_name: str, header_row: int)`
+- **Class `CandidatesReader`** (inherits: _BaseOptReader)
+  - `get_rows(self, spreadsheet_id: str, tab_name: str)`
+- **Class `ScenarioConfigReader`** (inherits: _BaseOptReader)
+  - `get_rows(self, spreadsheet_id: str, tab_name: str)`
+- **Class `ConstraintsReader`** (inherits: _BaseOptReader)
+  - `get_rows(self, spreadsheet_id: str, tab_name: str)`
+- **Class `TargetsReader`** (inherits: _BaseOptReader)
+  - `get_rows(self, spreadsheet_id: str, tab_name: str)`
+- **Class `RunsReader`** (inherits: _BaseOptReader)
+  - `get_rows(self, spreadsheet_id: str, tab_name: str)`
+- **Class `ResultsReader`** (inherits: _BaseOptReader)
+  - `get_rows(self, spreadsheet_id: str, tab_name: str)`
+- **Class `GapsAlertsReader`** (inherits: _BaseOptReader)
+  - `get_rows(self, spreadsheet_id: str, tab_name: str)`
+
+**Functions**:
+- **Function `_col_index_to_a1(idx: int) -> str`**
+- **Function `_blank_to_none(val: Any) -> Any`**
+- **Function `_to_bool(val: Any) -> Optional[bool]`**
+- **Function `_to_float(val: Any) -> Optional[float]`**
+- **Function `_to_int(val: Any) -> Optional[int]`**
+- **Function `_split_keys(val: Any) -> Optional[List[str]]`**
+  - *Doc*: Split a cell value into a list of strings, using commas or semicolons as delimiters.
+- **Function `_to_date_iso(val: Any) -> Optional[str]`**
+- **Function `_parse_json(val: Any) -> Optional[Any]`**
+- **Function `_build_alias_lookup(header_map: Dict[(str, List[str])]) -> Dict[(str, str)]`**
+- **Function `_row_to_dict(header: List[Any], row_cells: List[Any], lookup: Dict[(str, str)]) -> Dict[(str, Any)]`**
+
+##### Module: `optimization_center_writers.py`
+*Path*: `app/sheets/optimization_center_writers.py`
+
+*Doc*: Writers for Optimization Center tabs (DB -> Sheets).
+
+**Imports from**: __future__, app.sheets.client, app.sheets.models, app.utils.header_utils, app.utils.provenance
+
+**Classes**:
+- **Class `OptimizationCenterWriter`**
+  - *Doc*: Writer for Optimization Center tabs (DB -> Sheets).
+  - `__init__(self, client: SheetsClient)`
+  - `_write_tab(self, spreadsheet_id: str, tab_name: str, header_map: Dict[(str, List[str])], key_fields: List[str], key_builder, write_fields: List[str], rows: Iterable[Any])`
+  - `write_candidates(self, spreadsheet_id: str, tab_name: str, rows: Iterable[Any])`
+  - `write_scenario_config(self, spreadsheet_id: str, tab_name: str, rows: Iterable[Any])`
+  - `write_constraints(self, spreadsheet_id: str, tab_name: str, rows: Iterable[Any])`
+  - `write_targets(self, spreadsheet_id: str, tab_name: str, rows: Iterable[Any])`
+  - `write_runs(self, spreadsheet_id: str, tab_name: str, rows: Iterable[Any])`
+  - `write_results(self, spreadsheet_id: str, tab_name: str, rows: Iterable[Any])`
+  - `write_gaps_alerts(self, spreadsheet_id: str, tab_name: str, rows: Iterable[Any])`
+
+**Functions**:
+- **Function `_now_iso() -> str`**
+  - *Doc*: Get the current UTC time in ISO 8601 format.
+- **Function `_col_index_to_a1(idx: int) -> str`**
+  - *Doc*: Convert a 1-based column index to A1 notation (e.g., 1 -> 'A', 27 -> 'AA').
+- **Function `_to_sheet_value(value: Any) -> Any`**
+  - *Doc*: Convert a Python value to a Sheets-compatible value.
+- **Function `_row_to_dict(row: Any) -> Dict[(str, Any)]`**
+  - *Doc*: Convert a row object to a dictionary.
+- **Function `_build_alias_lookup(header_map: Dict[(str, List[str])]) -> Dict[(str, str)]`**
+  - *Doc*: Build a lookup of normalized header aliases to field names.
+- **Function `_build_column_map(header: Sequence[Any], header_map: Dict[(str, List[str])]) -> Dict[(int, str)]`**
+  - *Doc*: Build a mapping of column indices to field names based on header aliases.
+- **Function `_read_header(client: SheetsClient, spreadsheet_id: str, tab_name: str) -> List[Any]`**
+  - *Doc*: Read the header row (first row) of a given tab.
+- **Function `_read_key_rows_composite(client: SheetsClient, spreadsheet_id: str, tab_name: str, key_fields: List[str], col_map: Dict[(int, str)], key_builder) -> Dict[(str, int)]`**
+  - *Doc*: Read key columns and map composite keys to row numbers.
+- **Function `_chunked_updates(client: SheetsClient, spreadsheet_id: str, updates: List[Dict[(str, Any)]]) -> None`**
+  - *Doc*: Send batch_update_values in chunks to avoid size limits.
+- **Function `_build_updates_for_rows(rows: Iterable[Any], col_map: Dict[(int, str)], key_fields: List[str], key_builder, write_fields: List[str], tab_name: str, key_to_row: Dict[(str, int)]) -> Tuple[(List[Dict[(str, Any)]], List[int], Set[Tuple[(int, str)]])]`**
+
+##### Module: `params_reader.py`
+*Path*: `app/sheets/params_reader.py`
+
+*Doc*: Params sheet reader for ProductOps sheet.
+
+**Imports from**: __future__, app.sheets.client, app.sheets.models, app.utils.header_utils, typing
+
+**Classes**:
+- **Class `ParamsReader`**
+  - *Doc*: Reads Params tab from ProductOps sheet.
+  - `__init__(self, client: SheetsClient)`
+  - `get_rows_for_sheet(self, spreadsheet_id: str, tab_name: str, header_row: int, start_data_row: int, max_rows: Optional[int])`
+  - `_row_to_dict(self, header: List[Any], row_cells: List[Any])`
+  - `_is_empty_row(self, row_cells: Iterable[Any])`
+
+**Functions**:
+- **Function `_blank_to_none(v: Any) -> Any`**
+- **Function `_coerce_bool(v: Any) -> Optional[bool]`**
+- **Function `_coerce_float(v: Any) -> Optional[float]`**
+- **Function `_col_index_to_a1(idx: int) -> str`**
+  - *Doc*: Convert 1-based column index to A1 letter(s).
+
+##### Module: `params_writer.py`
+*Path*: `app/sheets/params_writer.py`
+
+*Doc*: Params sheet writer for ProductOps sheet.
+
+**Imports from**: __future__, app.sheets.client, app.sheets.models, app.utils.header_utils, app.utils.provenance
+
+**Classes**:
+- **Class `ParamsWriter`**
+  - *Doc*: Writer for Params tab with append-only strategy.
+  - `__init__(self, client: SheetsClient)`
+  - `_get_last_data_row(self, spreadsheet_id: str, tab_name: str)`
+  - `append_parameters(self, spreadsheet_id: str, tab_name: str, parameters: List[Dict[(str, Any)]])`
+  - `append_new_params(self, spreadsheet_id: str, tab_name: str, params: List[Dict[(str, Any)]])`
+  - `update_parameter_value(self, spreadsheet_id: str, tab_name: str, row_number: int, value: str, is_auto_seeded: bool)`
+  - `update_parameters_batch(self, spreadsheet_id: str, tab_name: str, updates: List[Dict[(str, Any)]])`
+  - `backfill_seeded_provenance(self, spreadsheet_id: str, tab_name: str)`
+  - `_build_column_indices(self, header: List[str])`
+  - `_build_row(self, param: Dict[(str, Any)], column_indices: Dict[(str, int)], total_cols: int)`
+  - `_find_column_index(self, spreadsheet_id: str, tab_name: str, column_name: str)`
+
+**Functions**:
+- **Function `_now_iso() -> str`**
+- **Function `_col_index_to_a1(idx: int) -> str`**
+  - *Doc*: Convert 1-based column index to A1 letter(s).
+
+##### Module: `productops_writer.py`
+*Path*: `app/sheets/productops_writer.py`
+
+*Doc*: Writer module for Product Ops Scoring_Inputs sheet output (score write-back).
+
+**Imports from**: __future__, app.db.models.initiative, app.sheets.client, app.sheets.models, app.utils.header_utils
+
+**Functions**:
+- **Function `_now_iso() -> str`**
+- **Function `_to_sheet_value(value: Any) -> Any`**
+  - *Doc*: Normalize values before sending to Sheets to avoid JSON serialization errors.
+- **Function `write_scores_to_productops_sheet(db: Session, client: SheetsClient, spreadsheet_id: str, tab_name: str) -> int`**
+  - *Doc*: Write per-framework scores from DB to Product Ops sheet using targeted cell updates.
+- **Function `write_status_to_productops_sheet(client: SheetsClient, spreadsheet_id: str, tab_name: str, status_by_key: Dict[(str, str)]) -> int`**
+  - *Doc*: Write per-row Status messages for selected initiatives.
+- **Function `write_status_to_sheet(client: SheetsClient, spreadsheet_id: str, tab_name: str, status_by_key: Dict[(str, str)]) -> int`**
+  - *Doc*: Generic alias for per-row status writes.
+- **Function `_cell_range_for_update(tab_name: str, col_idx: int, row_idx: int) -> str`**
+  - *Doc*: Build A1 notation cell range for a single cell update.
+- **Function `_col_index_to_a1(idx: int) -> str`**
+  - *Doc*: Convert column index (1-based) to A1 letter notation.
+
+##### Module: `scoring_inputs_reader.py`
+*Path*: `app/sheets/scoring_inputs_reader.py`
+
+**Imports from**: __future__, app.sheets.client, dataclasses, typing
+
+**Classes**:
+- **Class `ScoringInputsRow`**
+  - *No methods*
+- **Class `ScoringInputsReader`**
+  - *Doc*: Reads a namespaced, wide Scoring_Inputs sheet.
+  - `__init__(self, client: SheetsClient, spreadsheet_id: str, tab_name: str)`
+  - `_parse_header(self, headers: List[str])`
+  - `_to_bool(val: Any)`
+  - `_to_float(val: Any)`
+  - `read(self)`
+
+##### Module: `sheet_protection.py`
+*Path*: `app/sheets/sheet_protection.py`
+
+*Doc*: Warning-only protected ranges for ProductOps tabs (MathModels, Params, Scoring_Inputs).
+
+**Imports from**: __future__, app.sheets.client, app.sheets.models, app.utils.header_utils, typing
+
+**Functions**:
+- **Function `apply_warning_protections(client: SheetsClient, spreadsheet_id: str, tab_name: str, system_columns: List[str], header_map: Optional[Dict[(str, List[str])]]) -> None`**
+  - *Doc*: Apply warningOnly=True protections to system columns in a ProductOps tab.
+- **Function `apply_all_productops_protections(client: SheetsClient, spreadsheet_id: str, math_models_tab: str, params_tab: str, scoring_inputs_tab: str) -> None`**
+  - *Doc*: Apply warning-only protections to all ProductOps tabs.
+- **Function `_extract_sheet_id(props: dict, tab_name: str) -> Optional[int]`**
+  - *Doc*: Extract sheet ID from various response shapes.
+- **Function `_extract_protected_ranges(props: dict) -> List[dict]`**
+  - *Doc*: Extract existing protected ranges from various response shapes.
+- **Function `_find_column_index(header: List[str], canonical_name: str, header_map: Optional[Dict[(str, List[str])]]) -> Optional[int]`**
+  - *Doc*: Find column index by canonical name with alias support.
+
+#### Directory: `app/utils/`
+
+##### Module: `__init__.py`
+*Path*: `app/utils/__init__.py`
+
+*No classes or functions defined*
+
+##### Module: `header_utils.py`
+*Path*: `app/utils/header_utils.py`
+
+**Imports from**: __future__, typing
+
+**Functions**:
+- **Function `normalize_header(name: str) -> str`**
+  - *Doc*: Normalize sheet header to lowercase field name format.
+- **Function `resolve_indices(headers: List[str], header_map: Dict[(str, List[str])]) -> Dict[(str, int)]`**
+  - *Doc*: Resolve column indices for a tab, using alias maps.
+- **Function `get_value_by_header_alias(row: Dict[(str, Any)], primary_name: str, aliases: Iterable[str] | None) -> Optional[Any]`**
+  - *Doc*: Return the value from row matching primary header name or any alias.
+
+##### Module: `periods.py`
+*Path*: `app/utils/periods.py`
+
+*Doc*: Period parsing utilities for optimization scenarios.
+
+**Imports from**: __future__, dataclasses, datetime
+
+**Classes**:
+- **Class `PeriodWindow`**
+  - *Doc*: Represents a time period with start and end dates (end is inclusive).
+  - `contains(self, dt: date)`
+
+**Functions**:
+- **Function `parse_period_key(period_key: str) -> PeriodWindow`**
+  - *Doc*: Parse a period key string into a PeriodWindow.
+- **Function `_parse_quarterly(year: int, quarter: int) -> PeriodWindow`**
+  - *Doc*: Parse quarterly period (Q1-Q4).
+- **Function `_parse_monthly(year: int, month: int) -> PeriodWindow`**
+  - *Doc*: Parse monthly period (1-12).
+- **Function `_parse_weekly(year: int, week: int) -> PeriodWindow`**
+  - *Doc*: Parse weekly period (ISO week numbering).
+- **Function `get_period_end_date(period_key: str) -> date`**
+  - *Doc*: Convenience function to extract just the end date from a period key.
+
+##### Module: `provenance.py`
+*Path*: `app/utils/provenance.py`
+
+**Imports from**: __future__, enum, typing
+
+**Classes**:
+- **Class `Provenance`** (inherits: str, Enum)
+  - *Doc*: Canonical provenance tokens for DB and sheet writes.
+  - *No methods*
+
+**Functions**:
+- **Function `token(prov: Provenance, run_id: Optional[str]) -> str`**
+  - *Doc*: Render a provenance token, optionally appending a run identifier later if needed.
+
+##### Module: `safe_eval.py`
+*Path*: `app/utils/safe_eval.py`
+
+**Imports from**: __future__, typing
+
+**Classes**:
+- **Class `SafeEvalError`** (inherits: Exception)
+  - *Doc*: Raised when a formula is invalid, unsafe, or fails during evaluation.
+  - *No methods*
+- **Class `_SafeExprValidator`** (inherits: ast.NodeVisitor)
+  - *Doc*: Validate that an expression contains only safe nodes.
+  - `visit_Call(self, node: ast.Call)`
+  - `visit_BinOp(self, node: ast.BinOp)`
+  - `visit_UnaryOp(self, node: ast.UnaryOp)`
+  - `visit_Name(self, node: ast.Name)`
+  - `visit_Constant(self, node: ast.Constant)`
+  - `generic_visit(self, node: ast.AST)`
+
+**Functions**:
+- **Function `extract_identifiers(formula_text: str) -> List[str]`**
+  - *Doc*: Return input variable names (identifiers used on RHS) from a script.
+- **Function `_validate_and_compile_expr(expr_src: str) -> ast.Expression`**
+- **Function `evaluate_script(script: str, initial_env: Dict[(str, float)], timeout_secs: float) -> Dict[(str, float)]`**
+  - *Doc*: Safely evaluate a multi-line math model script.
+- **Function `validate_formula(script: str, max_lines: int) -> List[str]`**
+  - *Doc*: Validate script for length, syntax, and required `value` assignment.
+
+#### Directory: `app/workers/`
+
+##### Module: `__init__.py`
+*Path*: `app/workers/__init__.py`
+
+*No classes or functions defined*
+
+##### Module: `action_worker.py`
+*Path*: `app/workers/action_worker.py`
+
+**Imports from**: __future__, app.config, app.db.session, app.services.action_runner, typing
+
+**Functions**:
+- **Function `run_worker_loop(poll_interval_seconds: float, idle_sleep_seconds: float, max_runs: Optional[int]) -> int`**
+  - *Doc*: Continuously execute queued ActionRuns.
 
