@@ -2,6 +2,8 @@
 
 You are an AI coding agent working in this repository. Your job is to produce high-quality, production-grade code and to protect the codebase from regressions, security issues, and “dirty” implementations.
 
+If you have not grounded your answer in `projectscope.md` and verified referenced symbols, do not answer yet.
+
 ## 0) Non-negotiables
 - Prefer correctness, clarity, maintainability, and security over cleverness or speed.
 - Do NOT introduce breaking changes unless explicitly requested.
@@ -123,3 +125,56 @@ If a request would violate a boundary, flag it and propose the correct placement
 The anti-pattern guardrail + double-confirmation rule still applies for:
 - security shortcuts, disabling validation, skipping tests, hardcoding secrets, etc.
 But note: “breaking changes” and “data loss” are NOT automatically considered risky in this repo (see A and B).
+
+## H) Grounding Policy (Anti-hallucination / Repo-first behavior)
+
+### Source of truth
+This repository contains an always-up-to-date, auto-generated grounding document:
+
+- `projectscope.md` (authoritative source of truth for sheets + codebase structure)
+
+The assistant MUST treat `projectscope.md` as the primary grounding artifact and must not rely on memory or assumptions about the repo.
+
+### User workflow assumption
+The user will frequently follow this workflow before asking questions or requesting changes:
+
+1. Make changes to sheets and/or code
+2. Run `python scripts/sync_sheets_registry.py` (if sheets changed)
+3. Run `python scripts/generate_codebase_registry.py` (if code structure changed)
+4. Commit the updated `projectscope.md`
+5. Ask the coding agent a question or request changes
+
+Therefore, assume `projectscope.md` reflects the latest and correct repo reality.
+
+### Mandatory behavior BEFORE answering any question or acting on a command
+1. **Read `projectscope.md` first** (relevant sections only).
+2. **Ground all answers in repo reality**:
+   - Use only real file paths, module names, classes, functions, and methods that exist.
+   - Use only real sheet names, tab names, and column headers as listed.
+3. **Cross-reference with live files when needed**:
+   - If a specific symbol (class/function/method) is referenced, open the file and verify it exists.
+   - If uncertainty remains, state exactly what could not be verified and where you looked.
+4. **Cite specifics in responses**:
+   - Reference exact module paths (e.g. `app/services/action_runner.py`)
+   - Reference exact sheet/tab/column names as listed in `projectscope.md`
+
+### Hard rules (NO GUESSING / NO INVENTION)
+- DO NOT invent or hallucinate:
+  - file names, module paths, or directories
+  - classes, functions, methods, or variables
+  - sheet names, tab names, or column headers
+  - config keys, environment variables, or settings fields
+- If something is not found in `projectscope.md` or the codebase:
+  - explicitly say: **“Not found in `projectscope.md` or repo”**
+  - propose the next concrete verification step (e.g. search for a symbol in `app/`)
+  - ask only the minimum clarification required
+
+### Response contract
+- If the request depends on repo structure or existing logic:
+  - start by stating what `projectscope.md` says about it
+  - then answer or propose changes
+- If asked where new logic should live:
+  - propose the exact target module path(s) based on current architecture
+  - do not invent new folders/modules unless you justify why they are needed and confirm they do not already exist
+
+Goal: **Zero hallucinations. Repo-first grounding is mandatory.**
