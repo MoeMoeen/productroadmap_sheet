@@ -24,14 +24,14 @@ from typing_extensions import Literal
 from app.schemas.feasibility import FeasibilityReport
 from app.schemas.optimization_solution import OptimizationSolution
 
-from app.services.optimization_problem_builder import build_optimization_problem
-from app.services.optimization_run_persistence import (
+from app.services.optimization.optimization_problem_builder import build_optimization_problem
+from app.services.optimization.optimization_run_persistence import (
     create_run_record,
     persist_inputs_snapshot,
     persist_result,
 )
-from app.services.feasibility_checker import FeasibilityChecker
-from app.services.feasibility_persistence import persist_feasibility_report
+from app.services.optimization.feasibility_checker import FeasibilityChecker
+from app.services.optimization.feasibility_persistence import persist_feasibility_report
 
 from app.services.solvers.ortools_cp_sat_adapter import (
     OrtoolsCpSatSolverAdapter,

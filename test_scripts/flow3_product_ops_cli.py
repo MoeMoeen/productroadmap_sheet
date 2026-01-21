@@ -14,7 +14,7 @@ from app.jobs.flow3_product_ops_job import (
     run_flow3_sync_inputs_to_initiatives,
     run_flow3_write_scores_to_sheet,
 )
-from app.services.scoring_service import ScoringService
+from app.services.product_ops.scoring_service import ScoringService
 
 
 def parse_args() -> argparse.Namespace:

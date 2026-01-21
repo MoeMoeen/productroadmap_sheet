@@ -106,7 +106,9 @@ class ConstraintRowBase(BaseModel):
             raise ValueError("value must be >= 0")
         return v
 
-    @field_validator("constraint_type", mode="before")
+    # NOTE: constraint_type is used as discriminator, cannot use mode="before"
+    # Normalization happens in validate_constraint_row() before schema validation
+    @field_validator("constraint_type")
     @classmethod
     def normalize_type(cls, v: str) -> str:
         return str(v).strip().lower()

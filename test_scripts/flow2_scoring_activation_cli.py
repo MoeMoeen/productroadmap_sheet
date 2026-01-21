@@ -24,7 +24,7 @@ import logging
 import sys
 
 from app.db.session import SessionLocal
-from app.services.scoring import ScoringFramework
+from app.services.product_ops.scoring import ScoringFramework
 from app.jobs.flow2_scoring_activation_job import run_scoring_batch
 
 

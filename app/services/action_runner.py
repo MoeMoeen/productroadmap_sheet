@@ -17,8 +17,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db.models.action_run import ActionRun
-from app.services.scoring import ScoringFramework
-from app.services.scoring_service import ScoringService
+from app.services.product_ops.scoring import ScoringFramework
+from app.services.product_ops.scoring_service import ScoringService
 
 from app.jobs.backlog_sync_job import run_all_backlog_sync
 from app.jobs.backlog_update_job import run_backlog_update
@@ -28,10 +28,10 @@ from app.jobs.flow2_scoring_activation_job import run_scoring_batch
 from app.jobs.sync_intake_job import run_sync_all_intake_sheets
 
 from app.sheets.client import SheetsClient, get_sheets_service
-from app.services.math_model_service import MathModelSyncService
-from app.services.metrics_config_sync_service import MetricsConfigSyncService
-from app.services.params_sync_service import ParamsSyncService
-from app.services.kpi_contributions_sync_service import KPIContributionsSyncService
+from app.services.product_ops.math_model_service import MathModelSyncService
+from app.services.product_ops.metrics_config_sync_service import MetricsConfigSyncService
+from app.services.product_ops.params_sync_service import ParamsSyncService
+from app.services.product_ops.kpi_contributions_sync_service import KPIContributionsSyncService
 
 from app.jobs.math_model_generation_job import run_math_model_generation_job
 from app.jobs.param_seeding_job import run_param_seeding_job

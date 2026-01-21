@@ -13,7 +13,7 @@ from app.config import settings
 from app.db.models.initiative import Initiative
 from app.db.models.scoring import InitiativeParam
 from app.db.models.scoring import InitiativeScore
-from app.services.scoring import ScoringFramework, ScoreInputs, get_engine
+from app.services.product_ops.scoring import ScoringFramework, ScoreInputs, get_engine
 from app.utils.provenance import Provenance, token
 
 logger = logging.getLogger("app.services.scoring")

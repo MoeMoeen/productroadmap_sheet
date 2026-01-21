@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from app.services.scoring.interfaces import ScoringFramework, ScoreInputs, ScoreResult
-from app.services.scoring.utils import safe_div
+from app.services.product_ops.scoring.interfaces import ScoringFramework, ScoreInputs, ScoreResult
+from app.services.product_ops.scoring.utils import safe_div
 
 
 class WsjfScoringEngine:

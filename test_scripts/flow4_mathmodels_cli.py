@@ -13,8 +13,8 @@ from app.config import settings
 from app.db.session import SessionLocal
 from app.sheets.client import get_sheets_service, SheetsClient
 from app.sheets.sheet_protection import apply_all_productops_protections
-from app.services.math_model_service import MathModelSyncService
-from app.services.params_sync_service import ParamsSyncService
+from app.services.product_ops.math_model_service import MathModelSyncService
+from app.services.product_ops.params_sync_service import ParamsSyncService
 from app.llm.client import LLMClient
 from app.jobs.math_model_generation_job import run_math_model_generation_job
 from app.jobs.param_seeding_job import run_param_seeding_job

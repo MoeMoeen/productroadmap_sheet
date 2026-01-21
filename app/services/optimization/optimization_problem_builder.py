@@ -26,7 +26,7 @@ from sqlalchemy import select
 from app.db.models.initiative import Initiative
 from app.db.models.optimization import OptimizationScenario, OptimizationConstraintSet
 from app.utils.periods import parse_period_key
-from app.services.feasibility_filters import is_deadline_feasible
+from app.services.optimization.feasibility_filters import is_deadline_feasible
 from app.schemas.optimization_problem import (
     OptimizationProblem,
     ObjectiveSpec,

@@ -12,8 +12,8 @@ sys.path.insert(0, str(project_root))
 from app.db.base import Base
 from app.db.models.initiative import Initiative
 from app.db.models.scoring import InitiativeMathModel, InitiativeParam
-from app.services.scoring.interfaces import ScoringFramework
-from app.services.scoring_service import ScoringService
+from app.services.product_ops.scoring.interfaces import ScoringFramework
+from app.services.product_ops.scoring_service import ScoringService
 
 
 def make_session():

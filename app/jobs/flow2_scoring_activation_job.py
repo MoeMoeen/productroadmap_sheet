@@ -10,8 +10,8 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.services.scoring import ScoringFramework
-from app.services.scoring_service import ScoringService
+from app.services.product_ops.scoring import ScoringFramework
+from app.services.product_ops.scoring_service import ScoringService
 
 logger = logging.getLogger(__name__)
 

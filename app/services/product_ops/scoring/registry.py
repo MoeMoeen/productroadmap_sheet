@@ -9,8 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List
 
-from app.services.scoring.interfaces import ScoringFramework, ScoringEngine
-from app.services.scoring.engines import MathModelScoringEngine, RiceScoringEngine, WsjfScoringEngine
+from app.services.product_ops.scoring.interfaces import ScoringFramework, ScoringEngine
+from app.services.product_ops.scoring.engines import MathModelScoringEngine, RiceScoringEngine, WsjfScoringEngine
 
 
 @dataclass(frozen=True)

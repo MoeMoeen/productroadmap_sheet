@@ -23,8 +23,8 @@ from app.config import settings
 from app.db.session import SessionLocal
 from app.db.models.initiative import Initiative
 from app.db.models.scoring import InitiativeScore
-from app.services.scoring import ScoringFramework
-from app.services.scoring_service import ScoringService
+from app.services.product_ops.scoring import ScoringFramework
+from app.services.product_ops.scoring_service import ScoringService
 
 
 def main():

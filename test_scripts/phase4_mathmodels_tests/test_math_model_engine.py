@@ -6,8 +6,8 @@ from pathlib import Path
 project_root = Path(__file__).parents[2]
 sys.path.insert(0, str(project_root))
 
-from app.services.scoring import ScoringFramework, get_engine
-from app.services.scoring.interfaces import ScoreInputs
+from app.services.product_ops.scoring import ScoringFramework, get_engine
+from app.services.product_ops.scoring.interfaces import ScoreInputs
 
 
 def test_math_model_engine_happy_path():

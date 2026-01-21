@@ -20,7 +20,7 @@ from app.schemas.optimization_center import (
 )
 from app.sheets.client import SheetsClient
 from app.sheets.optimization_center_readers import ConstraintsReader, TargetsReader
-from app.services.optimization_compiler import compile_constraint_sets
+from app.services.optimization.optimization_compiler import compile_constraint_sets
 
 logger = logging.getLogger(__name__)
 

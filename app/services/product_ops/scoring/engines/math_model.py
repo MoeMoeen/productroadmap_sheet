@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict
 
-from app.services.scoring.interfaces import ScoringEngine, ScoringFramework, ScoreInputs, ScoreResult
+from app.services.product_ops.scoring.interfaces import ScoringEngine, ScoringFramework, ScoreInputs, ScoreResult
 from app.utils.safe_eval import SafeEvalError, evaluate_script, extract_identifiers, validate_formula
 
 
