@@ -2017,15 +2017,15 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
 
 
 def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext) -> Dict[str, Any]:
-    """PM Job: Run optimization (Step 1 capacity-only solver) on selected candidates from Control tab.
+    """PM Job: Run optimization (Step 1+2+3 solver) on user-selected candidates.
     
     Payload:
       - sheet_context: {spreadsheet_id, tab}
       - options: {scenario_name, constraint_set_name}
-      - selected_rows: list of row objects with initiative_key
+      - scope: {initiative_keys: list[str]}
     
     Orchestration:
-      1. Extract selected initiative keys
+      1. Extract selected initiative keys from scope
       2. Call run_flow5_optimization_step1 with scope_type="selected_only"
       3. Return result with run_id, status, selected_count, solver_status
     """
@@ -2046,21 +2046,18 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
             "substeps": [{"step": "validate", "status": "failed", "reason": "missing_params"}],
         }
     
-    # PRODUCTION FIX: Use scope convention (consistent with pm.score_selected, pm.save_selected)
-    # Prefer scope.initiative_keys, fallback to selected_rows for backward compatibility
+    # Extract selected initiative keys from scope
     scope = ctx.payload.get("scope") or {}
     keys = scope.get("initiative_keys") or []
-    skipped_no_key = 0
     
-    if not keys:
-        # Fallback: extract from selected_rows (legacy format)
-        selected = ctx.payload.get("selected_rows") or []
-        for row in selected:
-            key = row.get("initiative_key")
-            if not key or not key.strip():
-                skipped_no_key += 1
-                continue
-            keys.append(key.strip())
+    if not isinstance(keys, list):
+        keys = []
+    
+    # Sanitize: skip blanks, dedupe
+    original_count = len(keys)
+    keys = [k.strip() for k in keys if isinstance(k, str) and k.strip()]
+    keys = list(dict.fromkeys(keys))  # dedupe while preserving order
+    skipped_no_key = original_count - len(keys)
     
     if not keys:
         logger.warning("pm.optimize_run_selected_candidates.no_valid_keys")

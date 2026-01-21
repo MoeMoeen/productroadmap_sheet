@@ -58,8 +58,13 @@ def run_flow5_optimization_step1(
     """
     Flow 5 (Phase 5) - Optimization run orchestration.
 
-    Step 1 ONLY:
+    Step 1+2+3+4+5+6:
     - Binary selection + capacity caps (global and by dimension)
+    - Mandatory initiatives (x_i = 1 for each mandatory)
+    - Exclusions (x_i = 0 for each excluded, x_a + x_b <= 1 for each excluded pair)
+    - Prerequisites (x_dep <= x_req for each prerequisite edge)
+    - Bundles (x_m1 = x_m2 = ... = x_mk for each bundle, all-or-nothing)
+    - Target floors (sum(contrib_i * x_i) >= floor for each floor target)
     - Temporary objective: maximize capacity usage (avoid empty solutions)
 
     Writes durable artifacts:
@@ -88,7 +93,7 @@ def run_flow5_optimization_step1(
         raise ValueError("run_id is required")
 
     logger.info(
-        "Starting Flow 5 optimization (Step 1)",
+        "Starting Flow 5 optimization (Step 1+2+3+4+5+6)",
         extra={
             "run_id": run_id,
             "scenario": scenario_name,
@@ -138,7 +143,7 @@ def run_flow5_optimization_step1(
         problem=problem,
         extra_snapshot_metadata={
             "flow": "flow5.optimization",
-            "step": "step1_capacity_only",
+            "step": "step1_2_3_4_5_6_capacity_mandatory_exclusions_prereqs_bundles_target_floors",
         },
     )
 
@@ -181,7 +186,7 @@ def run_flow5_optimization_step1(
             "scenario_name": scenario_name,
             "constraint_set_name": constraint_set_name,
             "scope_type": scope_type,
-            "solver_step": "step1_capacity_only",
+            "solver_step": "step1_2_3_4_5_6_capacity_mandatory_exclusions_prereqs_bundles_target_floors",
             "status": opt_run.status,
             "candidate_count": len(problem.candidates),
             "feasibility_summary": feasibility.summary,
@@ -189,17 +194,17 @@ def run_flow5_optimization_step1(
             "warnings_count": len(feasibility.warnings),
         }
 
-    # 5) Solve (Step 1 only: capacity caps)
+    # 5) Solve (Step 1+2+3+4+5+6: capacity + mandatory + exclusions + prereqs + bundles + target floors)
     logger.info("Problem is feasible, running solver", extra={"run_id": opt_run.run_id})
     adapter = OrtoolsCpSatSolverAdapter(config=solver_config)
-    solution: OptimizationSolution = adapter.solve_step1_capacity_only(problem)
+    solution: OptimizationSolution = adapter.solve(problem)
 
     # 6) Persist solver result_json + terminal status + finished_at
     # Treat OPTIMAL/FEASIBLE as success; others as failed.
     solver_ok = solution.status in {"optimal", "feasible"}
 
     result_payload: Dict[str, Any] = {
-        "solver_step": "step1_capacity_only",
+        "solver_step": "step1_2_3_4_5_6_capacity_mandatory_exclusions_prereqs_bundles_target_floors",
         "solution": solution.model_dump(),
     }
 
@@ -229,7 +234,7 @@ def run_flow5_optimization_step1(
         "scenario_name": scenario_name,
         "constraint_set_name": constraint_set_name,
         "scope_type": scope_type,
-        "solver_step": "step1_capacity_only",
+        "solver_step": "step1_2_3_4_5_6_capacity_mandatory_exclusions_prereqs_bundles_target_floors",
         "status": opt_run.status,
         "candidate_count": len(problem.candidates),
         "selected_count": selected_count,
