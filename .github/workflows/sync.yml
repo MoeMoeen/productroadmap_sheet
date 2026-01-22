@@ -1,0 +1,21 @@
+name: Sync to Google Drive
+
+on:
+  push:
+    branches:
+      - main  # Triggers every time you push to the main branch
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Upload to Google Drive
+        uses: wayofdev/google-drive-upload-git-action@v1
+        with:
+          credentials: ${{ secrets.GDRIVE_CREDENTIALS_DATA }}
+          folderId: ${{ secrets.GDRIVE_FOLDER_ID }}
+          filename: "my-repo-backup.zip" # This will zip and upload
+          overwrite: true
