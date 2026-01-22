@@ -10,15 +10,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4 # Updated to latest checkout version
+        uses: actions/checkout@v4
 
       - name: Zip Repository
-        run: zip -r repository.zip . -x "*.git*" # This zips your repo for easy upload
+        run: zip -r repository.zip . -x "*.git*"
 
       - name: Upload to Google Drive
-        uses: JuergenHess/publish-to-google-drive@v2.1
+        uses: adityak74/google-drive-upload@v1.1
         with:
+          credentials: ${{ secrets.GDRIVE_CREDENTIALS_DATA }}
           filename: repository.zip
           folderId: ${{ secrets.GDRIVE_FOLDER_ID }}
-          credentials: ${{ secrets.GDRIVE_CREDENTIALS_DATA }}
-          overwrite: true
+          overwrite: "true"
