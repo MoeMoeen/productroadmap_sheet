@@ -39,7 +39,7 @@ jobs:
           creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
           service = build('drive', 'v3', credentials=creds)
 
-          file_metadata = {'name': 'repository.zip', 'parents': ['$FOLDER_ID']}
+          file_metadata = {'name': 'repository.zip', 'parents': [os.environ['FOLDER_ID']]}
           media = MediaFileUpload('repository.zip', mimetype='application/zip')
           
           file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
