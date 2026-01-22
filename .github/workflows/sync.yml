@@ -1,16 +1,16 @@
 name: Sync to Google Drive
 
 on:
-  push:
+  push: 
     branches:
       - main
 
 jobs:
-  upload:
+  upload: 
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses:  actions/checkout@v4
 
       - name: Zip Repository
         run: zip -r repository.zip . -x "*.git*"
@@ -20,11 +20,8 @@ jobs:
           GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS_DATA }}
           FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
         run: |
-          # Create a temporary file for credentials
           echo "$GDRIVE_CREDENTIALS" > credentials.json
           
-          # Use a Python script (built-in) to handle the upload
-          # This avoids the "Repository Not Found" error entirely
           pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
           
           python - <<EOF
@@ -33,15 +30,34 @@ jobs:
           from googleapiclient.http import MediaFileUpload
           from google.oauth2 import service_account
 
-          SCOPES = ['https://www.googleapis.com/auth/drive.file']
+          SCOPES = ['https://www.googleapis.com/auth/drive']
           SERVICE_ACCOUNT_FILE = 'credentials.json'
 
-          creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+          creds = service_account. Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
           service = build('drive', 'v3', credentials=creds)
 
-          file_metadata = {'name': 'repository.zip', 'parents': [os.environ['FOLDER_ID']]}
+          folder_id = os.environ['FOLDER_ID']
+          
+          # Delete existing file with same name
+          query = f"name='repository.zip' and '{folder_id}' in parents and trashed=false"
+          results = service.files().list(q=query, supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
+          items = results.get('files', [])
+          
+          for item in items:
+              service.files().delete(fileId=item['id'], supportsAllDrives=True).execute()
+              print(f"Deleted old file: {item['id']}")
+
+          # Upload new file
+          file_metadata = {'name': 'repository.zip', 'parents': [folder_id]}
           media = MediaFileUpload('repository.zip', mimetype='application/zip')
           
-          file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-          print(f"File ID: {file.get('id')}")
+          file = service.files().create(
+              body=file_metadata, 
+              media_body=media, 
+              fields='id',
+              supportsAllDrives=True
+          ).execute()
+          print(f"Uploaded file ID: {file.get('id')}")
           EOF
+          
+          rm -f credentials.json
