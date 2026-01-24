@@ -100,10 +100,19 @@ def validate_metric_chain(
     """
     Validate metric chain keys against OrganizationMetricConfig.
     
+    Validation rules:
+    1. All nodes must exist in OrganizationMetricConfig and be active
+    2. Chain must have at least 1 node
+    3. If kpi_levels specified, the LAST node must be in those levels (not all nodes)
+       - Allows intermediate operational/driver metrics in the chain
+       - Enforces that chain ends in strategic/north_star (output KPIs for optimization)
+    
     Args:
         db: Database session
         metric_chain_json: Parsed metric chain dict with "chain" field
-        kpi_levels: Optional filter for KPI levels (e.g., ["north_star", "strategic"])
+        kpi_levels: Optional filter for TAIL node KPI levels (e.g., ["north_star", "strategic"])
+                   If provided, validates that the last node is in one of these levels.
+                   Intermediate nodes can be any active KPI level.
     
     Returns:
         {
@@ -111,6 +120,8 @@ def validate_metric_chain(
             "validated": True,
             "invalid_keys": [],
             "valid_keys": ["signup", "activation", "revenue"],
+            "tail_level_valid": True,  # If kpi_levels specified, tail in allowed levels
+            "tail_kpi_level": "strategic",  # Level of the last node
             "all_allowed_keys": [all_kpi_keys_from_config]
         }
     """
@@ -121,13 +132,16 @@ def validate_metric_chain(
             "invalid_keys": [],
             "valid_keys": [],
             "all_allowed_keys": [],
+            "tail_level_valid": None,
+            "tail_kpi_level": None,
         }
     
     chain = metric_chain_json["chain"]
     
-    # Load allowed KPI keys
+    # Load ALL active KPI keys (any level) for node existence validation
     configs = db.query(OrganizationMetricConfig).all()
-    allowed_keys: Set[str] = set()
+    all_active_keys: Set[str] = set()
+    kpi_level_map: Dict[str, str] = {}  # key -> level mapping
     
     for cfg in configs:
         meta = cfg.metadata_json or {}
@@ -136,22 +150,38 @@ def validate_metric_chain(
         if not is_active:
             continue
         
-        if kpi_levels and cfg.kpi_level not in kpi_levels:
-            continue
-        
         if cfg.kpi_key is not None:
-            allowed_keys.add(cfg.kpi_key.lower())
+            key_lower = cfg.kpi_key.lower()
+            all_active_keys.add(key_lower)
+            level_val = cfg.kpi_level
+            kpi_level_map[key_lower] = str(level_val) if level_val is not None else "unknown"
     
-    # Validate each key in chain
-    valid_keys = [k for k in chain if k.lower() in allowed_keys]
-    invalid_keys = [k for k in chain if k.lower() not in allowed_keys]
+    # Validate each key exists in registry (any level)
+    valid_keys = [k for k in chain if k.lower() in all_active_keys]
+    invalid_keys = [k for k in chain if k.lower() not in all_active_keys]
+    
+    # Validate tail node level if kpi_levels specified
+    tail_level_valid = None
+    tail_kpi_level = None
+    
+    if kpi_levels and chain:
+        tail_key = chain[-1].lower()
+        tail_kpi_level = kpi_level_map.get(tail_key)
+        tail_level_valid = tail_kpi_level in kpi_levels if tail_kpi_level else False
+    
+    # Overall validation: no invalid keys + (tail level valid if required)
+    validated = len(invalid_keys) == 0
+    if kpi_levels and tail_level_valid is not None:
+        validated = validated and tail_level_valid
     
     return {
         "chain": chain,
-        "validated": len(invalid_keys) == 0,
+        "validated": validated,
         "invalid_keys": invalid_keys,
         "valid_keys": valid_keys,
-        "all_allowed_keys": sorted(list(allowed_keys)),
+        "tail_level_valid": tail_level_valid,
+        "tail_kpi_level": tail_kpi_level,
+        "all_allowed_keys": sorted(list(all_active_keys)),
         "raw": metric_chain_json.get("raw"),
         "source": metric_chain_json.get("source", "pm_input"),
     }

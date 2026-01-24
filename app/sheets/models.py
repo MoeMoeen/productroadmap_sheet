@@ -527,6 +527,8 @@ class KPIContributionRow(BaseModel):
 
     initiative_key: str
     kpi_contribution_json: Optional[Any] = None
+    kpi_contribution_computed_json: Optional[Any] = None
+    kpi_contribution_source: Optional[str] = None
     notes: Optional[str] = None
 
 

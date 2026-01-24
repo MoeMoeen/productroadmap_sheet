@@ -112,7 +112,7 @@ def enqueue_action_run(db: Session, payload: Dict[str, Any]) -> ActionRun:
 
 
 def _build_scope_summary(scope: Any) -> Optional[str]:
-    """Short human-friendly text for Control tab."""
+    """Short human-friendly text for UI display (action runs table, Apps Script response)."""
     if not isinstance(scope, dict):
         return None
     t = scope.get("type")
@@ -2000,6 +2000,47 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
             "substeps": [
                 {"step": "save", "status": "ok", "count": saved_i},
                 {"step": "status_write", "status": "ok"},
+            ],
+        }
+
+    # ---------- Branch E: Optimization Center Candidates ----------
+    if "candidates" in tab_lc and "optimization" in tab_lc.replace("_", " "):
+        try:
+            from app.services.optimization.optimization_sync_service import sync_candidates_from_sheet
+            result = sync_candidates_from_sheet(
+                sheets_client=ctx.sheets_client,
+                spreadsheet_id=str(spreadsheet_id),
+                candidates_tab=str(tab),
+                initiative_keys=keys or None,
+                commit_every=commit_every,
+                session=db,
+            )
+            saved = int(result.get("updated", 0))
+            errors = result.get("errors", [])
+        except Exception as e:
+            logger.exception("pm.save_selected.candidates_sync_failed")
+            return {
+                "pm_job": "pm.save_selected",
+                "tab": tab,
+                "selected_count": len(keys),
+                "saved_count": 0,
+                "skipped_no_key": skipped_no_key,
+                "failed_count": len(keys) or 1,
+                "substeps": [
+                    {"step": "save", "status": "failed", "error": str(e)[:50]},
+                ],
+            }
+
+        return {
+            "pm_job": "pm.save_selected",
+            "tab": tab,
+            "selected_count": len(keys) if keys else result.get("row_count", 0),
+            "saved_count": saved,
+            "skipped_no_key": skipped_no_key + result.get("skipped_no_key", 0),
+            "failed_count": len(errors),
+            "errors": errors[:5] if errors else [],  # Include first 5 errors
+            "substeps": [
+                {"step": "save", "status": "ok", "count": saved},
             ],
         }
 

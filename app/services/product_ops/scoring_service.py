@@ -600,9 +600,21 @@ class ScoringService:
             initiative.value_score = getattr(initiative, "math_value_score", None)  # type: ignore[assignment]
             initiative.effort_score = getattr(initiative, "math_effort_score", None)  # type: ignore[assignment]
             initiative.overall_score = getattr(initiative, "math_overall_score", None)  # type: ignore[assignment]
-            model = getattr(initiative, "math_model", None)
-            initiative.score_llm_suggested = bool(getattr(model, "suggested_by_llm", False))  # type: ignore[assignment]
-            initiative.score_approved_by_user = bool(getattr(model, "approved_by_user", False))  # type: ignore[assignment]
+            
+            # Select representative model (primary or deterministic fallback)
+            representative_model = None
+            if hasattr(initiative, "math_models") and initiative.math_models:
+                # Try primary model first
+                for model in initiative.math_models:
+                    if getattr(model, "is_primary", False):
+                        representative_model = model
+                        break
+                # Fallback: first model in collection
+                if not representative_model:
+                    representative_model = initiative.math_models[0]
+            
+            initiative.score_llm_suggested = bool(getattr(representative_model, "suggested_by_llm", False)) if representative_model else False  # type: ignore[assignment]
+            initiative.score_approved_by_user = bool(getattr(representative_model, "approved_by_user", False)) if representative_model else False  # type: ignore[assignment]
 
         now = datetime.now(timezone.utc)
         initiative.active_scoring_framework = framework.value  # type: ignore[assignment]

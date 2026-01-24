@@ -37,6 +37,7 @@ class Provenance(str, Enum):
 
     # Flow 6: Optimization Center sheets
     FLOW6_SYNC_OPT_CENTER = "flow6.sync_opt_center"
+    FLOW6_SYNC_OPT_CANDIDATES = "flow6.sync_opt_candidates"
 
 
 def token(prov: Provenance, run_id: Optional[str] = None) -> str:

@@ -44,16 +44,17 @@ class MathModelSyncService:
         commit_every: int = 100,
         initiative_keys: Optional[List[str]] = None,
     ) -> dict:
-        """Upsert InitiativeMathModel from Sheet → DB.
+        """Upsert InitiativeMathModel records from Sheet → DB (1:N relationship).
 
         Rules:
         - Resolve initiative by initiative_key
-        - Upsert math model object; set initiative.math_model to this object
-        - Map fields: formula_text (required to create), assumptions_text,
-                  suggested_by_llm, approved_by_user, model_name, model_description_free_text,
-                  metric_chain_text
-        - Persist immediate_kpi_key and metric_chain_text (stored on initiative.metric_chain_json) for downstream scoring
-        - If row provides llm_notes, store on Initiative.llm_notes
+        - Append/upsert into initiative.math_models collection (1:N relationship)
+        - Use target_kpi_key as identifier for upsert matching (or model_name if target_kpi missing)
+        - Map fields: formula_text (required), assumptions_text, suggested_by_llm, approved_by_user,
+                  model_name, model_description_free_text, metric_chain_text, target_kpi_key, is_primary
+        - Persist immediate_kpi_key on Initiative for backwards compatibility
+        - Parse metric_chain_text → metric_chain_json on each math model
+        - llm_notes is sheet-only (not persisted per phase 5 cleanup)
         
         Args:
             initiative_keys: Optional list of initiative_keys to filter rows. If provided, only rows
@@ -96,7 +97,23 @@ class MathModelSyncService:
                 continue
 
             # Determine composite key: use target_kpi_key as identifier (or model_name if target_kpi not present)
-            model_identifier = getattr(mm, "target_kpi_key", None) or getattr(mm, "model_name", None) or "default"
+            # PRODUCTION GUARDRAIL: Enforce at least one of (target_kpi_key, model_name) to prevent silent collision on "default"
+            target_kpi_val = getattr(mm, "target_kpi_key", None)
+            model_name_val = getattr(mm, "model_name", None)
+            
+            if not target_kpi_val and not model_name_val:
+                skipped_no_formula += 1
+                logger.warning(
+                    "math_model.sync.skip_model_identifier_missing",
+                    extra={
+                        "row": row_number,
+                        "initiative_key": mm.initiative_key,
+                        "reason": "Both target_kpi_key and model_name are missing",
+                    },
+                )
+                continue
+            
+            model_identifier = target_kpi_val or model_name_val or "default"
             
             # Find existing model by initiative_id + identifier
             math_model: InitiativeMathModel | None = None
@@ -132,9 +149,26 @@ class MathModelSyncService:
             target_kpi = getattr(mm, "target_kpi_key", None)
             if target_kpi:
                 setattr(math_model, "target_kpi_key", target_kpi)
+            
+            # PRODUCTION GUARDRAIL: Enforce primary model uniqueness (only 1 primary per initiative)
             is_primary = getattr(mm, "is_primary", None)
             if is_primary is not None:
-                setattr(math_model, "is_primary", bool(is_primary))
+                is_primary_bool = bool(is_primary)
+                setattr(math_model, "is_primary", is_primary_bool)
+                
+                # If setting this model to primary, clear primary flag on all other models
+                if is_primary_bool:
+                    for other_model in initiative.math_models:
+                        if other_model.id != math_model.id:
+                            setattr(other_model, "is_primary", False)
+                    logger.info(
+                        "math_model.sync.primary_flag_enforced",
+                        extra={
+                            "initiative_key": mm.initiative_key,
+                            "new_primary_identifier": model_identifier,
+                        },
+                    )
+            
             computed = getattr(mm, "computed_score", None)
             if computed is not None:
                 setattr(math_model, "computed_score", float(computed))
@@ -163,9 +197,8 @@ class MathModelSyncService:
                     # Store as raw text in JSON for data preservation
                     setattr(math_model, "metric_chain_json", {"raw": mm.metric_chain_text, "parse_error": str(e)})
 
-            # Save LLM notes on initiative if provided
-            if getattr(mm, "llm_notes", None):
-                setattr(initiative, "llm_notes", mm.llm_notes)
+            # NOTE: llm_notes is sheet-only (MathModels tab), not persisted to DB per phase 5 cleanup
+            # The field was removed from Initiative model; llm_notes lives only in the sheet for LLM commentary
 
             # Update provenance
             setattr(initiative, "updated_source", token(Provenance.FLOW4_SYNC_MATHMODELS))
