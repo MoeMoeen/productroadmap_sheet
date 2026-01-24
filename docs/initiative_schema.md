@@ -157,12 +157,11 @@ Operational note: Active scores (`value_score`, `overall_score`, and `effort_sco
 | Field            | Type | Sheet                                                                                      | DB | Derived? | Notes                                                                  |
 | ---------------- | ---- | ------------------------------------------------------------------------------------------ | -- | -------- | ---------------------------------------------------------------------- |
 | `use_math_model` | bool | ✅ Central only (checkbox; edit: product; read-only for others)                             | ✅  | ❌        | Whether this initiative should be scored using full mathematical model |
-| `math_model_id`  | int  | ❌ (internal; not shown or only read-only if exposed in a debug/admin view)                 | ✅  | ❌        | FK to `InitiativeMathModel` table (defined later)                      |
 | `llm_notes`      | str  | ✅ Central only (auto-filled by backend/LLM; product can edit/append; read-only for others) | ✅  | ✅        | Free-form notes from LLM (“Assuming X, Y, Z; main drivers are…” etc.)  |
 
 
-The actual math model (formula, parameters, assumptions) sits in a separate entity, but we link it from here.
-See planned `InitiativeMathModel` entity (to be defined in modeling docs) for formula and parameter storage.
+**Note:** An initiative can have multiple math models (1:N relationship via `Initiative.math_models`), each targeting a specific KPI.
+The actual math models (formulas, parameters, assumptions) sit in separate `InitiativeMathModel` entities.
 
 ---
 

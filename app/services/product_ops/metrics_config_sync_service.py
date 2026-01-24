@@ -120,9 +120,20 @@ class MetricsConfigSyncService:
             raise ValueError(f"Duplicate kpi_key values in Metrics_Config: {sorted(dupes)}")
 
     def _validate_active_north_star(self, rows: List[MetricRowPair]) -> None:
+        """Validate exactly one active north_star in the rows being synced.
+        
+        Note: This only validates the subset being synced. If doing selective sync,
+        caller should ensure this doesn't conflict with existing DB state.
+        For full table syncs, this is correct. For selective syncs, may need to
+        query DB state and merge in memory before validation.
+        """
         active_ns = [r for _, r in rows if (r.kpi_level == "north_star" and (r.is_active is not False))]
         if len(active_ns) != 1:
-            raise ValueError("Metrics_Config must have exactly one active north_star KPI")
+            raise ValueError(
+                f"Metrics_Config must have exactly one active north_star KPI. "
+                f"Found {len(active_ns)} in this sync batch. "
+                f"For selective syncs, this may conflict with existing DB state."
+            )
 
 
 __all__ = ["MetricsConfigSyncService"]

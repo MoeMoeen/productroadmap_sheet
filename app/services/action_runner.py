@@ -823,6 +823,7 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
             "updated_inputs": updated_inputs,
             "computed": computed,
             "written": 0,
+            "kpi_contributions_written": 0,
             "skipped_no_key": skipped_no_key,
             "failed_count": len(keys),
             "substeps": [
@@ -831,6 +832,30 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
                 {"step": "flow3.write_scores", "status": "failed", "error": str(e)[:50]},
             ],
         }
+
+    # 3.5) Write KPI contributions back to KPI_Contributions tab (if exists)
+    kpi_contributions_written = 0
+    if cfg and hasattr(cfg, "kpi_contributions_tab"):
+        kpi_tab = cfg.kpi_contributions_tab
+        try:
+            from app.sheets.kpi_contributions_writer import write_kpi_contributions_to_sheet
+            kpi_contributions_written = write_kpi_contributions_to_sheet(
+                db=db,
+                client=ctx.sheets_client,
+                spreadsheet_id=str(spreadsheet_id),
+                tab_name=str(kpi_tab),
+                initiative_keys=keys,
+            )
+            logger.info(
+                "pm.score_selected.kpi_contributions_written",
+                extra={"count": kpi_contributions_written, "tab": kpi_tab},
+            )
+        except Exception as e:
+            logger.warning(
+                "pm.score_selected.write_kpi_contributions_failed",
+                extra={"error": str(e)[:200], "tab": kpi_tab},
+            )
+            # Non-fatal: continue with status write
 
     # All steps succeeded; mark all keys as OK
     for k in keys:
@@ -854,12 +879,14 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
         "updated_inputs": updated_inputs,
         "computed": computed,
         "written": written,
+        "kpi_contributions_written": kpi_contributions_written,
         "skipped_no_key": skipped_no_key,
         "failed_count": 0,
         "substeps": [
             {"step": "flow3.sync_inputs", "status": "ok", "count": updated_inputs},
             {"step": "flow3.compute_selected", "status": "ok", "count": computed},
             {"step": "flow3.write_scores", "status": "ok", "count": written},
+            {"step": "flow3.write_kpi_contributions", "status": "ok", "count": kpi_contributions_written},
             {"step": "status_write", "status": "ok"},
         ],
     }
@@ -1718,6 +1745,7 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
     if cfg and tab == getattr(cfg, "kpi_contributions_tab", None):
         # ---------- Branch K: KPI_Contributions ----------
         row_count_processed = 0
+        writeback_count = 0
         try:
             svc = KPIContributionsSyncService(ctx.sheets_client)
             result = svc.sync_sheet_to_db(
@@ -1728,7 +1756,30 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
                 initiative_keys=keys or None,
             )
             saved = int(result.get("upserts", 0))
+            unlocked = int(result.get("unlocked", 0))
             row_count_processed = int(result.get("row_count", 0))
+            
+            # FIX #1: Immediate writeback so PM sees updated source column
+            try:
+                from app.sheets.kpi_contributions_writer import write_kpi_contributions_to_sheet
+                writeback_count = write_kpi_contributions_to_sheet(
+                    db=db,
+                    client=ctx.sheets_client,
+                    spreadsheet_id=str(spreadsheet_id),
+                    tab_name=str(tab),
+                    initiative_keys=keys or None,
+                )
+                logger.info(
+                    "pm.save_selected.kpi_contributions_writeback",
+                    extra={"count": writeback_count},
+                )
+            except Exception as wb_err:
+                logger.warning(
+                    "pm.save_selected.kpi_contributions_writeback_failed",
+                    extra={"error": str(wb_err)[:200]},
+                )
+                # Non-fatal: continue with response
+                
         except Exception as e:
             logger.exception("pm.save_selected.kpi_contributions_sync_failed")
             for k in keys:
@@ -1750,6 +1801,8 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
             "tab": tab,
             "selected_count": len(keys) if keys else row_count_processed,
             "saved_count": saved,
+            "unlocked_count": unlocked,
+            "writeback_count": writeback_count,
             "skipped_no_key": skipped_no_key,
             "failed_count": max(0, (len(keys) if keys else row_count_processed) - saved),
             "substeps": [

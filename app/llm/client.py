@@ -7,9 +7,12 @@ import logging
 from typing import Any, Dict, Optional
 
 from openai import OpenAI
+from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.db.models.optimization import OrganizationMetricConfig
 from app.llm.models import MathModelPromptInput, MathModelSuggestion, ParamMetadataSuggestion
+from app.services.product_ops.metric_chain_parser import format_chain_for_llm
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +20,12 @@ logger = logging.getLogger(__name__)
 class LLMClient:
     """Thin wrapper around OpenAI client for math-model suggestions."""
 
-    def __init__(self, client: Optional[OpenAI] = None) -> None:
+    def __init__(self, client: Optional[OpenAI] = None, db: Optional[Session] = None) -> None:
         api_key = settings.OPENAI_API_KEY
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY is not configured")
         self._client = client or OpenAI(api_key=api_key)
+        self._db = db  # Optional DB session for enhanced prompts
 
     def suggest_math_model(self, payload: MathModelPromptInput) -> MathModelSuggestion:
         """Call OpenAI to generate a math model suggestion.
@@ -30,7 +34,7 @@ class LLMClient:
         """
 
         system_prompt = _build_system_prompt()
-        user_prompt = _build_user_prompt(payload)
+        user_prompt = _build_user_prompt(payload, db=self._db)
 
         model = settings.OPENAI_MODEL_MATHMODEL or "gpt-4o"  # Step 7: formula quality requires gpt-4o
         temperature = settings.OPENAI_TEMPERATURE
@@ -129,7 +133,7 @@ def _build_system_prompt() -> str:
     )
 
 
-def _build_user_prompt(payload: MathModelPromptInput) -> str:
+def _build_user_prompt(payload: MathModelPromptInput, db: Optional[Session] = None) -> str:
     lines = [
         f"Initiative: {payload.initiative_key} - {payload.title}",
     ]
@@ -138,8 +142,39 @@ def _build_user_prompt(payload: MathModelPromptInput) -> str:
         if val:
             lines.append(f"{label}: {val}")
 
-    add("Immediate KPI key", payload.immediate_kpi_key)
-    add("Metric chain (PM provided)", payload.metric_chain_text)
+    # Add target KPI context
+    add("Target KPI", payload.immediate_kpi_key)
+    if payload.immediate_kpi_key:
+        lines.append(f"→ This model should measure impact on '{payload.immediate_kpi_key}'")
+    
+    # Format metric chain with KPI definitions if available
+    if payload.metric_chain_text:
+        formatted_chain = payload.metric_chain_text
+        if db:
+            try:
+                # Try to parse and format with KPI definitions
+                from app.services.product_ops.metric_chain_parser import parse_metric_chain
+                parsed = parse_metric_chain(payload.metric_chain_text)
+                if parsed and "chain" in parsed:
+                    # Load KPI configs
+                    kpi_keys = parsed["chain"]
+                    configs = db.query(OrganizationMetricConfig).filter(
+                        OrganizationMetricConfig.kpi_key.in_(kpi_keys)
+                    ).all()
+                    # Convert to dicts for format_chain_for_llm
+                    config_dicts = [
+                        {
+                            "kpi_key": cfg.kpi_key,
+                            "kpi_name": cfg.kpi_name,
+                            "kpi_level": cfg.kpi_level,
+                        }
+                        for cfg in configs
+                    ]
+                    formatted_chain = format_chain_for_llm(parsed, config_dicts)
+            except Exception as e:
+                logger.debug("Could not format metric chain: %s", str(e))
+        add("Metric Chain (impact pathway)", formatted_chain)
+    
     add("Problem", payload.problem_statement)
     add("Desired outcome", payload.desired_outcome)
     add("Hypothesis", payload.hypothesis)

@@ -70,9 +70,12 @@ Ultimately, the platform becomes the **single source of truth** for product deci
   * Clean fields, scores, meta, status, hypotheses
 * **MathModels Sheet**
 
-  * One row per initiative using mathematical modeling
-  * Stores PM free-text descriptions, LLM-suggested formulas, final approved formulas, approval flag
-  * Workflow: Suggest via LLM → PM review/approve → Seed Params → fill values → Save → Score
+  * **Multiple rows per initiative** - each initiative can have multiple math models targeting different KPIs
+  * **Columns**: initiative_key, model_name, target_kpi_key, metric_chain_text, formula_text, is_primary, computed_score, approved_by_user
+  * **Metric Chain Flow**: PM documents "immediate_kpi → intermediate_kpi → target_kpi" (e.g., "signups → activation → revenue")
+  * **KPI Targeting**: Each model specifies which KPI it impacts via target_kpi_key (north_star or strategic KPIs)
+  * **Primary Model**: One model marked is_primary=true serves as representative score for displays
+  * **Workflow**: Define metric chain → Suggest formula via LLM → PM review/approve → Seed Params → Fill values → Save → Score → KPI contributions computed
 * **Params Sheet**
 
   * One row per (initiative, framework, parameter)
@@ -267,9 +270,15 @@ Phase 5 foundational work has begun:
 * **Documentation**: Complete JSON shapes, PM guidance, glossary, implementation roadmap, status check-in
 
 **Not Started (Architectural but Non-Blocking):**
-* ProductOps Metrics_Config tab (KPI universe: keys, names, levels, units)
-* ProductOps KPI_Contributions tab (kpi_contribution_json entry surface)
-* OrganizationMetricsConfig DB model
+* ~~ProductOps Metrics_Config tab (KPI universe: keys, names, levels, units)~~ ✅ **COMPLETE (Jan 22, 2026)**
+* ~~ProductOps KPI_Contributions tab (kpi_contribution_json entry surface)~~ ✅ **COMPLETE (Jan 22, 2026)**
+* ~~OrganizationMetricsConfig DB model~~ ✅ **COMPLETE (Jan 22, 2026)**
+  - Migration r20260122_metric_chain moved metric_chain from Initiative to InitiativeMathModel
+  - Migration r5ba3359a91c0_rename_level_to_kpi_level fixed column name mismatch (level → kpi_level)
+  - MetricsConfigSyncService: Sheet → DB sync with validation (only north_star/strategic, exactly one active north_star)
+  - KPIContributionsSyncService: Sheet → DB sync with pm_override protection
+  - KPI contributions now auto-computed from math model scores via kpi_contribution_adapter
+  - PM can override via KPI_Contributions tab → sets kpi_contribution_source = "pm_override"
 
 **Next: Optimization Engine**
 * Solver adapter interface design (OptimizationProblem, SolverAdapter protocol)
@@ -1236,24 +1245,35 @@ Still in `scoring_job` after scoring:
 
 ## 3. Math Model + LLM Flow (Formula + Params + Scoring)
 
-**Scenario:** PM decides a particular initiative needs a full mathematical model.
+**Scenario:** PM creates multiple mathematical models per initiative to quantify impact on different KPIs.
 
-### 3.1. PM flags initiative to use math model
+### 3.1. Define Metric Chains & KPI Targets
 
-* In central backlog sheet:
+* **Metric Chain Documentation**: PM identifies the impact pathway for each initiative
+  * Example: "signups → activation → purchases → revenue"
+  * Documents in `metric_chain_text` column per math model
+  * System parses into `metric_chain_json` for validation & LLM context
 
-  * `use_math_model = TRUE`
-  * `active_scoring_framework = "MATH_MODEL"`
+* **Multiple Models per Initiative**: Each initiative can have N models targeting different KPIs
+  * Model 1: targets `north_star` KPI (e.g., "revenue")
+  * Model 2: targets strategic KPI (e.g., "user_retention")
+  * Model 3: targets strategic KPI (e.g., "engagement_score")
 
-### 3.2. PM describes the model in MathModels sheet
+* **Primary Model**: One model marked `is_primary = TRUE` serves as representative score for displays
+
+### 3.2. PM describes models in MathModels sheet
 
 * PM opens **MathModels** sheet:
 
-  * Adds/edits row with:
+  * Adds/edits rows (multiple per initiative):
 
     * `initiative_key = "INIT-000456"`
+    * `model_name = "Revenue Impact Model"` (descriptive name)
+    * `target_kpi_key = "revenue"` (which KPI this model affects)
+    * `metric_chain_text = "signups → activation → purchases → revenue"`
+    * `is_primary = TRUE` (if this is the representative model)
     * `framework = "MATH_MODEL"`
-    * `model_description_free_text` (or leaves blank + maybe `llm_prompt`).
+    * `model_description_free_text` (or leaves blank for LLM suggestion).
 
 ### 3.3. Backend LLM job suggests formula & assumptions
 
@@ -1367,28 +1387,68 @@ Same `run_scoring_job()` as in flow 2, but:
 
     Inside:
 
-    1. Access `initiative.math_model` (via relationship to `InitiativeMathModel`).
+    1. Access `initiative.math_models` (1:N relationship - multiple models per initiative).
 
-    2. Build a parameter dict:
+    2. **For each math model:**
 
        ```python
-       params = get_params_for_initiative(initiative.initiative_key, framework="MATH_MODEL")
+       for model in initiative.math_models:
+           params = get_params_for_initiative(
+               initiative.initiative_key, 
+               framework="MATH_MODEL",
+               model_id=model.id
+           )
+           
+           # Evaluate formula
+           score = evaluate_formula(model.formula_text, params)
+           
+           # Store computed score on model
+           model.computed_score = score
        ```
 
-    3. Evaluate formula:
+    3. **Select representative score** (for Initiative.overall_score):
+       - Primary model (`is_primary=True`) OR
+       - North star KPI model OR
+       - Highest score
 
-       * **Module:** `app/utils/safe_eval.py`
-       * **Function:** `evaluate_formula(formula_text: str, params: dict) -> float`
-
-    4. Compute:
+    4. **Compute KPI contributions** from all model scores:
 
        ```python
-       value_score = evaluated_value
-       effort_score = initiative.effort_engineering_days or derived_from_tshirt
-       overall_score = value_score / effort_score if effort_score > 0 else None
+       from app.services.product_ops.kpi_contribution_adapter import update_initiative_contributions
+       
+       # Aggregates all models' target_kpi_key + computed_score into unified JSON
+       update_initiative_contributions(db, initiative, commit=True)
+       # Updates: initiative.kpi_contribution_computed_json (always)
+       #          initiative.kpi_contribution_json (if not pm_override)
        ```
 
 * `ScoringService` then updates `initiative.value_score`, `initiative.overall_score`, persists `InitiativeScore`, and `backlog_writer` pushes numbers back to central sheet.
+
+### 3.9. KPI Contributions Flow (System-Derived + PM Override)
+
+**Architecture**: KPI contributions are **derived from math model scores**, not manually entered upfront.
+
+1. **System Computes Contributions** (after scoring):
+   - Each math model has `target_kpi_key` (e.g., "revenue", "user_retention")
+   - Each model has `computed_score` (e.g., 85.5)
+   - Adapter aggregates: `{"revenue": 85.5, "user_retention": 72.3}`
+   - Writes to `Initiative.kpi_contribution_computed_json` (always updated)
+   - Writes to `Initiative.kpi_contribution_json` (active, unless overridden)
+
+2. **PM Can Override** (via KPI_Contributions tab):
+   - PM edits `kpi_contribution_json` in sheet
+   - Save action sets `kpi_contribution_source = "pm_override"`
+   - System preserves PM edits, continues updating `kpi_contribution_computed_json` for reference
+
+3. **Validation** (against Metrics_Config):
+   - Only KPIs defined in `OrganizationMetricConfig` with `is_active=true` are allowed
+   - Only `north_star` and `strategic` KPI levels are eligible
+   - Invalid keys rejected during sync
+
+4. **Representative Score Selection**:
+   - If multiple models target same KPI → primary model wins
+   - Else highest score used
+   - Primary model (`is_primary=true`) determines Initiative.overall_score for displays
 
 ---
 
@@ -1494,7 +1554,7 @@ Now PMs and stakeholders see the **optimized roadmap** as a familiar spreadsheet
 **Core entity definitions**
 
 1. Initiative  
-Canonical object representing a proposed product change. Aggregates identity (initiative_key, source_*), requester info, problem/context, strategic classification, impact (low/expected/high), effort (t‑shirt, days), risk/dependencies, workflow status, scoring summary (value_score, effort_score, overall_score), math‑model linkage (use_math_model, math_model_id).
+Canonical object representing a proposed product change. Aggregates identity (initiative_key, source_*), requester info, problem/context, strategic classification, impact (low/expected/high), effort (t‑shirt, days), risk/dependencies, workflow status, scoring summary (value_score, effort_score, overall_score), **multiple math models** (use_math_model, math_models relationship 1:N), **KPI contributions** (kpi_contribution_json computed from model scores, PM-editable via KPI_Contributions tab).
 
 2. Intake sheet (department / local idea sheet)  
 Source spreadsheet where a department enters raw initiative rows. Editable fields: title, problem_statement, desired_outcome, impact ranges, preliminary effort guess, strategic tags, etc. Each row mapped into Initiative (with source_sheet_id, source_tab_name, source_row_number).
@@ -1512,10 +1572,10 @@ A curated, time‑bound subset of Initiatives selected for delivery (e.g. “202
 Association object between Roadmap and Initiative. Holds per‑roadmap fields: priority_rank, planned_quarter/year, is_selected, is_locked_in, scenario_label, optimization_run_id, and snapshot scores (value_score_used, effort_score_used, overall_score_used).
 
 7. MathModels sheet  
-Per‑initiative modeling workspace for those using custom quantitative formulas. Columns for free‑text description, llm_suggested_formula_text, assumptions_text, formula_text_final, approval flags. PM approves final formula → backend stores in InitiativeMathModel.
+**Multiple-models-per-initiative** workspace for quantitative impact modeling. Each initiative can have N models targeting different KPIs. Columns: initiative_key, model_name, **target_kpi_key** (which KPI this model affects), **metric_chain_text** ("immediate → intermediate → target"), formula_text, **is_primary** (representative score flag), **computed_score** (model's calculated impact), approved_by_user. PM defines metric chains → LLM suggests formulas → PM approves → system computes scores → **KPI contributions derived** from model scores.
 
 8. InitiativeMathModel (DB)  
-Single math model attached (optionally) to an Initiative. Fields: formula_text (approved), parameters_json (structure & metadata), assumptions_text, suggested_by_llm flag. Drives evaluation in MathModelFramework.
+**Multiple math models per Initiative** (1:N relationship via initiative_id FK). Each model targets a specific KPI and defines the impact pathway. Fields: **initiative_id** (FK), **target_kpi_key** (which KPI: north_star/strategic), **metric_chain_text** (PM input: "signups → activation → revenue"), **metric_chain_json** (parsed chain), formula_text (approved formula), **is_primary** (representative model flag), **computed_score** (model's calculated impact), parameters_json, assumptions_text, suggested_by_llm flag. **KPI Contributions Flow**: Model scores aggregate into Initiative.kpi_contribution_json via kpi_contribution_adapter.
 
 9. Params sheet  
 Normalized parameter table: one row per (initiative_key, framework, param_name). Columns: display_name, value, unit, min, max, source, approved flag, last_updated. Used by any scoring framework (RICE inputs, math model variables) to avoid wide sheets.
@@ -1557,7 +1617,7 @@ Sheet ID: unique Google Sheets document identifier (in URL).
 Tab name: worksheet title inside that document (e.g. “UK_Intake”, “Central_Backlog”, “Params”). Backend uses (sheet_id, tab_name) to trace original row locations.
 
 ## Live Sheets Registry
-*Last synced: 2026-01-21 20:45 UTC*
+*Last synced: 2026-01-22 13:46 UTC*
 
 This section is auto-generated by `scripts/sync_sheets_registry.py`.
 First 3 rows per tab: Row 1 = main header, Rows 2-3 = metadata/comments.
@@ -1933,7 +1993,7 @@ Entry surgace is optimization_cetner/candidates`
 
 
 #### Tab: `MathModels` (Math Models)
-  - **Total Columns**: 17
+  - **Total Columns**: 19
 
   - **Column A**: `initiative_key`
     - Row 1 (Header): `initiative_key`
@@ -1955,67 +2015,77 @@ Entry surgace is optimization_cetner/candidates`
     - Row 2 (Meta1): `InitiativeMathModel.model_description_free_text`
     - Row 3 (Meta2): `PM input →DB (MathModelSync).`
 
-  - **Column E**: `immediate KPI key`
-    - Row 1 (Header): `immediate KPI key`
-    - Row 2 (Meta1): `Initiative.immediate_kpi_key`
-    - Row 3 (Meta2): `PM input → DB (will be used as read only on central backlog too) - source of truth`
+  - **Column E**: `is_primary`
+    - Row 1 (Header): `is_primary`
+    - Row 2 (Meta1): ``
+    - Row 3 (Meta2): ``
 
   - **Column F**: `metric_chain_text`
     - Row 1 (Header): `metric_chain_text`
     - Row 2 (Meta1): `Initiative.metric_chain_json`
     - Row 3 (Meta2): `PM input → DB (parsed → metric_chain_json) - source of truth`
 
-  - **Column G**: `llm_suggested_metric_chain_text`
+  - **Column G**: `immediate KPI key`
+    - Row 1 (Header): `immediate KPI key`
+    - Row 2 (Meta1): `Initiative.immediate_kpi_key`
+    - Row 3 (Meta2): `PM input → DB (will be used as read only on central backlog too) - source of truth`
+
+  - **Column H**: `computed_score`
+    - Row 1 (Header): `computed_score`
+    - Row 2 (Meta1): ``
+    - Row 3 (Meta2): ``
+
+  - **Column I**: `llm_suggested_metric_chain_text`
     - Row 1 (Header): `llm_suggested_metric_chain_text`
     - Row 2 (Meta1): `NONE`
     - Row 3 (Meta2): `LLM writes → Sheet (PM may copy)`
 
-  - **Column H**: `formula_text`
+  - **Column J**: `formula_text`
     - Row 1 (Header): `formula_text`
     - Row 2 (Meta1): `InitiativeMathModel.formula_text`
     - Row 3 (Meta2): `PM input → DB - source of truth`
 
-  - **Column I**: `status`
+  - **Column K**: `status`
     - Row 1 (Header): `status`
     - Row 2 (Meta1): `NONE`
     - Row 3 (Meta2): `Sheet-only status (optional) written by backend`
 
-  - **Column J**: `approved_by_user`
+  - **Column L**: `approved_by_user`
     - Row 1 (Header): `approved_by_user`
     - Row 2 (Meta1): `InitiativeMathModel.approved_by_user`
     - Row 3 (Meta2): `PM input approval → DB`
 
-  - **Column K**: `llm_suggested_formula_text`
+  - **Column M**: `llm_suggested_formula_text`
     - Row 1 (Header): `llm_suggested_formula_text`
     - Row 2 (Meta1): `NONE`
     - Row 3 (Meta2): `LLM writes → Sheet (PM may copy)`
 
-  - **Column L**: `llm_notes`
+  - **Column N**: `llm_notes`
     - Row 1 (Header): `llm_notes`
     - Row 2 (Meta1): `NONE`
     - Row 3 (Meta2): `LLM writes → Sheet (sheet only)`
 
-  - **Column M**: `assumptions_text`
+  - **Column O**: `assumptions_text`
     - Row 1 (Header): `assumptions_text`
     - Row 2 (Meta1): `InitiativeMathModel.assumptions_text`
     - Row 3 (Meta2): `PM input → DB`
 
-  - **Column N**: `model_prompt_to_llm`
+  - **Column P**: `model_prompt_to_llm`
     - Row 1 (Header): `model_prompt_to_llm`
     - Row 2 (Meta1): `NONE`
     - Row 3 (Meta2): `PM input - Sheet only`
 
-  - **Column O**: `suggested_by_llm`
+  - **Column Q**: `suggested_by_llm`
     - Row 1 (Header): `suggested_by_llm`
     - Row 2 (Meta1): `InitiativeMathModel.suggested_by_llm`
     - Row 3 (Meta2): `Backend sets → Sheet →DB (on save)`
 
-  - **Column P**: `Updated Source`
-    - Row 1 (Header): `Updated Source`
+  - **Column R**: `updated source`
+    - Row 1 (Header): `updated source`
     - Row 2 (Meta1): `NONE`
     - Row 3 (Meta2): `Backend writes: DB → Sheet (provenance)`
 
-  - **Column Q**: `updated at`
+  - **Column S**: `updated at`
     - Row 1 (Header): `updated at`
     - Row 2 (Meta1): `InitiativeMathModel.updated_at`
     - Row 3 (Meta2): `Backend timestamps: DB→Sheet (timestamp)`
@@ -2160,7 +2230,7 @@ Entry surgace is optimization_cetner/candidates`
 
 
 #### Tab: `KPI_Contributions` (KPI Contributions)
-  - **Total Columns**: 6
+  - **Total Columns**: 8
 
   - **Column A**: `initiative_key`
     - Row 1 (Header): `initiative_key`
@@ -2172,22 +2242,32 @@ Entry surgace is optimization_cetner/candidates`
     - Row 2 (Meta1): `Initiative.kpi_contribution_json`
     - Row 3 (Meta2): `PM input edits here; FLOW: ProductOps/KPI_Contributions → DB; validate keys & units vs Metrics_Config`
 
-  - **Column C**: `notes`
+  - **Column C**: `kpi_contribution_computed_json`
+    - Row 1 (Header): `kpi_contribution_computed_json`
+    - Row 2 (Meta1): ``
+    - Row 3 (Meta2): ``
+
+  - **Column D**: `kpi_contribution_source`
+    - Row 1 (Header): `kpi_contribution_source`
+    - Row 2 (Meta1): ``
+    - Row 3 (Meta2): ``
+
+  - **Column E**: `notes`
     - Row 1 (Header): `notes`
     - Row 2 (Meta1): `NONE`
     - Row 3 (Meta2): `Sheet-only notes; FLOW: none`
 
-  - **Column D**: `run_status`
+  - **Column F**: `run_status`
     - Row 1 (Header): `run_status`
     - Row 2 (Meta1): `NONE`
     - Row 3 (Meta2): `Backend status; FLOW: Backend → Sheet`
 
-  - **Column E**: `updated_source`
+  - **Column G**: `updated_source`
     - Row 1 (Header): `updated_source`
     - Row 2 (Meta1): `NONE`
     - Row 3 (Meta2): `Backend provenance; FLOW: Backend → Sheet`
 
-  - **Column F**: `updated_at`
+  - **Column H**: `updated_at`
     - Row 1 (Header): `updated_at`
     - Row 2 (Meta1): `Initiative.updated_at`
     - Row 3 (Meta2): `Backend timestamp; FLOW: DB → Sheet`
@@ -2721,7 +2801,7 @@ entry surface is ProductOps/KPI_contributions`
 
 
 ## Codebase Registry
-*Auto-generated: 2026-01-21 15:36 UTC*
+*Auto-generated: 2026-01-22 08:12 UTC*
 
 This section is auto-generated by `scripts/generate_codebase_registry.py`.
 Comprehensive map of `app/` directory structure, modules, classes, and functions.
@@ -2779,16 +2859,34 @@ app/
 │   ├── roadmap_entry.py
 │   └── scoring.py
 ├── services
-│   ├── scoring
-│   │   ├── engines
-│   │   │   ├── __init__.py
-│   │   │   ├── math_model.py
-│   │   │   ├── rice.py
-│   │   │   └── wsjf.py
+│   ├── optimization
 │   │   ├── __init__.py
-│   │   ├── interfaces.py
-│   │   ├── registry.py
-│   │   └── utils.py
+│   │   ├── feasibility_checker.py
+│   │   ├── feasibility_filters.py
+│   │   ├── feasibility_persistence.py
+│   │   ├── optimization_compiler.py
+│   │   ├── optimization_problem_builder.py
+│   │   ├── optimization_run_persistence.py
+│   │   └── optimization_sync_service.py
+│   ├── product_ops
+│   │   ├── scoring
+│   │   │   ├── engines
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── math_model.py
+│   │   │   │   ├── rice.py
+│   │   │   │   └── wsjf.py
+│   │   │   ├── __init__.py
+│   │   │   ├── interfaces.py
+│   │   │   ├── registry.py
+│   │   │   └── utils.py
+│   │   ├── __init__.py
+│   │   ├── kpi_contribution_adapter.py
+│   │   ├── kpi_contributions_sync_service.py
+│   │   ├── math_model_service.py
+│   │   ├── metric_chain_parser.py
+│   │   ├── metrics_config_sync_service.py
+│   │   ├── params_sync_service.py
+│   │   └── scoring_service.py
 │   ├── solvers
 │   │   ├── __init__.py
 │   │   └── ortools_cp_sat_adapter.py
@@ -2796,22 +2894,10 @@ app/
 │   ├── action_runner.py
 │   ├── backlog_mapper.py
 │   ├── backlog_service.py
-│   ├── feasibility_checker.py
-│   ├── feasibility_filters.py
-│   ├── feasibility_persistence.py
 │   ├── initiative_key.py
 │   ├── intake_mapper.py
 │   ├── intake_service.py
-│   ├── kpi_contributions_sync_service.py
-│   ├── math_model_service.py
-│   ├── metrics_config_sync_service.py
-│   ├── optimization_compiler.py
-│   ├── optimization_problem_builder.py
-│   ├── optimization_run_persistence.py
-│   ├── optimization_sync_service.py
-│   ├── params_sync_service.py
-│   ├── roadmap_service.py
-│   └── scoring_service.py
+│   └── roadmap_service.py
 ├── sheets
 │   ├── __init__.py
 │   ├── backlog_reader.py
@@ -3053,7 +3139,7 @@ app/
 
 **Classes**:
 - **Class `InitiativeMathModel`** (inherits: Base)
-  - *Doc*: Stores the full mathematical model for an initiative.
+  - *Doc*: Stores mathematical models for initiatives.
   - *No methods*
 - **Class `InitiativeScore`** (inherits: Base)
   - *Doc*: Optional scoring history table (per framework / per run).
@@ -3114,7 +3200,7 @@ app/
 
 *Doc*: Flow 2 Scoring Activation Job
 
-**Imports from**: __future__, app.services.scoring, app.services.scoring_service, sqlalchemy.orm, typing
+**Imports from**: __future__, app.services.product_ops.scoring, app.services.product_ops.scoring_service, sqlalchemy.orm, typing
 
 **Functions**:
 - **Function `run_scoring_batch(db: Session) -> int`**
@@ -3153,7 +3239,7 @@ app/
 
 *Doc*: Flow 5 (Phase 5) - Optimization run orchestration.
 
-**Imports from**: __future__, app.schemas.feasibility, app.schemas.optimization_solution, app.services.feasibility_checker, app.services.feasibility_persistence
+**Imports from**: __future__, app.schemas.feasibility, app.schemas.optimization_solution, app.services.optimization.feasibility_checker, app.services.optimization.feasibility_persistence
 
 **Functions**:
 - **Function `run_flow5_optimization_step1() -> Dict[(str, Any)]`**
@@ -3515,56 +3601,6 @@ app/
   - `update_many(self, rows: List[BacklogRow] | List[tuple[int, BacklogRow]], commit_every: Optional[int])`
   - `_apply_central_update(initiative: Initiative, data: Dict[(str, Any)])`
 
-##### Module: `feasibility_checker.py`
-*Path*: `app/services/feasibility_checker.py`
-
-*Doc*: Fast, deterministic feasibility checks BEFORE calling the solver.
-
-**Imports from**: __future__, app.schemas.feasibility, app.schemas.optimization_problem, dataclasses, datetime
-
-**Classes**:
-- **Class `PeriodWindow`**
-  - *Doc*: Time period with start and end dates (for future time-aware checks).
-  - *No methods*
-- **Class `FeasibilityChecker`**
-  - *Doc*: Fast, deterministic feasibility checks BEFORE calling the solver.
-  - `check(self, problem: OptimizationProblem, period_window: Optional[PeriodWindow])`
-  - `_check_candidate_tokens(self, problem: OptimizationProblem)`
-  - `_check_mandatory_references(self, problem: OptimizationProblem, candidate_keys: Set[str])`
-  - `_check_exclusions(self, problem: OptimizationProblem, candidate_keys: Set[str])`
-  - `_check_bundles(self, problem: OptimizationProblem, candidate_keys: Set[str])`
-  - `_check_prerequisites(self, problem: OptimizationProblem, candidate_keys: Set[str])`
-  - `_check_synergy_pairs(self, problem: OptimizationProblem, candidate_keys: Set[str])`
-  - `_check_capacity_bounds(self, problem: OptimizationProblem, candidate_keys: Set[str])`
-  - `_compute_slice_token_totals(self, problem: OptimizationProblem)`
-  - `_check_target_floors_upper_bound(self, problem: OptimizationProblem)`
-  - `_compute_optimistic_kpi_totals(self, problem: OptimizationProblem)`
-  - `_detect_prereq_cycles(self, prereqs: Dict[(str, List[str])])`
-
-##### Module: `feasibility_filters.py`
-*Path*: `app/services/feasibility_filters.py`
-
-*Doc*: Pre-solver feasibility filters for candidate initiatives.
-
-**Imports from**: __future__, app.db.models.initiative, datetime
-
-**Functions**:
-- **Function `is_deadline_feasible(initiative: Initiative, period_end: date) -> bool`**
-  - *Doc*: Check if an initiative's deadline is feasible for a given period.
-- **Function `is_time_feasible(initiative: Initiative, period_start: date, period_end: date) -> bool`**
-  - *Doc*: Extended time feasibility check (for future phases).
-
-##### Module: `feasibility_persistence.py`
-*Path*: `app/services/feasibility_persistence.py`
-
-*Doc*: Feasibility report persistence utilities.
-
-**Imports from**: __future__, datetime, typing
-
-**Functions**:
-- **Function `persist_feasibility_report(db: 'Session', optimization_run: 'OptimizationRun', report: 'FeasibilityReport') -> 'OptimizationRun'`**
-  - *Doc*: Persist feasibility output to OptimizationRun.result_json under a stable key.
-
 ##### Module: `initiative_key.py`
 *Path*: `app/services/initiative_key.py`
 
@@ -3615,49 +3651,72 @@ app/
   - `_backfill_initiative_key(self, sheet_id: str, tab_name: str, row_number: int, initiative_key: str)`
   - `flush_pending_key_backfills(self)`
 
-##### Module: `kpi_contributions_sync_service.py`
-*Path*: `app/services/kpi_contributions_sync_service.py`
+##### Module: `roadmap_service.py`
+*Path*: `app/services/roadmap_service.py`
 
-**Imports from**: __future__, app.db.models.initiative, app.db.models.optimization, app.sheets.client, app.sheets.kpi_contributions_reader
+*No classes or functions defined*
 
-**Classes**:
-- **Class `KPIContributionsSyncService`**
-  - *Doc*: Sheet → DB sync for ProductOps KPI_Contributions tab.
-  - `__init__(self, client: SheetsClient)`
-  - `preview_rows(self, spreadsheet_id: str, tab_name: str, max_rows: Optional[int])`
-  - `sync_sheet_to_db(self, db: Session, spreadsheet_id: str, tab_name: str, commit_every: int, initiative_keys: Optional[List[str]])`
-  - `_load_allowed_kpis(self, db: Session)`
-  - `_normalize_contribution(self, raw: Any)`
-  - `_values_are_numeric(self, contrib: Dict[(str, float)])`
+#### Directory: `app/services/optimization/`
 
-##### Module: `math_model_service.py`
-*Path*: `app/services/math_model_service.py`
+##### Module: `__init__.py`
+*Path*: `app/services/optimization/__init__.py`
 
-**Imports from**: __future__, app.db.models.initiative, app.db.models.scoring, app.sheets.client, app.sheets.math_models_reader
+*Doc*: Optimization-related services (compiler, problem builder, feasibility, persistence).
 
-**Classes**:
-- **Class `MathModelSyncService`**
-  - *Doc*: Sheet ↔ DB sync for MathModels (Sheet → DB for Step 4).
-  - `__init__(self, client: SheetsClient)`
-  - `preview_rows(self, spreadsheet_id: str, tab_name: str, max_rows: Optional[int])`
-  - `sync_sheet_to_db(self, db: Session, spreadsheet_id: str, tab_name: str, commit_every: int, initiative_keys: Optional[List[str]])`
+*No classes or functions defined*
 
-##### Module: `metrics_config_sync_service.py`
-*Path*: `app/services/metrics_config_sync_service.py`
+##### Module: `feasibility_checker.py`
+*Path*: `app/services/optimization/feasibility_checker.py`
 
-**Imports from**: __future__, app.db.models.optimization, app.sheets.client, app.sheets.metrics_config_reader, sqlalchemy.orm
+*Doc*: Fast, deterministic feasibility checks BEFORE calling the solver.
+
+**Imports from**: __future__, app.schemas.feasibility, app.schemas.optimization_problem, dataclasses, datetime
 
 **Classes**:
-- **Class `MetricsConfigSyncService`**
-  - *Doc*: Sheet → DB sync for ProductOps Metrics_Config tab.
-  - `__init__(self, client: SheetsClient)`
-  - `preview_rows(self, spreadsheet_id: str, tab_name: str, max_rows: Optional[int])`
-  - `sync_sheet_to_db(self, db: Session, spreadsheet_id: str, tab_name: str, commit_every: int, kpi_keys: Optional[List[str]])`
-  - `_validate_unique_keys(self, rows: List[MetricRowPair])`
-  - `_validate_active_north_star(self, rows: List[MetricRowPair])`
+- **Class `PeriodWindow`**
+  - *Doc*: Time period with start and end dates (for future time-aware checks).
+  - *No methods*
+- **Class `FeasibilityChecker`**
+  - *Doc*: Fast, deterministic feasibility checks BEFORE calling the solver.
+  - `check(self, problem: OptimizationProblem, period_window: Optional[PeriodWindow])`
+  - `_check_candidate_tokens(self, problem: OptimizationProblem)`
+  - `_check_mandatory_references(self, problem: OptimizationProblem, candidate_keys: Set[str])`
+  - `_check_exclusions(self, problem: OptimizationProblem, candidate_keys: Set[str])`
+  - `_check_bundles(self, problem: OptimizationProblem, candidate_keys: Set[str])`
+  - `_check_prerequisites(self, problem: OptimizationProblem, candidate_keys: Set[str])`
+  - `_check_synergy_pairs(self, problem: OptimizationProblem, candidate_keys: Set[str])`
+  - `_check_capacity_bounds(self, problem: OptimizationProblem, candidate_keys: Set[str])`
+  - `_compute_slice_token_totals(self, problem: OptimizationProblem)`
+  - `_check_target_floors_upper_bound(self, problem: OptimizationProblem)`
+  - `_compute_optimistic_kpi_totals(self, problem: OptimizationProblem)`
+  - `_detect_prereq_cycles(self, prereqs: Dict[(str, List[str])])`
+
+##### Module: `feasibility_filters.py`
+*Path*: `app/services/optimization/feasibility_filters.py`
+
+*Doc*: Pre-solver feasibility filters for candidate initiatives.
+
+**Imports from**: __future__, app.db.models.initiative, datetime
+
+**Functions**:
+- **Function `is_deadline_feasible(initiative: Initiative, period_end: date) -> bool`**
+  - *Doc*: Check if an initiative's deadline is feasible for a given period.
+- **Function `is_time_feasible(initiative: Initiative, period_start: date, period_end: date) -> bool`**
+  - *Doc*: Extended time feasibility check (for future phases).
+
+##### Module: `feasibility_persistence.py`
+*Path*: `app/services/optimization/feasibility_persistence.py`
+
+*Doc*: Feasibility report persistence utilities.
+
+**Imports from**: __future__, datetime, typing
+
+**Functions**:
+- **Function `persist_feasibility_report(db: 'Session', optimization_run: 'OptimizationRun', report: 'FeasibilityReport') -> 'OptimizationRun'`**
+  - *Doc*: Persist feasibility output to OptimizationRun.result_json under a stable key.
 
 ##### Module: `optimization_compiler.py`
-*Path*: `app/services/optimization_compiler.py`
+*Path*: `app/services/optimization/optimization_compiler.py`
 
 *Doc*: Pure compilation logic for Optimization Center constraints.
 
@@ -3669,11 +3728,11 @@ app/
   - *Doc*: Validate and compile sheet rows into grouped ConstraintSetCompiled objects.
 
 ##### Module: `optimization_problem_builder.py`
-*Path*: `app/services/optimization_problem_builder.py`
+*Path*: `app/services/optimization/optimization_problem_builder.py`
 
 *Doc*: Builder service for OptimizationProblem objects.
 
-**Imports from**: __future__, app.db.models.initiative, app.db.models.optimization, app.schemas.optimization_problem, app.services.feasibility_filters
+**Imports from**: __future__, app.db.models.initiative, app.db.models.optimization, app.schemas.optimization_problem, app.services.optimization.feasibility_filters
 
 **Functions**:
 - **Function `build_optimization_problem(db: Session, scenario_name: str, constraint_set_name: str, scope_type: ScopeType, selected_initiative_keys: Optional[List[str]], period_end_date: Optional[date]) -> OptimizationProblem`**
@@ -3682,7 +3741,7 @@ app/
   - *Doc*: PRODUCTION FIX: Validate that all governance constraint references
 
 ##### Module: `optimization_run_persistence.py`
-*Path*: `app/services/optimization_run_persistence.py`
+*Path*: `app/services/optimization/optimization_run_persistence.py`
 
 *Doc*: Persistence utilities for OptimizationRun objects.
 
@@ -3697,11 +3756,11 @@ app/
   - *Doc*: Create a new OptimizationRun record in the database.
 
 ##### Module: `optimization_sync_service.py`
-*Path*: `app/services/optimization_sync_service.py`
+*Path*: `app/services/optimization/optimization_sync_service.py`
 
 *Doc*: Optimization Center sync orchestration.
 
-**Imports from**: __future__, app.db.models.optimization, app.db.session, app.schemas.optimization_center, app.services.optimization_compiler
+**Imports from**: __future__, app.db.models.optimization, app.db.session, app.schemas.optimization_center, app.services.optimization.optimization_compiler
 
 **Functions**:
 - **Function `_capacity_to_json(items: Sequence[CapacityFloor | CapacityCap], value_attr: str) -> Dict[(str, Dict[(str, float)])]`**
@@ -3710,8 +3769,92 @@ app/
 - **Function `sync_constraint_sets_from_sheets(sheets_client: SheetsClient, spreadsheet_id: str, constraints_tab: str, targets_tab: str, session: Optional[Session]) -> Tuple[(List[OptimizationConstraintSet], List[ValidationMessage])]`**
   - *Doc*: Read constraints/targets tabs, compile, and upsert OptimizationConstraintSet rows.
 
+#### Directory: `app/services/product_ops/`
+
+##### Module: `__init__.py`
+*Path*: `app/services/product_ops/__init__.py`
+
+*Doc*: ProductOps-related services (scoring, sync, adapters).
+
+*No classes or functions defined*
+
+##### Module: `kpi_contribution_adapter.py`
+*Path*: `app/services/product_ops/kpi_contribution_adapter.py`
+
+*Doc*: KPI Contributions Adapter
+
+**Imports from**: __future__, app.db.models.initiative, app.db.models.optimization, sqlalchemy.orm, typing
+
+**Functions**:
+- **Function `compute_kpi_contributions(initiative: Initiative) -> Dict[(str, float)]`**
+  - *Doc*: Compute KPI contributions from initiative's math models.
+- **Function `update_initiative_contributions(db: Session, initiative: Initiative, commit: bool) -> Dict[(str, Any)]`**
+  - *Doc*: Update initiative's KPI contributions from its math models.
+- **Function `get_representative_score(initiative: Initiative) -> Optional[float]`**
+  - *Doc*: Get representative score for initiative from its math models.
+- **Function `validate_kpi_keys(db: Session, kpi_keys: list[str], kpi_levels: Optional[list[str]]) -> Dict[(str, Any)]`**
+  - *Doc*: Validate KPI keys against OrganizationMetricConfig.
+
+##### Module: `kpi_contributions_sync_service.py`
+*Path*: `app/services/product_ops/kpi_contributions_sync_service.py`
+
+**Imports from**: __future__, app.db.models.initiative, app.db.models.optimization, app.sheets.client, app.sheets.kpi_contributions_reader
+
+**Classes**:
+- **Class `KPIContributionsSyncService`**
+  - *Doc*: Sheet → DB sync for ProductOps KPI_Contributions tab.
+  - `__init__(self, client: SheetsClient)`
+  - `preview_rows(self, spreadsheet_id: str, tab_name: str, max_rows: Optional[int])`
+  - `sync_sheet_to_db(self, db: Session, spreadsheet_id: str, tab_name: str, commit_every: int, initiative_keys: Optional[List[str]])`
+  - `_load_allowed_kpis(self, db: Session)`
+  - `_normalize_contribution(self, raw: Any)`
+  - `_values_are_numeric(self, contrib: Dict[(str, float)])`
+
+##### Module: `math_model_service.py`
+*Path*: `app/services/product_ops/math_model_service.py`
+
+**Imports from**: __future__, app.db.models.initiative, app.db.models.scoring, app.sheets.client, app.sheets.math_models_reader
+
+**Classes**:
+- **Class `MathModelSyncService`**
+  - *Doc*: Sheet ↔ DB sync for MathModels (Sheet → DB for Step 4).
+  - `__init__(self, client: SheetsClient)`
+  - `preview_rows(self, spreadsheet_id: str, tab_name: str, max_rows: Optional[int])`
+  - `sync_sheet_to_db(self, db: Session, spreadsheet_id: str, tab_name: str, commit_every: int, initiative_keys: Optional[List[str]])`
+
+##### Module: `metric_chain_parser.py`
+*Path*: `app/services/product_ops/metric_chain_parser.py`
+
+*Doc*: Metric Chain Parser
+
+**Imports from**: __future__, app.db.models.optimization, sqlalchemy.orm, typing
+
+**Functions**:
+- **Function `parse_metric_chain(text: Optional[str]) -> Optional[Dict[(str, Any)]]`**
+  - *Doc*: Parse metric chain text into structured JSON.
+- **Function `validate_metric_chain(db: Session, metric_chain_json: Dict[(str, Any)], kpi_levels: Optional[List[str]]) -> Dict[(str, Any)]`**
+  - *Doc*: Validate metric chain keys against OrganizationMetricConfig.
+- **Function `parse_and_validate(db: Session, text: Optional[str], kpi_levels: Optional[List[str]]) -> Optional[Dict[(str, Any)]]`**
+  - *Doc*: Parse and validate metric chain in one step.
+- **Function `format_chain_for_llm(metric_chain_json: Optional[Dict[(str, Any)]], kpi_configs: Optional[List[Dict[(str, Any)]]]) -> str`**
+  - *Doc*: Format metric chain for LLM prompt context.
+
+##### Module: `metrics_config_sync_service.py`
+*Path*: `app/services/product_ops/metrics_config_sync_service.py`
+
+**Imports from**: __future__, app.db.models.optimization, app.sheets.client, app.sheets.metrics_config_reader, sqlalchemy.orm
+
+**Classes**:
+- **Class `MetricsConfigSyncService`**
+  - *Doc*: Sheet → DB sync for ProductOps Metrics_Config tab.
+  - `__init__(self, client: SheetsClient)`
+  - `preview_rows(self, spreadsheet_id: str, tab_name: str, max_rows: Optional[int])`
+  - `sync_sheet_to_db(self, db: Session, spreadsheet_id: str, tab_name: str, commit_every: int, kpi_keys: Optional[List[str]])`
+  - `_validate_unique_keys(self, rows: List[MetricRowPair])`
+  - `_validate_active_north_star(self, rows: List[MetricRowPair])`
+
 ##### Module: `params_sync_service.py`
-*Path*: `app/services/params_sync_service.py`
+*Path*: `app/services/product_ops/params_sync_service.py`
 
 **Imports from**: __future__, app.db.models.initiative, app.db.models.scoring, app.sheets.client, app.sheets.params_reader
 
@@ -3722,15 +3865,10 @@ app/
   - `preview_rows(self, spreadsheet_id: str, tab_name: str, max_rows: Optional[int])`
   - `sync_sheet_to_db(self, db: Session, spreadsheet_id: str, tab_name: str, commit_every: int, initiative_keys: Optional[List[str]])`
 
-##### Module: `roadmap_service.py`
-*Path*: `app/services/roadmap_service.py`
-
-*No classes or functions defined*
-
 ##### Module: `scoring_service.py`
-*Path*: `app/services/scoring_service.py`
+*Path*: `app/services/product_ops/scoring_service.py`
 
-**Imports from**: __future__, app.config, app.db.models.initiative, app.db.models.scoring, app.services.scoring
+**Imports from**: __future__, app.config, app.db.models.initiative, app.db.models.scoring, app.services.product_ops.scoring
 
 **Classes**:
 - **Class `ScoringService`**
@@ -3750,17 +3888,17 @@ app/
   - `_build_wsjf_inputs(self, initiative: Initiative)`
   - `_build_math_model_inputs(self, initiative: Initiative)`
 
-#### Directory: `app/services/scoring/`
+#### Directory: `app/services/product_ops/scoring/`
 
 ##### Module: `__init__.py`
-*Path*: `app/services/scoring/__init__.py`
+*Path*: `app/services/product_ops/scoring/__init__.py`
 
 **Imports from**: interfaces, registry
 
 *No classes or functions defined*
 
 ##### Module: `interfaces.py`
-*Path*: `app/services/scoring/interfaces.py`
+*Path*: `app/services/product_ops/scoring/interfaces.py`
 
 **Imports from**: __future__, enum, pydantic, typing
 
@@ -3779,11 +3917,11 @@ app/
   - `compute(self, inputs: ScoreInputs)`
 
 ##### Module: `registry.py`
-*Path*: `app/services/scoring/registry.py`
+*Path*: `app/services/product_ops/scoring/registry.py`
 
 *Doc*: Registry for scoring frameworks and their engines. This module defines available scoring frameworks,
 
-**Imports from**: __future__, app.services.scoring.engines, app.services.scoring.interfaces, dataclasses, typing
+**Imports from**: __future__, app.services.product_ops.scoring.engines, app.services.product_ops.scoring.interfaces, dataclasses, typing
 
 **Classes**:
 - **Class `FrameworkInfo`**
@@ -3793,7 +3931,7 @@ app/
 - **Function `get_engine(framework: ScoringFramework) -> ScoringEngine`**
 
 ##### Module: `utils.py`
-*Path*: `app/services/scoring/utils.py`
+*Path*: `app/services/product_ops/scoring/utils.py`
 
 **Imports from**: __future__, typing
 
@@ -3803,19 +3941,19 @@ app/
 - **Function `clamp(value: Optional[float], min_value: float, max_value: float) -> float`**
   - *Doc*: Clamp a possibly None float into [min_value, max_value]. None -> min_value.
 
-#### Directory: `app/services/scoring/engines/`
+#### Directory: `app/services/product_ops/scoring/engines/`
 
 ##### Module: `__init__.py`
-*Path*: `app/services/scoring/engines/__init__.py`
+*Path*: `app/services/product_ops/scoring/engines/__init__.py`
 
 **Imports from**: math_model, rice, wsjf
 
 *No classes or functions defined*
 
 ##### Module: `math_model.py`
-*Path*: `app/services/scoring/engines/math_model.py`
+*Path*: `app/services/product_ops/scoring/engines/math_model.py`
 
-**Imports from**: __future__, app.services.scoring.interfaces, app.utils.safe_eval, typing
+**Imports from**: __future__, app.services.product_ops.scoring.interfaces, app.utils.safe_eval, typing
 
 **Classes**:
 - **Class `MathModelScoringEngine`**
@@ -3823,9 +3961,9 @@ app/
   - `compute(self, inputs: ScoreInputs)`
 
 ##### Module: `rice.py`
-*Path*: `app/services/scoring/engines/rice.py`
+*Path*: `app/services/product_ops/scoring/engines/rice.py`
 
-**Imports from**: __future__, app.services.scoring.interfaces, app.services.scoring.utils
+**Imports from**: __future__, app.services.product_ops.scoring.interfaces, app.services.product_ops.scoring.utils
 
 **Classes**:
 - **Class `RiceScoringEngine`**
@@ -3833,9 +3971,9 @@ app/
   - `compute(self, inputs: ScoreInputs)`
 
 ##### Module: `wsjf.py`
-*Path*: `app/services/scoring/engines/wsjf.py`
+*Path*: `app/services/product_ops/scoring/engines/wsjf.py`
 
-**Imports from**: __future__, app.services.scoring.interfaces, app.services.scoring.utils
+**Imports from**: __future__, app.services.product_ops.scoring.interfaces, app.services.product_ops.scoring.utils
 
 **Classes**:
 - **Class `WsjfScoringEngine`**

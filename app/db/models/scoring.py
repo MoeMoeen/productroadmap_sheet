@@ -8,21 +8,29 @@ from app.db.base import Base
 
 class InitiativeMathModel(Base):
     """
-    Stores the full mathematical model for an initiative.
-    Relationship to Initiative is via Initiative.math_model_id -> InitiativeMathModel.id
+    Stores mathematical models for initiatives.
+    Multiple models per initiative supported (1:N relationship).
+    Each model can target a specific KPI via target_kpi_key.
     """
 
     __tablename__ = "initiative_math_models"
 
     id = Column(Integer, primary_key=True, index=True)
+    initiative_id = Column(Integer, ForeignKey("initiatives.id", ondelete="CASCADE"), nullable=False, index=True)
 
     framework = Column(String(50), nullable=False, default="MATH_MODEL", index=True)
     model_name = Column(String(150), nullable=True)
     formula_text = Column(Text, nullable=False)
     metric_chain_text = Column(Text, nullable=True)
+    metric_chain_json = Column(JSON, nullable=True)  # Parsed version of metric_chain_text
     parameters_json = Column(JSON, nullable=True)  # e.g. {"traffic": {...}, "uplift": {...}}
     assumptions_text = Column(Text, nullable=True)
     model_description_free_text = Column(Text, nullable=True)
+
+    # Multi-model support fields
+    target_kpi_key = Column(String(100), nullable=True)  # Which KPI this model targets
+    is_primary = Column(Boolean, nullable=False, default=False)  # Representative score for displays
+    computed_score = Column(Float, nullable=True)  # Score computed by this model
 
     suggested_by_llm = Column(Boolean, nullable=False, default=False)
     approved_by_user = Column(Boolean, nullable=False, default=False)
@@ -32,8 +40,7 @@ class InitiativeMathModel(Base):
 
     initiative = relationship(
         "Initiative",
-        back_populates="math_model",
-        uselist=False,
+        back_populates="math_models",
     )
 
 

@@ -133,7 +133,7 @@ This repository contains an always-up-to-date, auto-generated grounding document
 
 - `projectscope.md` (authoritative source of truth for sheets + codebase structure)
 
-The assistant MUST treat `projectscope.md` as the primary grounding artifact and must not rely on memory or assumptions about the repo.
+The assistant MUST treat `projectscope.md` as the primary grounding artifact and must not rely on memory or assumptions about the repo. However, live code files are the ultimate source of truth for existence of symbols (classes, functions, methods, variables) and their exact signatures and what they actually do. If you notice discrepancies between `projectscope.md` and live code, prioritize live code and flag this to the user.
 
 ### User workflow assumption
 The user will frequently follow this workflow before asking questions or requesting changes:

@@ -52,8 +52,9 @@ class Initiative(Base):
 
     # D. KPI alignment and metric chain
     immediate_kpi_key = Column(String(100), nullable=True)
-    metric_chain_json = Column(JSON, nullable=True)
-    kpi_contribution_json = Column(JSON, nullable=True)
+    kpi_contribution_json = Column(JSON, nullable=True)  # Active (PM can override)
+    kpi_contribution_computed_json = Column(JSON, nullable=True)  # System-computed (always updated)
+    kpi_contribution_source = Column(String(50), nullable=True)  # "computed" or "pm_override"
 
     # E. Framework-specific scoring parameters (unified naming: <framework>_<param>)
     # RICE framework parameters
@@ -96,6 +97,7 @@ class Initiative(Base):
     candidate_period_key = Column(String(50), nullable=True, index=True)
 
     # I. Lifecycle & workflow
+    status = Column(String(50), nullable=False, default="active")  # Database column
     lifecycle_status = Column(String(50), nullable=False, default="new")
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
@@ -133,13 +135,13 @@ class Initiative(Base):
 
     # J. LLM & math-model hooks
     use_math_model = Column(Boolean, nullable=False, default=False)
-    math_model_id = Column(Integer, ForeignKey("initiative_math_models.id"), nullable=True)
 
-    # Relationships
-    math_model = relationship(
+    # Relationships (1:N - multiple math models per initiative)
+    math_models = relationship(
         "InitiativeMathModel",
         back_populates="initiative",
-        uselist=False,
+        uselist=True,
+        cascade="all, delete-orphan",
     )
     roadmap_entries = relationship("RoadmapEntry", back_populates="initiative")
     scores = relationship("InitiativeScore", back_populates="initiative")

@@ -51,6 +51,7 @@ class KPIContributionsSyncService:
 
         allowed_kpis = self._load_allowed_kpis(db)
         upserts = 0
+        unlocked = 0
         skipped_no_initiative = 0
         skipped_invalid_json = 0
         skipped_disallowed_kpi = 0
@@ -69,7 +70,24 @@ class KPIContributionsSyncService:
 
             contrib = self._normalize_contribution(row.kpi_contribution_json)
             if contrib is None:
-                skipped_empty += 1
+                # FIX #2: Treat empty/cleared kpi_contribution_json as explicit unlock
+                # PM cleared the field → unlock override, let system take control again
+                current_source = getattr(initiative, "kpi_contribution_source", None)
+                if current_source == "pm_override":
+                    initiative.kpi_contribution_json = None  # type: ignore[assignment]
+                    initiative.kpi_contribution_source = None  # type: ignore[assignment]
+                    initiative.updated_source = token(Provenance.FLOW5_SYNC_KPI_CONTRIBUTIONS)  # type: ignore[assignment]
+                    unlocked += 1
+                    batch_count += 1
+                    if batch_count >= commit_every:
+                        db.commit()
+                        batch_count = 0
+                    logger.info(
+                        "kpi_contrib_sync.unlock_override",
+                        extra={"initiative_key": row.initiative_key},
+                    )
+                else:
+                    skipped_empty += 1
                 continue
 
             invalid_keys = [k for k in contrib.keys() if k not in allowed_kpis]
@@ -90,6 +108,7 @@ class KPIContributionsSyncService:
                 continue
 
             initiative.kpi_contribution_json = contrib  # type: ignore[assignment]
+            initiative.kpi_contribution_source = "pm_override"  # type: ignore[attr-defined]
             initiative.updated_source = token(Provenance.FLOW5_SYNC_KPI_CONTRIBUTIONS)  # type: ignore[assignment]
 
             upserts += 1
@@ -104,6 +123,7 @@ class KPIContributionsSyncService:
         return {
             "row_count": len(rows),
             "upserts": upserts,
+            "unlocked": unlocked,
             "skipped_no_initiative": skipped_no_initiative,
             "skipped_invalid_json": skipped_invalid_json,
             "skipped_disallowed_kpi": skipped_disallowed_kpi,

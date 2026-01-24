@@ -136,11 +136,10 @@ class Initiative(Base):
 
     # J. LLM & math-model hooks
     use_math_model = Column(Boolean, nullable=False, default=False)
-    math_model_id = Column(Integer, ForeignKey("initiative_math_models.id"), nullable=True)
     llm_notes = Column(Text, nullable=True)
 
     # Relationships
-    math_model = relationship("InitiativeMathModel", back_populates="initiative", uselist=False)
+    math_models = relationship("InitiativeMathModel", back_populates="initiative", cascade="all, delete-orphan")
     roadmap_entries = relationship("RoadmapEntry", back_populates="initiative")
     # optional: scoring history
     scores = relationship("InitiativeScore", back_populates="initiative")
@@ -467,7 +466,6 @@ class InitiativeRead(InitiativeBase):
     created_at: datetime
     updated_at: datetime
     created_by_user_id: Optional[str] = None
-    math_model_id: Optional[int] = None
 
     model_config = {
         "from_attributes": True  # Pydantic v2; for v1 use `Config.orm_mode = True`

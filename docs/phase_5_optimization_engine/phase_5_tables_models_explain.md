@@ -75,10 +75,11 @@ Here’s the “clean graph” you now have, with relationships:
 
 ### Scoring layer
 
-**InitiativeMathModel** (0 or 1 per Initiative)
+**InitiativeMathModel** (0..N per Initiative)
 
-* one-to-one via `Initiative.math_model_id`
-* holds formula + metadata + approval
+* one-to-many via `Initiative.math_models` relationship
+* each model targets a specific KPI via `target_kpi_key`
+* holds formula + metadata + approval + metric_chain
 
 **InitiativeParam** (0..N per Initiative)
 

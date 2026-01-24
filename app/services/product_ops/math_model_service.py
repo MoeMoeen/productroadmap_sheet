@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import List, Optional
 
@@ -12,6 +11,7 @@ from app.db.models.initiative import Initiative
 from app.db.models.scoring import InitiativeMathModel
 from app.sheets.client import SheetsClient
 from app.sheets.math_models_reader import MathModelsReader, MathModelRowPair
+from app.services.product_ops.metric_chain_parser import parse_metric_chain
 from app.utils.provenance import Provenance, token
 
 logger = logging.getLogger(__name__)
@@ -95,12 +95,23 @@ class MathModelSyncService:
                 )
                 continue
 
-            # Get or create math model
-            math_model: InitiativeMathModel | None = initiative.math_model
+            # Determine composite key: use target_kpi_key as identifier (or model_name if target_kpi not present)
+            model_identifier = getattr(mm, "target_kpi_key", None) or getattr(mm, "model_name", None) or "default"
+            
+            # Find existing model by initiative_id + identifier
+            math_model: InitiativeMathModel | None = None
+            for existing_model in initiative.math_models:
+                existing_key = getattr(existing_model, "target_kpi_key", None) or getattr(existing_model, "model_name", None) or "default"
+                if existing_key == model_identifier:
+                    math_model = existing_model
+                    break
+            
             created_now = False
             if not math_model:
                 math_model = InitiativeMathModel()
+                math_model.initiative_id = initiative.id
                 db.add(math_model)
+                initiative.math_models.append(math_model)
                 created_now = True
 
             # Map fields
@@ -117,28 +128,46 @@ class MathModelSyncService:
             if mm.approved_by_user is not None:
                 setattr(math_model, "approved_by_user", bool(mm.approved_by_user))
 
-            # Persist KPI alignment + metric chain on Initiative (JSON column). Accept text or JSON string.
+            # Persist target_kpi_key and is_primary on math model
+            target_kpi = getattr(mm, "target_kpi_key", None)
+            if target_kpi:
+                setattr(math_model, "target_kpi_key", target_kpi)
+            is_primary = getattr(mm, "is_primary", None)
+            if is_primary is not None:
+                setattr(math_model, "is_primary", bool(is_primary))
+            computed = getattr(mm, "computed_score", None)
+            if computed is not None:
+                setattr(math_model, "computed_score", float(computed))
+
+            # Persist immediate_kpi_key on Initiative (for backwards compatibility)
             if getattr(mm, "immediate_kpi_key", None):
                 setattr(initiative, "immediate_kpi_key", mm.immediate_kpi_key)
+
+            # Parse and persist metric chain on math model (not initiative)
             if getattr(mm, "metric_chain_text", None):
-                metric_chain_val = None
-                if isinstance(mm.metric_chain_text, (dict, list)):
-                    metric_chain_val = mm.metric_chain_text
-                elif isinstance(mm.metric_chain_text, str):
-                    try:
-                        metric_chain_val = json.loads(mm.metric_chain_text)
-                    except Exception:
-                        metric_chain_val = mm.metric_chain_text  # store raw text to avoid data loss
-                setattr(initiative, "metric_chain_json", metric_chain_val)
+                # Save raw text
                 setattr(math_model, "metric_chain_text", mm.metric_chain_text)
+                # Parse to JSON using metric_chain_parser
+                try:
+                    parsed_chain = parse_metric_chain(mm.metric_chain_text)
+                    setattr(math_model, "metric_chain_json", parsed_chain)
+                except Exception as e:
+                    logger.warning(
+                        "math_model.sync.metric_chain_parse_failed",
+                        extra={
+                            "initiative_key": mm.initiative_key,
+                            "metric_chain_text": mm.metric_chain_text,
+                            "error": str(e),
+                        },
+                    )
+                    # Store as raw text in JSON for data preservation
+                    setattr(math_model, "metric_chain_json", {"raw": mm.metric_chain_text, "parse_error": str(e)})
 
             # Save LLM notes on initiative if provided
             if getattr(mm, "llm_notes", None):
                 setattr(initiative, "llm_notes", mm.llm_notes)
 
-            # Link initiative to model
-            db.flush()  # assign id if new
-            initiative.math_model = math_model
+            # Update provenance
             setattr(initiative, "updated_source", token(Provenance.FLOW4_SYNC_MATHMODELS))
 
             updated += 1

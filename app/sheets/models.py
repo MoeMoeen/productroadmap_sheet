@@ -64,6 +64,19 @@ KPI_CONTRIBUTIONS_HEADER_MAP = {
         "contributions",
         "Contributions",
     ],
+    "kpi_contribution_computed_json": [
+        "kpi_contribution_computed_json",
+        "KPI Contribution Computed JSON",
+        "computed_contributions",
+        "Computed Contributions",
+        "system_computed",
+    ],
+    "kpi_contribution_source": [
+        "kpi_contribution_source",
+        "KPI Contribution Source",
+        "contribution_source",
+        "Source",
+    ],
     "notes": ["notes", "Notes"],
 
     # system / read-only
@@ -301,16 +314,19 @@ OPT_GAPS_ALERTS_OUTPUT_FIELDS: List[str] = [
 # ProductOps MathModels tab columns and header aliases
 MATHMODELS_HEADER_MAP = {
     "initiative_key": ["initiative_key"],
+    "model_name": ["model_name", "Model Name"],
+    "target_kpi_key": ["target_kpi_key", "Target KPI Key", "target_kpi", "Target KPI"],
     "immediate_kpi_key": ["immediate_kpi_key", "Immediate KPI Key", "immediate kpi key"],
     "metric_chain_text": ["metric_chain_text", "Metric Chain", "metric chain"],
     "formula_text": ["formula_text", "formula_text_final", "formula"],
     "assumptions_text": ["assumptions_text", "assumptions", "notes"],
+    "is_primary": ["is_primary", "Is Primary", "primary", "Primary"],
+    "computed_score": ["computed_score", "Computed Score", "score", "Score"],
     "suggested_by_llm": ["suggested_by_llm", "llm_suggested"],
     "approved_by_user": ["approved_by_user", "approved"],
     "llm_suggested_formula_text": ["llm_suggested_formula_text", "formula_suggestion"],
     "llm_suggested_metric_chain_text": ["llm_suggested_metric_chain_text", "metric_chain_llm_suggestion", "LLM Suggested Metric Chain"],
     "llm_notes": ["llm_notes", "assumptions_suggestion", "llm_assumptions"],
-    "model_name": ["model_name"],
     "model_description_free_text": ["model_description_free_text", "model_description", "description"],
     "model_prompt_to_llm": ["model_prompt_to_llm", "prompt_to_llm", "llm_prompt"],
     # Metadata/provenance (optional columns)
@@ -520,6 +536,7 @@ class MathModelRow(BaseModel):
     Columns:
     - initiative_key (str): Initiative key (PM-friendly identifier)
     - model_name (str): PM-provided name for the model
+    - target_kpi_key (str): Which KPI this model targets (for 1:N multi-model aggregation)
     - model_description_free_text (str): PM-authored description
     - model_prompt_to_llm (str): PM extra prompt
     - immediate_kpi_key (str): KPI anchor
@@ -527,6 +544,8 @@ class MathModelRow(BaseModel):
     - llm_suggested_metric_chain_text (str): LLM suggestion for metric chain
     - formula_text (str): The approved/final formula definition
     - approved_by_user (bool): Has user approved?
+    - is_primary (bool): Is this the primary/representative model?
+    - computed_score (float): Calculated impact score for this specific model
     - llm_suggested_formula_text (str): LLM suggestion for formula (separate column)
     - llm_notes (str): LLM notes column
     - assumptions_text (str): Assumptions/notes (PM-owned)
@@ -536,13 +555,16 @@ class MathModelRow(BaseModel):
     model_config = ConfigDict(extra="ignore")
     
     initiative_key: str
+    model_name: Optional[str] = None
+    target_kpi_key: Optional[str] = None
     formula_text: Optional[str] = None
     assumptions_text: Optional[str] = None
+    is_primary: Optional[bool] = None
+    computed_score: Optional[float] = None
     suggested_by_llm: Optional[bool] = None
     approved_by_user: Optional[bool] = None
     llm_suggested_formula_text: Optional[str] = None
     llm_notes: Optional[str] = None
-    model_name: Optional[str] = None
     model_description_free_text: Optional[str] = None
     model_prompt_to_llm: Optional[str] = None
     immediate_kpi_key: Optional[str] = None

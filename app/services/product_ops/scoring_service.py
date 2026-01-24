@@ -14,6 +14,7 @@ from app.db.models.initiative import Initiative
 from app.db.models.scoring import InitiativeParam
 from app.db.models.scoring import InitiativeScore
 from app.services.product_ops.scoring import ScoringFramework, ScoreInputs, get_engine
+from app.services.product_ops.kpi_contribution_adapter import update_initiative_contributions
 from app.utils.provenance import Provenance, token
 
 logger = logging.getLogger("app.services.scoring")
@@ -92,6 +93,30 @@ class ScoringService:
             initiative.math_overall_score = result.overall_score  # type: ignore[assignment]
             if key_str:
                 self.latest_math_warnings[key_str] = list(result.warnings)
+            
+            # Score each individual math model and populate computed_score
+            self._score_individual_math_models(initiative)
+            
+            # Automatically compute KPI contributions from math models
+            try:
+                contrib_result = update_initiative_contributions(self.db, initiative, commit=False)
+                logger.debug(
+                    "scoring.kpi_contributions_updated",
+                    extra={
+                        "initiative_key": initiative.initiative_key,
+                        "computed": contrib_result.get("computed"),
+                        "source": contrib_result.get("source"),
+                        "invalid_kpis": contrib_result.get("invalid_kpis"),
+                    },
+                )
+            except Exception as e:
+                logger.warning(
+                    "scoring.kpi_contributions_update_failed",
+                    extra={
+                        "initiative_key": initiative.initiative_key,
+                        "error": str(e),
+                    },
+                )
 
         # If activating, update active fields and provenance flags
         if activate:
@@ -158,90 +183,77 @@ class ScoringService:
 
         return history_row
 
-    def _compute_framework_scores_only(
-        self,
-        initiative: Initiative,
-        framework: ScoringFramework,
-        enable_history: bool,
-    ) -> Optional[InitiativeScore]:
-        """Compute per-framework scores without touching active fields.
-
-        This is used by Flow 3 to populate the per-framework score columns
-        (rice_* and wsjf_*). It intentionally avoids mutating the active
-        scoring fields so it cannot override the framework chosen elsewhere
-        (e.g., Product Ops decision or Flow 2 run).
+    def _score_individual_math_models(self, initiative: Initiative) -> None:
         """
-
-        inputs = self._build_score_inputs(initiative, framework)
-        engine = get_engine(framework)
-        result = engine.compute(inputs)
-
-        now = datetime.now(timezone.utc)
-        initiative.updated_source = token(Provenance.FLOW3_COMPUTE_ALL_FRAMEWORKS)  # type: ignore[assignment]
-        initiative.scoring_updated_source = token(Provenance.FLOW3_COMPUTE_ALL_FRAMEWORKS)  # type: ignore[assignment]
-        initiative.scoring_updated_at = now  # type: ignore[assignment]
-
-        if framework == ScoringFramework.RICE:
-            initiative.rice_value_score = result.value_score  # type: ignore[assignment]
-            initiative.rice_effort_score = result.effort_score  # type: ignore[assignment]
-            initiative.rice_overall_score = result.overall_score  # type: ignore[assignment]
-        elif framework == ScoringFramework.WSJF:
-            initiative.wsjf_value_score = result.value_score  # type: ignore[assignment]
-            initiative.wsjf_effort_score = result.effort_score  # type: ignore[assignment]
-            initiative.wsjf_overall_score = result.overall_score  # type: ignore[assignment]
-        elif framework == ScoringFramework.MATH_MODEL:
-            initiative.math_value_score = result.value_score  # type: ignore[assignment]
-            initiative.math_effort_score = result.effort_score  # type: ignore[assignment]
-            initiative.math_overall_score = result.overall_score  # type: ignore[assignment]
-
-        for warn in result.warnings:
-            logger.warning(
-                "scoring.warning",
-                extra={
-                    "initiative_key": initiative.initiative_key,
-                    "framework": framework.value,
-                    "warning": warn,
-                },
+        Score each math model individually and populate computed_score.
+        
+        This is called after MATH_MODEL framework scoring to compute per-model scores.
+        Each model's computed_score represents its impact value for the target KPI.
+        """
+        from app.services.product_ops.scoring.engines.math_model import MathModelScoringEngine
+        
+        if not initiative.math_models:
+            return
+        
+        engine = MathModelScoringEngine()
+        
+        # Get initiative-level params for fallback effort
+        effort_fallback = getattr(initiative, "effort_engineering_days", None)
+        
+        for model in initiative.math_models:
+            # Skip if no formula
+            if not model.formula_text:
+                logger.debug(
+                    "scoring.individual_model.no_formula",
+                    extra={
+                        "initiative_key": initiative.initiative_key,
+                        "model_id": model.id,
+                    },
+                )
+                continue
+            
+            # Build params environment from InitiativeParam table
+            params_env = {}
+            if hasattr(initiative, "params") and initiative.params:
+                for param in initiative.params:
+                    if param.framework == "MATH_MODEL" and param.value is not None:
+                        params_env[param.param_name] = param.value
+            
+            # Also check model.parameters_json if exists
+            if model.parameters_json:
+                params_env.update(model.parameters_json)
+            
+            # Score this individual model
+            result = engine.score_single_model(
+                formula_text=model.formula_text,
+                params_env=params_env,
+                approved_by_user=model.approved_by_user,
+                effort_fallback=effort_fallback,
             )
-
-        # Ensure DB state reflects attribute updates for callers that refresh without commit
-        try:
-            self.db.flush()
-        except Exception:
-            logger.debug("scoring.flush_failed_per_framework")
-
-        history_row: Optional[InitiativeScore] = None
-        if enable_history:
-            llm_suggested = False
-            approved_by_user = False
-            if framework == ScoringFramework.MATH_MODEL:
-                llm_suggested = bool(inputs.extra.get("math_model_llm_suggested", False))
-                approved_by_user = bool(inputs.extra.get("math_model_approved", False))
-
-            history_row = InitiativeScore(
-                initiative_id=initiative.id,
-                framework_name=framework.value,
-                value_score=result.value_score,
-                effort_score=result.effort_score,
-                overall_score=result.overall_score,
-                inputs_json=inputs.model_dump(),
-                components_json=result.components,
-                warnings_json=result.warnings,
-                llm_suggested=llm_suggested,
-                approved_by_user=approved_by_user,
-            )
-            self.db.add(history_row)
-
-        logger.debug(
-            "scoring.computed_per_framework",
-            extra={
-                "initiative_key": initiative.initiative_key,
-                "framework": framework.value,
-                "overall_score": result.overall_score,
-            },
-        )
-
-        return history_row
+            
+            # Store computed_score (the value score represents impact)
+            if result.value_score is not None:
+                model.computed_score = result.value_score
+                logger.debug(
+                    "scoring.individual_model.computed",
+                    extra={
+                        "initiative_key": initiative.initiative_key,
+                        "model_id": model.id,
+                        "target_kpi": model.target_kpi_key,
+                        "computed_score": result.value_score,
+                    },
+                )
+            else:
+                # Clear computed_score if scoring failed
+                model.computed_score = None
+                logger.warning(
+                    "scoring.individual_model.failed",
+                    extra={
+                        "initiative_key": initiative.initiative_key,
+                        "model_id": model.id,
+                        "warnings": result.warnings,
+                    },
+                )
 
     def score_initiative_all_frameworks(
         self,
@@ -266,10 +278,12 @@ class ScoringService:
 
         for framework in ScoringFramework:
             try:
-                self._compute_framework_scores_only(
+                # Use score_initiative with activate=False instead of duplicated _compute_framework_scores_only
+                self.score_initiative(
                     initiative,
                     framework,
                     enable_history=enable_history,
+                    activate=False,  # Never activate in multi-framework scoring
                 )
             except Exception:
                 logger.exception(
@@ -561,10 +575,12 @@ class ScoringService:
 
         history_row: Optional[InitiativeScore] = None
         if need_compute:
-            history_row = self._compute_framework_scores_only(
+            # Compute missing per-framework scores (without activating)
+            history_row = self.score_initiative(
                 initiative,
                 framework,
                 enable_history=bool(enable_history),
+                activate=False,  # Don't activate yet - we'll do it separately below
             )
 
         # Copy per-framework into active fields
@@ -802,9 +818,29 @@ class ScoringService:
         )
 
     def _build_math_model_inputs(self, initiative: Initiative) -> ScoreInputs:
-        """Build Math Model inputs using approved parameters and stored formula."""
+        """Build Math Model inputs using approved parameters and representative model.
+        
+        With multiple models per initiative, we select the representative model:
+        - is_primary=True if exists
+        - else first model by target_kpi_key sort
+        - else first model
+        
+        The initiative-level math_* scores represent the primary/representative model.
+        Individual model scores are in model.computed_score.
+        """
 
-        model = getattr(initiative, "math_model", None)
+        # Select representative model
+        model = None
+        if hasattr(initiative, "math_models") and initiative.math_models:
+            # Try to find primary model
+            primary_models = [m for m in initiative.math_models if m.is_primary]
+            if primary_models:
+                model = primary_models[0]
+            else:
+                # Use first model sorted by target_kpi_key
+                sorted_models = sorted(initiative.math_models, key=lambda m: m.target_kpi_key or "")
+                model = sorted_models[0] if sorted_models else None
+        
         params_env: Dict[str, float] = {}
         for p in getattr(initiative, "params", []) or []:
             if not isinstance(p, InitiativeParam):
@@ -824,10 +860,10 @@ class ScoringService:
 
         extra = {
             "use_math_model": bool(getattr(initiative, "use_math_model", False)),
-            "formula_text": getattr(model, "formula_text", None),
-            "math_model_approved": bool(getattr(model, "approved_by_user", False)),
-            "math_model_llm_suggested": bool(getattr(model, "suggested_by_llm", False)),
-            "math_model_assumptions": getattr(model, "assumptions_text", None),
+            "formula_text": getattr(model, "formula_text", None) if model else None,
+            "math_model_approved": bool(getattr(model, "approved_by_user", False)) if model else False,
+            "math_model_llm_suggested": bool(getattr(model, "suggested_by_llm", False)) if model else False,
+            "math_model_assumptions": getattr(model, "assumptions_text", None) if model else None,
             "params_env": params_env,
             "effort_engineering_days": getattr(initiative, "effort_engineering_days", None),
         }

@@ -22,6 +22,7 @@ class Provenance(str, Enum):
     FLOW3_PRODUCTOPSSHEET_READ_INPUTS = "flow3.productopssheet_read_inputs"
     FLOW3_COMPUTE_ALL_FRAMEWORKS = "flow3.compute_all_frameworks"
     FLOW3_PRODUCTOPSSHEET_WRITE_SCORES = "flow3.productopssheet_write_scores"
+    FLOW3_PRODUCTOPSSHEET_WRITE_KPI_CONTRIBUTIONS = "flow3.productopssheet_write_kpi_contributions"
 
     # Flow 4: Math Models + Params
     FLOW4_SYNC_MATHMODELS = "flow4.sync_mathmodels"

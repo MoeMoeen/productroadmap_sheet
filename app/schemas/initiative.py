@@ -139,6 +139,5 @@ class InitiativeRead(InitiativeBase):
     created_at: datetime
     updated_at: datetime
     created_by_user_id: Optional[str] = None
-    math_model_id: Optional[int] = None
 
     model_config = {"from_attributes": True}
