@@ -948,11 +948,22 @@ class OrtoolsCpSatSolverAdapter:
         }
         out_status = status_map.get(status, "unknown")
 
+        # Extract objective value if solution found
+        objective_value_raw = 0
+        objective_value = 0.0
+        if out_status in {"optimal", "feasible"}:
+            try:
+                objective_value_raw = int(solver.ObjectiveValue())
+                objective_value = float(objective_value_raw) / KPI_SCALE
+            except Exception as e:
+                logger.warning(f"Could not extract objective value: {e}")
+
         logger.info(
             "CP-SAT solver completed",
             extra={
                 "status": out_status,
                 "wall_time_seconds": solver.WallTime(),
+                "objective_value": objective_value,
             },
         )
 
@@ -1001,6 +1012,8 @@ class OrtoolsCpSatSolverAdapter:
             "kpi_scale": KPI_SCALE,
             "caps_dimensions": list((problem.constraint_set.caps or {}).keys()),
             "solver_wall_time_seconds": solver.WallTime(),
+            "objective_value_raw": objective_value_raw,
+            "objective_value": objective_value,
         }
         
         # Merge objective-specific diagnostics

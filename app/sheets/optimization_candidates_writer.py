@@ -177,9 +177,9 @@ def populate_candidates_from_db(
             exclusion_pairs_map.setdefault(key_b, []).append(key_a)
     
     # Synergies: List[List[str]] (e.g., [["INIT_A", "INIT_B"], ...])
-    synergies_json_val = getattr(constraint_set, "synergies_json", None)
-    synergies_json = synergies_json_val if isinstance(synergies_json_val, list) else []
-    for pair in synergies_json:
+    synergy_bonuses_json_val = getattr(constraint_set, "synergy_bonuses_json", None)
+    synergy_bonuses_json = synergy_bonuses_json_val if isinstance(synergy_bonuses_json_val, list) else []
+    for pair in synergy_bonuses_json:
         if isinstance(pair, list) and len(pair) == 2:
             key_a, key_b = str(pair[0]), str(pair[1])
             synergy_map.setdefault(key_a, []).append(key_b)
@@ -306,8 +306,8 @@ def populate_candidates_from_db(
         return {"populated_count": 0, "skipped_no_key": skipped_no_key, "failed_count": 0}
     
     try:
-        # Get header row ONCE to map column indices
-        header_values = client.get_values(spreadsheet_id, f"{tab_name}!A1:Z1")
+        # Get header row ONCE to map column indices (read entire row 1 dynamically)
+        header_values = client.get_values(spreadsheet_id, f"{tab_name}!1:1")
         header_row = header_values[0] if header_values else []
         
         if not header_row:
@@ -334,12 +334,14 @@ def populate_candidates_from_db(
                     cell_range = f"{tab_name}!{col_letter}{row_number}"
                     batch_data.append((cell_range, [[col_value]]))
         
-        # Execute batch update (sheets API allows batchUpdate with multiple ranges)
+        # Execute batch update using Sheets API batch_update (avoids quota issues)
         if batch_data:
-            # Optimize: group consecutive cells in same row into range updates
-            # For simplicity now: use client.update_values per cell (can be optimized to batch API)
-            for cell_range, values in batch_data:
-                client.update_values(spreadsheet_id, cell_range, values)
+            # Build batch update request body
+            batch_update_data = [
+                {"range": cell_range, "values": values}
+                for cell_range, values in batch_data
+            ]
+            client.batch_update(spreadsheet_id, batch_update_data)
         
         logger.info(f"Successfully populated {populated_count} candidates to sheet (batch writes: {len(batch_data)})")
         

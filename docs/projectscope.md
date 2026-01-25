@@ -269,24 +269,27 @@ Phase 5 foundational work has begun:
 * **Constraint Compiler**: Pure compilation service (validates, normalizes, buckets, deduplicates sheet rows into JSON constraint set)
 * **Documentation**: Complete JSON shapes, PM guidance, glossary, implementation roadmap, status check-in
 
-**Not Started (Architectural but Non-Blocking):**
+**ProductOps Config (Complete - Jan 22-25, 2026):**
 * ~~ProductOps Metrics_Config tab (KPI universe: keys, names, levels, units)~~ ✅ **COMPLETE (Jan 22, 2026)**
 * ~~ProductOps KPI_Contributions tab (kpi_contribution_json entry surface)~~ ✅ **COMPLETE (Jan 22, 2026)**
-* ~~OrganizationMetricsConfig DB model~~ ✅ **COMPLETE (Jan 22, 2026)**
+* ~~OrganizationMetricsConfig DB model~~ ✅ **COMPLETE (Jan 25, 2026)**
   - Migration r20260122_metric_chain moved metric_chain from Initiative to InitiativeMathModel
   - Migration r5ba3359a91c0_rename_level_to_kpi_level fixed column name mismatch (level → kpi_level)
+  - Migration 20260125_add_metrics_config_columns added description, is_active (Boolean, default=true), notes columns
   - MetricsConfigSyncService: Sheet → DB sync with validation (only north_star/strategic, exactly one active north_star)
   - KPIContributionsSyncService: Sheet → DB sync with pm_override protection
   - KPI contributions now auto-computed from math model scores via kpi_contribution_adapter
   - PM can override via KPI_Contributions tab → sets kpi_contribution_source = "pm_override"
 
-**Next: Optimization Engine**
-* Solver adapter interface design (OptimizationProblem, SolverAdapter protocol)
-* Linear solver integration (pulp or ortools)
-* Portfolio selection algorithm with capacity + dependency constraints
-* Multi-objective scenario support
-* Results publishing to sheets
-* Sheet-native execution via `pm.run_optimization` action
+**Optimization Engine (In Progress - Jan 2026):**
+* ~~Solver adapter interface design (OptimizationProblem, SolverAdapter protocol)~~ ✅ **COMPLETE**
+* ~~Linear solver integration (OR-Tools CP-SAT)~~ ✅ **COMPLETE**
+* ~~Portfolio selection algorithm with capacity + dependency constraints~~ ✅ **COMPLETE (Steps 1-7)**
+* ~~Step 8.1 north_star objective mode~~ ✅ **COMPLETE (Jan 25, 2026)**
+* ~~Step 8.2 weighted_kpis objective mode~~ ✅ **COMPLETE (Jan 25, 2026)**
+* Step 8.3 lexicographic objective mode (TODO)
+* Results publishing to sheets (TODO)
+* Sheet-native execution via `pm.run_optimization` action (TODO)
 
 All optimization runs will be triggered via Phase 4.5 control plane menu → `pm.run_optimization`.
 
@@ -790,18 +793,28 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
      - Ready for production use via sheet UI
 
 **Phase 5 – Portfolio Optimization & Roadmap Generation** *(IN PROGRESS - JAN 2026)*
-   * **Status: SOLVER STEPS 1-7 COMPLETE** – OR-Tools CP-SAT adapter implementing capacity-constrained optimization with governance.
+   * **Status: SOLVER STEPS 1-8.2 COMPLETE** – OR-Tools CP-SAT adapter implementing capacity-constrained optimization with governance and production-grade objective modes.
    * **Completed Components (Jan 2026)**:
      - **Phase 5.0 (Cleanup)**: DB cleanup migrations, schema alignment
      - **Phase 5.2 (Optimization Center Pipeline)**: Complete ✅
-     - **Phase 5.3 (Solver Implementation)**: Steps 1-7 Complete ✅
+     - **Phase 5.3 (Solver Implementation)**: Steps 1-8.2 Complete ✅
        * Step 1-2: Binary selection variables + capacity caps (engineering tokens per dimension slice)
        * Step 3: Exclusions (single initiative bans + pairwise mutual exclusions)
        * Step 4: Prerequisites (x_dep ≤ x_req dependency constraints with Dict[str, List[str]] structure)
        * Step 5: Bundles (all-or-nothing groupings)
        * Step 6: Capacity floors (minimum token allocations per dimension slice)
        * Step 7: Target floors (minimum KPI contribution requirements per dimension/KPI)
-       * Step 8: Objective modes (TODO: north_star, weighted_kpis, lexicographic)
+       * Step 8.1: North star objective mode ✅ (Jan 25, 2026)
+         - Builder resolves active north_star KPI from OrganizationMetricsConfig (kpi_level="north_star", is_active=true)
+         - Requires exactly one active north_star KPI (validation with actionable errors)
+         - Maximizes Σ(contrib_i[ns_key] * x_i) scaled by KPI_SCALE=1,000,000
+         - Comprehensive diagnostics: objective_mode, north_star_kpi_key, contributing_candidates, missing_contrib
+       * Step 8.2: Weighted KPIs objective mode ✅ (Jan 25, 2026)
+         - Builder validation: weighted KPI keys must exist, be active, and be north_star/strategic level only
+         - Enhanced normalization: prefers targets["all"]["all"][kpi]["value"], else max aggregation across all dimensional targets, else fallback to 1.0
+         - Maximizes Σ_i (Σ_k w_k * contrib_i,k / scale_k) * x_i scaled by KPI_SCALE
+         - Comprehensive diagnostics: weights_sum, kpi_scale_map, scale_source_map, scale_targets_count, missing_target_scales, nonzero_coeff_candidates
+       * Step 8.3: Lexicographic objective mode (TODO)
        * Feasibility checker: Pre-solver validation (cycle detection, reference validation, capacity checks)
        - OptimizationScenario, OptimizationConstraintSet, OptimizationRun DB models
        - ConstraintSetCompiled Pydantic schema with discriminated union constraint types (9 types)
@@ -811,23 +824,20 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
        - Multi-dimensional targets support (country, product, cross-sectional, global)
        - Composite key scoping in writers (prevents row collision)
        - Documentation complete: shapes, PM guidance, glossary, status docs
-   * **Not Started (Phase 5.1 - ProductOps Config Tabs)**:
-     - Metrics_Config tab (KPI universe definition: keys, names, levels, units)
-     - KPI_Contributions tab (kpi_contribution_json entry surface)
-     - OrganizationMetricsConfig DB model
-     - These are architectural prerequisites but not blocking solver work
    * **Remaining (Phase 5.3+ - Optimization Engine)**:
-     - Solver adapter interface design (OptimizationProblem schema, SolverAdapter protocol)
-     - Linear solver integration (pulp, ortools)
-     - Multi-objective weighted-sum scenarios
-     - Capacity-constrained portfolio selection
+     - Step 8.3: Lexicographic objective mode (multi-stage solving with strict KPI prioritization)
+     - Results publishing to Optimization Center Results tab
      - Roadmap sheet generation with selected initiatives
      - Sheet-native execution integration (pm.run_optimization action)
+     - Production testing and validation across all objective modes
    * **Key Design Decisions**:
      - Prerequisites as dict provides O(1) lookup, semantic clarity, self-documenting structure
      - Targets use nested 3-level structure `{dimension: {dimension_key: {kpi_key: {}}}}` for consistency
      - Constraints apply to ALL optimization modes (not just lexicographic)
      - "all"."all" nesting maintains structural consistency (no special cases needed)
+     - weighted_kpis normalization: 3-tier fallback (global all/all → max across dimensions → 1.0) with full diagnostics
+     - Builder-side validation: All KPI resolution and constraint validation before solver invocation
+     - Production-grade diagnostics: All objective modes persist comprehensive metadata to result_json
 
 **Phase 6 – LLM Enrichment for General Operations**
    * Initiative summaries and classification
@@ -1617,7 +1627,7 @@ Sheet ID: unique Google Sheets document identifier (in URL).
 Tab name: worksheet title inside that document (e.g. “UK_Intake”, “Central_Backlog”, “Params”). Backend uses (sheet_id, tab_name) to trace original row locations.
 
 ## Live Sheets Registry
-*Last synced: 2026-01-24 19:25 UTC*
+*Last synced: 2026-01-25 20:02 UTC*
 
 This section is auto-generated by `scripts/sync_sheets_registry.py`.
 First 3 rows per tab: Row 1 = main header, Rows 2-3 = metadata/comments.
@@ -2560,7 +2570,7 @@ entry surface is ProductOps/KPI_contributions`
   - **Column F**: `floor_or_goal`
     - Row 1 (Header): `floor_or_goal`
     - Row 2 (Meta1): `OptimizationConstraintSet.targets_json`
-    - Row 3 (Meta2): `PM/Analytics input → DB`
+    - Row 3 (Meta2): `PM input → DB`
 
   - **Column G**: `target_value`
     - Row 1 (Header): `target_value`
@@ -2589,7 +2599,7 @@ entry surface is ProductOps/KPI_contributions`
 
 
 #### Tab: `Runs` (Runs)
-  - **Total Columns**: 14
+  - **Total Columns**: 15
 
   - **Column A**: `run_id`
     - Row 1 (Header): `run_id`
@@ -2626,104 +2636,30 @@ entry surface is ProductOps/KPI_contributions`
     - Row 2 (Meta1): `(derived)`
     - Row 3 (Meta2): `Backend writes → Sheet`
 
-  - **Column H**: `total_objective`
-    - Row 1 (Header): `total_objective`
-    - Row 2 (Meta1): `(derived)`
-    - Row 3 (Meta2): `Backend writes → Sheet`
-
-  - **Column I**: `capacity_used`
+  - **Column H**: `capacity_used`
     - Row 1 (Header): `capacity_used`
     - Row 2 (Meta1): `(derived)`
     - Row 3 (Meta2): `Backend writes → Sheet`
 
-  - **Column J**: `gap_summary`
+  - **Column I**: `total_objective_raw`
+    - Row 1 (Header): `total_objective_raw`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column J**: `total_objective`
+    - Row 1 (Header): `total_objective`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column K**: `gap_summary`
     - Row 1 (Header): `gap_summary`
     - Row 2 (Meta1): `(derived)`
     - Row 3 (Meta2): `Backend writes → Sheet`
 
-  - **Column K**: `results_tab_ref`
+  - **Column L**: `results_tab_ref`
     - Row 1 (Header): `results_tab_ref`
     - Row 2 (Meta1): `(derived)`
     - Row 3 (Meta2): `Backend writes → Sheet`
-
-  - **Column L**: `run_status`
-    - Row 1 (Header): `run_status`
-    - Row 2 (Meta1): `NONE`
-    - Row 3 (Meta2): `Backend writes → Sheet (status)`
-
-  - **Column M**: `updated_source`
-    - Row 1 (Header): `updated_source`
-    - Row 2 (Meta1): `NONE`
-    - Row 3 (Meta2): `Backend writes → Sheet (provenance)`
-
-  - **Column N**: `updated_at`
-    - Row 1 (Header): `updated_at`
-    - Row 2 (Meta1): `NONE`
-    - Row 3 (Meta2): `Backend writes → Sheet (timestamp)`
-
-
-#### Tab: `Results` (Results)
-  - **Total Columns**: 15
-
-  - **Column A**: `initiative_key`
-    - Row 1 (Header): `initiative_key`
-    - Row 2 (Meta1): `PortfolioItem.(initiative_key)`
-    - Row 3 (Meta2): `Backend writes → Sheet`
-
-  - **Column B**: `selected`
-    - Row 1 (Header): `selected`
-    - Row 2 (Meta1): `PortfolioItem.selected`
-    - Row 3 (Meta2): `Backend writes → Sheet`
-
-  - **Column C**: `allocated_tokens`
-    - Row 1 (Header): `allocated_tokens`
-    - Row 2 (Meta1): `PortfolioItem.allocated_tokens`
-    - Row 3 (Meta2): `Backend writes → Sheet`
-
-  - **Column D**: `country`
-    - Row 1 (Header): `country`
-    - Row 2 (Meta1): `Initiative.country`
-    - Row 3 (Meta2): `Backend writes → Sheet`
-
-  - **Column E**: `department`
-    - Row 1 (Header): `department`
-    - Row 2 (Meta1): `Initiative.department`
-    - Row 3 (Meta2): `Backend writes → Sheet`
-
-  - **Column F**: `category`
-    - Row 1 (Header): `category`
-    - Row 2 (Meta1): `Initiative.category`
-    - Row 3 (Meta2): `Backend writes → Sheet`
-
-  - **Column G**: `north_star_gain`
-    - Row 1 (Header): `north_star_gain`
-    - Row 2 (Meta1): `(derived from kpi_contribution_json[north_star])`
-    - Row 3 (Meta2): `Backend writes → Sheet (derived)`
-
-  - **Column H**: `active_overall_score`
-    - Row 1 (Header): `active_overall_score`
-    - Row 2 (Meta1): `Initiative.overall_score`
-    - Row 3 (Meta2): `Backend writes → Sheet`
-
-  - **Column I**: `mandate_reason`
-    - Row 1 (Header): `mandate_reason`
-    - Row 2 (Meta1): ``
-    - Row 3 (Meta2): `Backend writes → Sheet`
-
-  - **Column J**: `bundle_key`
-    - Row 1 (Header): `bundle_key`
-    - Row 2 (Meta1): `Initiative.bundle_key`
-    - Row 3 (Meta2): `Backend writes → Sheet`
-
-  - **Column K**: `dependency_status`
-    - Row 1 (Header): `dependency_status`
-    - Row 2 (Meta1): `(derived)`
-    - Row 3 (Meta2): `Backend writes → Sheet (derived)`
-
-  - **Column L**: `notes`
-    - Row 1 (Header): `notes`
-    - Row 2 (Meta1): `PortfolioItem.notes`
-    - Row 3 (Meta2): `PM input → DB`
 
   - **Column M**: `run_status`
     - Row 1 (Header): `run_status`
@@ -2741,67 +2677,176 @@ entry surface is ProductOps/KPI_contributions`
     - Row 3 (Meta2): `Backend writes → Sheet (timestamp)`
 
 
-#### Tab: `Gaps_and_Alerts` (Gaps_and_Alerts)
-  - **Total Columns**: 11
+#### Tab: `Results` (Results)
+  - **Total Columns**: 19
 
-  - **Column A**: `country`
+  - **Column A**: `run_id`
+    - Row 1 (Header): `run_id`
+    - Row 2 (Meta1): `OptimizationRun.run_id`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column B**: `initiative_key`
+    - Row 1 (Header): `initiative_key`
+    - Row 2 (Meta1): `PortfolioItem.(initiative_key)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column C**: `selected`
+    - Row 1 (Header): `selected`
+    - Row 2 (Meta1): `PortfolioItem.selected`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column D**: `allocated_tokens`
+    - Row 1 (Header): `allocated_tokens`
+    - Row 2 (Meta1): `PortfolioItem.allocated_tokens`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column E**: `country`
     - Row 1 (Header): `country`
-    - Row 2 (Meta1): `(derived)`
+    - Row 2 (Meta1): `OptimizationProblem.candidates.country`
     - Row 3 (Meta2): `Backend writes → Sheet`
 
-  - **Column B**: `kpi_key`
-    - Row 1 (Header): `kpi_key`
-    - Row 2 (Meta1): `(derived)`
+  - **Column F**: `department`
+    - Row 1 (Header): `department`
+    - Row 2 (Meta1): `OptimizationProblem.candidates.department`
     - Row 3 (Meta2): `Backend writes → Sheet`
 
-  - **Column C**: `target`
-    - Row 1 (Header): `target`
-    - Row 2 (Meta1): `(derived)`
+  - **Column G**: `category`
+    - Row 1 (Header): `category`
+    - Row 2 (Meta1): `OptimizationProblem.candidates.category`
     - Row 3 (Meta2): `Backend writes → Sheet`
 
-  - **Column D**: `achieved`
-    - Row 1 (Header): `achieved`
-    - Row 2 (Meta1): `(derived)`
+  - **Column H**: `program`
+    - Row 1 (Header): `program`
+    - Row 2 (Meta1): `OptimizationProblem.candidates.program`
     - Row 3 (Meta2): `Backend writes → Sheet`
 
-  - **Column E**: `gap`
-    - Row 1 (Header): `gap`
-    - Row 2 (Meta1): `(derived)`
+  - **Column I**: `product`
+    - Row 1 (Header): `product`
+    - Row 2 (Meta1): `OptimizationProblem.candidates.product`
     - Row 3 (Meta2): `Backend writes → Sheet`
 
-  - **Column F**: `severity`
-    - Row 1 (Header): `severity`
-    - Row 2 (Meta1): `(derived)`
+  - **Column J**: `segment`
+    - Row 1 (Header): `segment`
+    - Row 2 (Meta1): `OptimizationProblem.candidates.segment`
     - Row 3 (Meta2): `Backend writes → Sheet`
 
-  - **Column G**: `notes`
+  - **Column K**: `objective_mode`
+    - Row 1 (Header): `objective_mode`
+    - Row 2 (Meta1): `OptimizationProblem.objective.mode`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column L**: `objective_contribution`
+    - Row 1 (Header): `objective_contribution`
+    - Row 2 (Meta1): `_compute_objective_contribution`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column M**: `north_star_gain`
+    - Row 1 (Header): `north_star_gain`
+    - Row 2 (Meta1): `OptmizationProblem.candidates.kpi_contributions[north_star_kpi_key]`
+    - Row 3 (Meta2): `Backend writes → Sheet (derived)`
+
+  - **Column N**: `active_overall_score`
+    - Row 1 (Header): `active_overall_score`
+    - Row 2 (Meta1): `Initiative.overall_score`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column O**: `dependency_status`
+    - Row 1 (Header): `dependency_status`
+    - Row 2 (Meta1): `future`
+    - Row 3 (Meta2): `Backend writes → Sheet (derived)`
+
+  - **Column P**: `notes`
     - Row 1 (Header): `notes`
-    - Row 2 (Meta1): `(derived)`
+    - Row 2 (Meta1): `PortfolioItem.notes`
     - Row 3 (Meta2): `PM input → DB`
 
-  - **Column H**: `recommendation`
-    - Row 1 (Header): `recommendation`
-    - Row 2 (Meta1): `(derived)`
-    - Row 3 (Meta2): `LLM optional → Sheet (later)`
-
-  - **Column I**: `run_status`
+  - **Column Q**: `run_status`
     - Row 1 (Header): `run_status`
     - Row 2 (Meta1): `NONE`
     - Row 3 (Meta2): `Backend writes → Sheet (status)`
 
-  - **Column J**: `updated_source`
+  - **Column R**: `updated_source`
     - Row 1 (Header): `updated_source`
     - Row 2 (Meta1): `NONE`
     - Row 3 (Meta2): `Backend writes → Sheet (provenance)`
 
-  - **Column K**: `updated_at`
+  - **Column S**: `updated_at`
+    - Row 1 (Header): `updated_at`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (timestamp)`
+
+
+#### Tab: `Gaps_and_Alerts` (Gaps_and_Alerts)
+  - **Total Columns**: 13
+
+  - **Column A**: `run_id`
+    - Row 1 (Header): `run_id`
+    - Row 2 (Meta1): `OptimizationRun.run_id`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column B**: `dimension`
+    - Row 1 (Header): `dimension`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column C**: `dimension_key`
+    - Row 1 (Header): `dimension_key`
+    - Row 2 (Meta1): ``
+    - Row 3 (Meta2): ``
+
+  - **Column D**: `kpi_key`
+    - Row 1 (Header): `kpi_key`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column E**: `target`
+    - Row 1 (Header): `target`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column F**: `achieved`
+    - Row 1 (Header): `achieved`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column G**: `gap`
+    - Row 1 (Header): `gap`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column H**: `severity`
+    - Row 1 (Header): `severity`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `Backend writes → Sheet`
+
+  - **Column I**: `notes`
+    - Row 1 (Header): `notes`
+    - Row 2 (Meta1): `(derived)`
+    - Row 3 (Meta2): `PM input → DB`
+
+  - **Column J**: `recommendation`
+    - Row 1 (Header): `recommendation`
+    - Row 2 (Meta1): `future`
+    - Row 3 (Meta2): `LLM optional → Sheet (later)`
+
+  - **Column K**: `run_status`
+    - Row 1 (Header): `run_status`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (status)`
+
+  - **Column L**: `updated_source`
+    - Row 1 (Header): `updated_source`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `Backend writes → Sheet (provenance)`
+
+  - **Column M**: `updated_at`
     - Row 1 (Header): `updated_at`
     - Row 2 (Meta1): `NONE`
     - Row 3 (Meta2): `Backend writes → Sheet (timestamp)`
 
 
 ## Codebase Registry
-*Auto-generated: 2026-01-22 08:12 UTC*
+*Auto-generated: 2026-01-25 20:01 UTC*
 
 This section is auto-generated by `scripts/generate_codebase_registry.py`.
 Comprehensive map of `app/` directory structure, modules, classes, and functions.
@@ -2866,6 +2911,7 @@ app/
 │   │   ├── feasibility_persistence.py
 │   │   ├── optimization_compiler.py
 │   │   ├── optimization_problem_builder.py
+│   │   ├── optimization_results_service.py
 │   │   ├── optimization_run_persistence.py
 │   │   └── optimization_sync_service.py
 │   ├── product_ops
@@ -2906,10 +2952,12 @@ app/
 │   ├── intake_reader.py
 │   ├── intake_writer.py
 │   ├── kpi_contributions_reader.py
+│   ├── kpi_contributions_writer.py
 │   ├── math_models_reader.py
 │   ├── math_models_writer.py
 │   ├── metrics_config_reader.py
 │   ├── models.py
+│   ├── optimization_candidates_writer.py
 │   ├── optimization_center_readers.py
 │   ├── optimization_center_writers.py
 │   ├── params_reader.py
@@ -3242,8 +3290,8 @@ app/
 **Imports from**: __future__, app.schemas.feasibility, app.schemas.optimization_solution, app.services.optimization.feasibility_checker, app.services.optimization.feasibility_persistence
 
 **Functions**:
-- **Function `run_flow5_optimization_step1() -> Dict[(str, Any)]`**
-  - *Doc*: Flow 5 (Phase 5) - Optimization run orchestration.
+- **Function `run_flow5_optimization() -> Dict[(str, Any)]`**
+  - *Doc*: Flow 5 (Phase 5) - Complete optimization run orchestration.
 
 ##### Module: `param_seeding_job.py`
 *Path*: `app/jobs/param_seeding_job.py`
@@ -3288,18 +3336,18 @@ app/
 ##### Module: `client.py`
 *Path*: `app/llm/client.py`
 
-**Imports from**: __future__, app.config, app.llm.models, openai, typing
+**Imports from**: __future__, app.config, app.db.models.optimization, app.llm.models, app.services.product_ops.metric_chain_parser
 
 **Classes**:
 - **Class `LLMClient`**
   - *Doc*: Thin wrapper around OpenAI client for math-model suggestions.
-  - `__init__(self, client: Optional[OpenAI])`
+  - `__init__(self, client: Optional[OpenAI], db: Optional[Session])`
   - `suggest_math_model(self, payload: MathModelPromptInput)`
   - `suggest_param_metadata(self, initiative_key: str, identifiers: list[str], formula_text: str)`
 
 **Functions**:
 - **Function `_build_system_prompt() -> str`**
-- **Function `_build_user_prompt(payload: MathModelPromptInput) -> str`**
+- **Function `_build_user_prompt(payload: MathModelPromptInput, db: Optional[Session]) -> str`**
 
 ##### Module: `models.py`
 *Path*: `app/llm/models.py`
@@ -3537,7 +3585,7 @@ app/
 - **Function `enqueue_action_run(db: Session, payload: Dict[(str, Any)]) -> ActionRun`**
   - *Doc*: Create an ActionRun row with status=queued and return the ORM object.
 - **Function `_build_scope_summary(scope: Any) -> Optional[str]`**
-  - *Doc*: Short human-friendly text for Control tab.
+  - *Doc*: Short human-friendly text for UI display (action runs table, Apps Script response).
 - **Function `_extract_summary(action: str, result: Dict[(str, Any)]) -> Dict[(str, Any)]`**
   - *Doc*: Extract standardized summary from action-specific result for UI display.
 - **Function `execute_next_queued_run(db: Session) -> Optional[ActionRun]`**
@@ -3570,6 +3618,8 @@ app/
   - *Doc*: PM Job #3: Switch active scoring framework for selected initiatives.
 - **Function `_action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
   - *Doc*: PM Job #4: Save selected rows from current tab into DB (selection-scoped).
+- **Function `_action_pm_populate_candidates(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
+  - *Doc*: PM Job: Populate Optimization Candidates tab from DB (KPI contributions, constraints, status).
 - **Function `_action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
   - *Doc*: PM Job: Run optimization (Step 1+2+3 solver) on user-selected candidates.
 - **Function `_action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> Dict[(str, Any)]`**
@@ -3735,10 +3785,35 @@ app/
 **Imports from**: __future__, app.db.models.initiative, app.db.models.optimization, app.schemas.optimization_problem, app.services.optimization.feasibility_filters
 
 **Functions**:
+- **Function `_resolve_active_north_star_kpi_key(db: Session) -> str`**
+  - *Doc*: Resolve the single active North Star KPI key from OrganizationMetricConfig.
 - **Function `build_optimization_problem(db: Session, scenario_name: str, constraint_set_name: str, scope_type: ScopeType, selected_initiative_keys: Optional[List[str]], period_end_date: Optional[date]) -> OptimizationProblem`**
   - *Doc*: Build a complete OptimizationProblem ready for solver.
 - **Function `_validate_governance_references(constraint_payload: ConstraintSetPayload, candidate_keys: set[str]) -> None`**
-  - *Doc*: PRODUCTION FIX: Validate that all governance constraint references
+  - *Doc*: Validate that all governance constraint references
+
+##### Module: `optimization_results_service.py`
+*Path*: `app/services/optimization/optimization_results_service.py`
+
+*Doc*: Pure computation service for optimization results artifacts.
+
+**Imports from**: __future__, app.db.models.optimization, app.schemas.optimization_problem, app.schemas.optimization_solution, datetime
+
+**Functions**:
+- **Function `build_runs_row() -> Dict[(str, Any)]`**
+  - *Doc*: Build single row dict for Runs tab (one row per optimization run).
+- **Function `build_results_rows() -> List[Dict[(str, Any)]]`**
+  - *Doc*: Build N rows for Results tab (one per candidate in problem).
+- **Function `build_gaps_rows() -> List[Dict[(str, Any)]]`**
+  - *Doc*: Build M rows for Gaps_and_Alerts tab (one per target constraint).
+- **Function `_compute_objective_contribution() -> float`**
+  - *Doc*: Recompute objective contribution for a candidate (deterministic).
+- **Function `_compute_achieved_contribution() -> float`**
+  - *Doc*: Sum KPI contributions over selected candidates matching dimension slice.
+- **Function `_compute_severity(gap: float, target: float) -> str`**
+  - *Doc*: Compute severity level based on gap and target.
+- **Function `_build_gap_summary(problem: OptimizationProblem, solution: OptimizationSolution) -> str`**
+  - *Doc*: Build short gap summary string for Runs tab.
 
 ##### Module: `optimization_run_persistence.py`
 *Path*: `app/services/optimization/optimization_run_persistence.py`
@@ -3760,7 +3835,7 @@ app/
 
 *Doc*: Optimization Center sync orchestration.
 
-**Imports from**: __future__, app.db.models.optimization, app.db.session, app.schemas.optimization_center, app.services.optimization.optimization_compiler
+**Imports from**: __future__, app.db.models.initiative, app.db.models.optimization, app.db.session, app.schemas.optimization_center
 
 **Functions**:
 - **Function `_capacity_to_json(items: Sequence[CapacityFloor | CapacityCap], value_attr: str) -> Dict[(str, Dict[(str, float)])]`**
@@ -3768,6 +3843,8 @@ app/
   - *Doc*: Convert targets to JSON structure: {dimension: {dimension_key: {kpi_key: {type, value, notes?}}}}
 - **Function `sync_constraint_sets_from_sheets(sheets_client: SheetsClient, spreadsheet_id: str, constraints_tab: str, targets_tab: str, session: Optional[Session]) -> Tuple[(List[OptimizationConstraintSet], List[ValidationMessage])]`**
   - *Doc*: Read constraints/targets tabs, compile, and upsert OptimizationConstraintSet rows.
+- **Function `sync_candidates_from_sheet(sheets_client: SheetsClient, spreadsheet_id: str, candidates_tab: str, initiative_keys: Optional[List[str]], commit_every: int, session: Optional[Session]) -> Dict[(str, Any)]`**
+  - *Doc*: Sync Optimization Candidates tab editable fields to Initiative DB records.
 
 #### Directory: `app/services/product_ops/`
 
@@ -3813,7 +3890,7 @@ app/
 ##### Module: `math_model_service.py`
 *Path*: `app/services/product_ops/math_model_service.py`
 
-**Imports from**: __future__, app.db.models.initiative, app.db.models.scoring, app.sheets.client, app.sheets.math_models_reader
+**Imports from**: __future__, app.db.models.initiative, app.db.models.scoring, app.services.product_ops.metric_chain_parser, app.sheets.client
 
 **Classes**:
 - **Class `MathModelSyncService`**
@@ -3825,7 +3902,7 @@ app/
 ##### Module: `metric_chain_parser.py`
 *Path*: `app/services/product_ops/metric_chain_parser.py`
 
-*Doc*: Metric Chain Parser
+*Doc*: Metric Chain Parser (Token Extractor)
 
 **Imports from**: __future__, app.db.models.optimization, sqlalchemy.orm, typing
 
@@ -3868,14 +3945,14 @@ app/
 ##### Module: `scoring_service.py`
 *Path*: `app/services/product_ops/scoring_service.py`
 
-**Imports from**: __future__, app.config, app.db.models.initiative, app.db.models.scoring, app.services.product_ops.scoring
+**Imports from**: __future__, app.config, app.db.models.initiative, app.db.models.scoring, app.services.product_ops.kpi_contribution_adapter
 
 **Classes**:
 - **Class `ScoringService`**
   - *Doc*: Service layer for computing and persisting initiative scores.
   - `__init__(self, db: Session)`
   - `score_initiative(self, initiative: Initiative, framework: ScoringFramework, enable_history: Optional[bool], activate: bool)`
-  - `_compute_framework_scores_only(self, initiative: Initiative, framework: ScoringFramework, enable_history: bool)`
+  - `_score_individual_math_models(self, initiative: Initiative)`
   - `score_initiative_all_frameworks(self, initiative: Initiative, enable_history: Optional[bool])`
   - `activate_all(self, framework: Optional[ScoringFramework], commit_every: Optional[int], only_missing_active: bool)`
   - `compute_all_frameworks(self, commit_every: Optional[int])`
@@ -3958,6 +4035,7 @@ app/
 **Classes**:
 - **Class `MathModelScoringEngine`**
   - *Doc*: Scoring engine for custom math models using safe_eval.
+  - `score_single_model(self, formula_text: str, params_env: Dict[(str, float)], approved_by_user: bool, effort_fallback: Optional[float])`
   - `compute(self, inputs: ScoreInputs)`
 
 ##### Module: `rice.py`
@@ -4012,6 +4090,8 @@ app/
   - *Doc*: Map constraint dimensions to Candidate attributes.
 - **Function `_get_candidate_dim_value_for_targets(c: 'Candidate', dimension: str) -> Optional[str]`**
   - *Doc*: Extract dimension value from candidate for target matching.
+- **Function `_resolve_kpi_scale_from_targets_any(targets: Dict[(str, Any)], kpi_key: str) -> tuple[(float, str, int)]`**
+  - *Doc*: Resolve normalization scale for a KPI from targets with fallback aggregation.
 
 #### Directory: `app/sheets/`
 
@@ -4131,6 +4211,24 @@ app/
 - **Function `_blank_to_none(v: Any) -> Any`**
 - **Function `_col_index_to_a1(idx: int) -> str`**
 
+##### Module: `kpi_contributions_writer.py`
+*Path*: `app/sheets/kpi_contributions_writer.py`
+
+*Doc*: Writer module for Product Ops KPI_Contributions sheet output (DB → sheet writeback).
+
+**Imports from**: __future__, app.db.models.initiative, app.sheets.client, app.sheets.models, app.utils.header_utils
+
+**Functions**:
+- **Function `_now_iso() -> str`**
+- **Function `_to_sheet_value(value: Any) -> Any`**
+  - *Doc*: Normalize values before sending to Sheets to avoid JSON serialization errors.
+- **Function `write_kpi_contributions_to_sheet(db: Session, client: SheetsClient, spreadsheet_id: str, tab_name: str) -> int`**
+  - *Doc*: Write system-computed KPI contributions from DB to KPI_Contributions sheet.
+- **Function `_cell_range_for_update(tab_name: str, col_idx: int, row_idx: int) -> str`**
+  - *Doc*: Build A1 notation cell range for a single cell update.
+- **Function `_col_index_to_a1(idx: int) -> str`**
+  - *Doc*: Convert column index (1-based) to A1 letter notation.
+
 ##### Module: `math_models_reader.py`
 *Path*: `app/sheets/math_models_reader.py`
 
@@ -4236,6 +4334,19 @@ app/
   - *Doc*: Optimization Center Gaps_and_alerts tab row.
   - *No methods*
 
+##### Module: `optimization_candidates_writer.py`
+*Path*: `app/sheets/optimization_candidates_writer.py`
+
+*Doc*: Writer for Optimization Candidates tab - populates from DB.
+
+**Imports from**: __future__, app.db.models.initiative, app.db.models.optimization, app.sheets.client, app.sheets.optimization_center_readers
+
+**Functions**:
+- **Function `populate_candidates_from_db(db: Session, client: SheetsClient, spreadsheet_id: str, tab_name: str, scenario_name: str, constraint_set_name: str, initiative_keys: Optional[List[str]]) -> Dict[(str, Any)]`**
+  - *Doc*: Populate Optimization Candidates tab from DB.
+- **Function `_col_idx_to_letter(idx: int) -> str`**
+  - *Doc*: Convert 0-based column index to A1 notation letter.
+
 ##### Module: `optimization_center_readers.py`
 *Path*: `app/sheets/optimization_center_readers.py`
 
@@ -4291,6 +4402,9 @@ app/
   - `write_scenario_config(self, spreadsheet_id: str, tab_name: str, rows: Iterable[Any])`
   - `write_constraints(self, spreadsheet_id: str, tab_name: str, rows: Iterable[Any])`
   - `write_targets(self, spreadsheet_id: str, tab_name: str, rows: Iterable[Any])`
+  - `append_runs_row(self, spreadsheet_id: str, tab_name: str, row: Dict[(str, Any)])`
+  - `append_results_rows(self, spreadsheet_id: str, tab_name: str, rows: List[Dict[(str, Any)]])`
+  - `append_gaps_rows(self, spreadsheet_id: str, tab_name: str, rows: List[Dict[(str, Any)]])`
   - `write_runs(self, spreadsheet_id: str, tab_name: str, rows: Iterable[Any])`
   - `write_results(self, spreadsheet_id: str, tab_name: str, rows: Iterable[Any])`
   - `write_gaps_alerts(self, spreadsheet_id: str, tab_name: str, rows: Iterable[Any])`

@@ -184,10 +184,12 @@ OPT_RUNS_HEADER_MAP: Dict[str, List[str]] = {
     "period_key": ["period_key", "Period Key", "period"],
     "optimization_db_status": ["db_status", "db status", "optimization_db_status", "Optimization DB Status"],
     "created_at": ["created_at", "Created At"],
+    "started_at": ["started_at", "Started At"],
     "finished_at": ["finished_at", "Finished At"],
     "selected_count": ["selected_count", "Selected Count"],
-    "total_objective": ["total_objective", "Total Objective"],
     "capacity_used": ["capacity_used", "Capacity Used"],
+    "total_objective_raw": ["total_objective_raw", "Total Objective Raw"],
+    "total_objective": ["total_objective", "Total Objective"],
     "gap_summary": ["gap_summary", "Gap Summary"],
     "results_tab_ref": ["results_tab_ref", "Results Tab Ref"],
     "run_status": RUN_STATUS_ALIASES,
@@ -196,25 +198,35 @@ OPT_RUNS_HEADER_MAP: Dict[str, List[str]] = {
 }
 
 OPT_RESULTS_HEADER_MAP: Dict[str, List[str]] = {
+    "run_id": ["run_id", "Run Id", "run"],
     "initiative_key": ["initiative_key", "Initiative Key", "key"],
     "selected": ["selected", "Selected"],
     "allocated_tokens": ["allocated_tokens", "Allocated Tokens", "tokens"],
+    # Frozen dimension snapshot from candidate
     "country": ["market", "Market", "country", "Country"],
     "department": ["department", "Department"],
     "category": ["category", "Category"],
+    "program": ["program", "Program"],
+    "product": ["product", "Product"],
+    "segment": ["segment", "Segment"],
+    # Objective attribution
+    "objective_mode": ["objective_mode", "Objective Mode"],
+    "objective_contribution": ["objective_contribution", "Objective Contribution"],
     "north_star_gain": ["north_star_gain", "North Star Gain"],
+    # Display fields
     "active_overall_score": ["active_overall_score", "Active Overall Score"],
-    "mandate_reason": ["mandate_reason", "Mandate Reason"],
-    "bundle_key": ["bundle_key", "Bundle Key"],
     "dependency_status": ["dependency_status", "Dependency Status"],
     "notes": ["notes", "Notes"],
+    # System
     "run_status": RUN_STATUS_ALIASES,
     "updated_source": UPDATED_SOURCE_ALIASES,
     "updated_at": UPDATED_AT_ALIASES,
 }
 
 OPT_GAPS_ALERTS_HEADER_MAP: Dict[str, List[str]] = {
-    "country": ["market", "Market", "country", "Country"],
+    "run_id": ["run_id", "Run Id", "run"],
+    "dimension": ["dimension", "Dimension"],
+    "dimension_key": ["dimension_key", "Dimension Key"],
     "kpi_key": ["kpi_key", "KPI Key"],
     "target": ["target", "Target"],
     "achieved": ["achieved", "Achieved"],
@@ -279,31 +291,38 @@ OPT_RUNS_OUTPUT_FIELDS: List[str] = [
     "period_key",
     "optimization_db_status",
     "created_at",
+    "started_at",
     "finished_at",
     "selected_count",
-    "total_objective",
     "capacity_used",
+    "total_objective_raw",
+    "total_objective",
     "gap_summary",
     "results_tab_ref",
-    "run_status",
 ]
 # Output fields means these are written by the system, during the optimization execution, to the sheet, not by PMs.
 OPT_RESULTS_OUTPUT_FIELDS: List[str] = [
+    "run_id",
     "initiative_key",
     "selected",
     "allocated_tokens",
     "country",
     "department",
     "category",
+    "program",
+    "product",
+    "segment",
+    "objective_mode",
+    "objective_contribution",
     "north_star_gain",
     "active_overall_score",
-    "mandate_reason",
-    "bundle_key",
     "dependency_status",
 ]
 # Output fields means these are written by the system, during the optimization execution, to the sheet, not by PMs.
 OPT_GAPS_ALERTS_OUTPUT_FIELDS: List[str] = [
-    "country",
+    "run_id",
+    "dimension",
+    "dimension_key",
     "kpi_key",
     "target",
     "achieved",

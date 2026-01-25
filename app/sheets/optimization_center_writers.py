@@ -370,6 +370,143 @@ class OptimizationCenterWriter:
             rows=rows,
         )
 
+    def append_runs_row(self, spreadsheet_id: str, tab_name: str, row: Dict[str, Any]) -> None:
+        """
+        Append single row to Runs tab (append-only, no key matching).
+        
+        Args:
+            spreadsheet_id: Google Sheets ID
+            tab_name: Tab name (e.g., "Runs")
+            row: Dict with run data
+        """
+        # Read header row to get column mapping
+        header_values = self.client.get_values(spreadsheet_id, f"{tab_name}!1:1")
+        if not header_values or not header_values[0]:
+            logger.error(f"No header found in {tab_name}")
+            return
+        
+        header = [normalize_header(str(h)) for h in header_values[0]]
+        alias_lookup = _build_alias_lookup(OPT_RUNS_HEADER_MAP)
+        
+        # Find next empty row
+        all_values = self.client.get_values(spreadsheet_id, f"{tab_name}!A:A")
+        next_row = len(all_values) + 1 if all_values else 2  # Header is row 1, data starts at 2
+        
+        # Build row values
+        row_values = []
+        for h_norm in header:
+            field = alias_lookup.get(h_norm)
+            if not field:
+                row_values.append(None)
+                continue
+            value = row.get(field)
+            row_values.append(_to_sheet_value(value))
+        
+        # Append row
+        range_name = f"{tab_name}!A{next_row}"
+        self.client.update_values(spreadsheet_id, range_name, [row_values])
+        logger.info(f"Appended 1 row to {tab_name}", extra={"run_id": row.get("run_id")})
+
+    def append_results_rows(self, spreadsheet_id: str, tab_name: str, rows: List[Dict[str, Any]]) -> int:
+        """
+        Append multiple rows to Results tab (append-only batch write).
+        
+        Args:
+            spreadsheet_id: Google Sheets ID
+            tab_name: Tab name (e.g., "Results")
+            rows: List of dicts with result data
+            
+        Returns:
+            Number of rows appended
+        """
+        if not rows:
+            return 0
+        
+        # Read header row to get column mapping
+        header_values = self.client.get_values(spreadsheet_id, f"{tab_name}!1:1")
+        if not header_values or not header_values[0]:
+            logger.error(f"No header found in {tab_name}")
+            return 0
+        
+        header = [normalize_header(str(h)) for h in header_values[0]]
+        alias_lookup = _build_alias_lookup(OPT_RESULTS_HEADER_MAP)
+        
+        # Find next empty row
+        all_values = self.client.get_values(spreadsheet_id, f"{tab_name}!A:A")
+        next_row = len(all_values) + 1 if all_values else 2
+        
+        # Build batch values
+        batch_values = []
+        for row_data in rows:
+            row_values = []
+            for h_norm in header:
+                field = alias_lookup.get(h_norm)
+                if not field:
+                    row_values.append(None)
+                    continue
+                value = row_data.get(field)
+                row_values.append(_to_sheet_value(value))
+            batch_values.append(row_values)
+        
+        # Batch append
+        range_name = f"{tab_name}!A{next_row}"
+        self.client.update_values(spreadsheet_id, range_name, batch_values)
+        logger.info(
+            f"Appended {len(batch_values)} rows to {tab_name}",
+            extra={"run_id": rows[0].get("run_id") if rows else None}
+        )
+        return len(batch_values)
+
+    def append_gaps_rows(self, spreadsheet_id: str, tab_name: str, rows: List[Dict[str, Any]]) -> int:
+        """
+        Append multiple rows to Gaps_and_Alerts tab (append-only batch write).
+        
+        Args:
+            spreadsheet_id: Google Sheets ID
+            tab_name: Tab name (e.g., "Gaps_and_Alerts")
+            rows: List of dicts with gap data
+            
+        Returns:
+            Number of rows appended
+        """
+        if not rows:
+            return 0
+        
+        # Read header row to get column mapping
+        header_values = self.client.get_values(spreadsheet_id, f"{tab_name}!1:1")
+        if not header_values or not header_values[0]:
+            logger.error(f"No header found in {tab_name}")
+            return 0
+        
+        header = [normalize_header(str(h)) for h in header_values[0]]
+        alias_lookup = _build_alias_lookup(OPT_GAPS_ALERTS_HEADER_MAP)
+        
+        # Find next empty row
+        all_values = self.client.get_values(spreadsheet_id, f"{tab_name}!A:A")
+        next_row = len(all_values) + 1 if all_values else 2
+        
+        # Build batch values
+        batch_values = []
+        for row_data in rows:
+            row_values = []
+            for h_norm in header:
+                field = alias_lookup.get(h_norm)
+                if not field:
+                    row_values.append(None)
+                    continue
+                value = row_data.get(field)
+                row_values.append(_to_sheet_value(value))
+            batch_values.append(row_values)
+        
+        # Batch append
+        range_name = f"{tab_name}!A{next_row}"
+        self.client.update_values(spreadsheet_id, range_name, batch_values)
+        logger.info(
+            f"Appended {len(batch_values)} rows to {tab_name}",
+            extra={"run_id": rows[0].get("run_id") if rows else None}
+        )
+        return len(batch_values)
+
     def write_runs(self, spreadsheet_id: str, tab_name: str, rows: Iterable[Any]) -> int:
         return self._write_tab(
             spreadsheet_id=spreadsheet_id,
