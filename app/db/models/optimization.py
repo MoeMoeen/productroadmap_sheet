@@ -31,6 +31,9 @@ class OrganizationMetricConfig(Base):
     kpi_name = Column(String(255), nullable=False)
     kpi_level = Column(String(50), nullable=False)  # north_star or strategic or immediate
     unit = Column(String(50), nullable=True)
+    description = Column(Text, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    notes = Column(Text, nullable=True)
     metadata_json = Column(JSON, nullable=True)
 
     created_at = Column(

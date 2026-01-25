@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 ScopeType = Literal["selected_only", "all_candidates"]
 
 
-def run_flow5_optimization_step1(
+def run_flow5_optimization(
     *,
     db: Session,
     scenario_name: str,
@@ -56,9 +56,9 @@ def run_flow5_optimization_step1(
     requested_by_ui: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Flow 5 (Phase 5) - Optimization run orchestration.
+    Flow 5 (Phase 5) - Complete optimization run orchestration.
 
-    Step 1+2+3+4+5+6+6.5:
+    Step 1+2+3+4+5+6+6.5+7+8:
     - Binary selection + capacity caps (global and by dimension)
     - Mandatory initiatives (x_i = 1 for each mandatory)
     - Exclusions (x_i = 0 for each excluded, x_a + x_b <= 1 for each excluded pair)
@@ -66,7 +66,7 @@ def run_flow5_optimization_step1(
     - Bundles (x_m1 = x_m2 = ... = x_mk for each bundle, all-or-nothing)
     - Capacity floors (sum(tokens_i * x_i) >= min_tokens for each dimension slice)
     - Target floors (sum(contrib_i * x_i) >= floor for each floor target)
-    - Temporary objective: maximize capacity usage (avoid empty solutions)
+    - Objective function: north_star mode (maximize north_star KPI contribution) or fallback (maximize capacity usage)
 
     Writes durable artifacts:
     - OptimizationRun.inputs_snapshot_json
@@ -94,7 +94,7 @@ def run_flow5_optimization_step1(
         raise ValueError("run_id is required")
 
     logger.info(
-        "Starting Flow 5 optimization (Step 1+2+3+4+5+6+6.5)",
+        "Starting Flow 5 optimization (Steps 1-8: all constraints + objective)",
         extra={
             "run_id": run_id,
             "scenario": scenario_name,
@@ -144,7 +144,7 @@ def run_flow5_optimization_step1(
         problem=problem,
         extra_snapshot_metadata={
             "flow": "flow5.optimization",
-            "step": "step1_2_3_4_5_6_6p5_capacity_mandatory_exclusions_prereqs_bundles_capacity_floors_target_floors",
+            "step": "steps_1_to_8_all_constraints_and_objective",
         },
     )
 
@@ -187,7 +187,7 @@ def run_flow5_optimization_step1(
             "scenario_name": scenario_name,
             "constraint_set_name": constraint_set_name,
             "scope_type": scope_type,
-            "solver_step": "step1_2_3_4_5_6_6p5_capacity_mandatory_exclusions_prereqs_bundles_capacity_floors_target_floors",
+            "solver_step": "steps_1_to_8_all_constraints_and_objective",
             "status": opt_run.status,
             "candidate_count": len(problem.candidates),
             "feasibility_summary": feasibility.summary,
@@ -195,7 +195,7 @@ def run_flow5_optimization_step1(
             "warnings_count": len(feasibility.warnings),
         }
 
-    # 5) Solve (Step 1+2+3+4+5+6+6.5: capacity + mandatory + exclusions + prereqs + bundles + capacity floors + target floors)
+    # 5) Solve (Steps 1-8: all constraints + objective function)
     logger.info("Problem is feasible, running solver", extra={"run_id": opt_run.run_id})
     adapter = OrtoolsCpSatSolverAdapter(config=solver_config)
     solution: OptimizationSolution = adapter.solve(problem)
@@ -205,7 +205,7 @@ def run_flow5_optimization_step1(
     solver_ok = solution.status in {"optimal", "feasible"}
 
     result_payload: Dict[str, Any] = {
-        "solver_step": "step1_2_3_4_5_6_6p5_capacity_mandatory_exclusions_prereqs_bundles_capacity_floors_target_floors",
+        "solver_step": "steps_1_to_8_all_constraints_and_objective",
         "solution": solution.model_dump(),
     }
 
@@ -235,7 +235,7 @@ def run_flow5_optimization_step1(
         "scenario_name": scenario_name,
         "constraint_set_name": constraint_set_name,
         "scope_type": scope_type,
-        "solver_step": "step1_2_3_4_5_6_6p5_capacity_mandatory_exclusions_prereqs_bundles_capacity_floors_target_floors",
+        "solver_step": "steps_1_to_8_all_constraints_and_objective",
         "status": opt_run.status,
         "candidate_count": len(problem.candidates),
         "selected_count": selected_count,

@@ -2110,6 +2110,123 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
     # (No fallback needed; all branches return above)
 
 
+def _action_pm_populate_candidates(db: Session, ctx: ActionContext) -> Dict[str, Any]:
+    """PM Job: Populate Optimization Candidates tab from DB (KPI contributions, constraints, status).
+    
+    Payload:
+      - sheet_context: {spreadsheet_id, tab}
+      - options: {scenario_name, constraint_set_name}
+      - scope: {initiative_keys: list[str]} (optional - defaults to all optimization candidates)
+    
+    Orchestration:
+      1. Extract scenario_name + constraint_set_name from options (required)
+      2. Extract initiative keys from scope (or all if not provided)
+      3. Read existing sheet keys ONCE to determine NEW vs EXISTING
+      4. Query KPI metadata from OrganizationMetricConfig
+      5. Load constraint set for specified scenario
+      6. Write DB-derived columns in batch (KPI contributions, constraint flags, status)
+      7. Preserve PM input columns (engineering_tokens, category, program_key, deadline_date)
+      8. Skip formula columns (initiative_key, title, country, department, immediate_kpi_key)
+    
+    Returns:
+      - populated_count: Number of initiatives written to sheet
+      - skipped_no_key: Number of initiatives without initiative_key
+      - failed_count: Number of write failures
+    """
+    from app.sheets.optimization_candidates_writer import populate_candidates_from_db
+    
+    sheet_ctx = ctx.payload.get("sheet_context") or {}
+    options = ctx.payload.get("options") or {}
+    scope = ctx.payload.get("scope") or {}
+    
+    # Get spreadsheet_id and tab from sheet_context (required)
+    spreadsheet_id = sheet_ctx.get("spreadsheet_id")
+    tab = sheet_ctx.get("tab") or "Candidates"
+    
+    if not spreadsheet_id:
+        raise ValueError("sheet_context.spreadsheet_id is required for pm.populate_candidates")
+    
+    # Extract scenario_name + constraint_set_name from options (required)
+    scenario_name = options.get("scenario_name")
+    constraint_set_name = options.get("constraint_set_name")
+    
+    if not scenario_name or not constraint_set_name:
+        logger.error("pm.populate_candidates.missing_params")
+        return {
+            "pm_job": "pm.populate_candidates",
+            "tab": tab,
+            "populated_count": 0,
+            "skipped_no_key": 0,
+            "failed_count": 0,
+            "error": "Missing scenario_name or constraint_set_name in options",
+            "substeps": [{"step": "validate", "status": "failed", "reason": "missing_params"}],
+        }
+    
+    # Extract initiative keys from scope (optional filter)
+    keys = scope.get("initiative_keys") or []
+    if not isinstance(keys, list):
+        keys = []
+    
+    # Sanitize: skip blanks, dedupe
+    keys = [k for k in keys if isinstance(k, str) and k.strip()]
+    keys = list(dict.fromkeys(keys))
+    
+    logger.info(
+        "pm.populate_candidates.starting",
+        extra={
+            "spreadsheet_id": spreadsheet_id,
+            "tab": tab,
+            "scenario": scenario_name,
+            "constraint_set": constraint_set_name,
+            "filter_keys": len(keys) if keys else "all",
+        }
+    )
+    
+    try:
+        result = populate_candidates_from_db(
+            db=db,
+            client=ctx.sheets_client,
+            spreadsheet_id=str(spreadsheet_id),
+            tab_name=str(tab),
+            scenario_name=str(scenario_name),
+            constraint_set_name=str(constraint_set_name),
+            initiative_keys=keys if keys else None,
+        )
+        
+        populated = result.get("populated_count", 0)
+        skipped = result.get("skipped_no_key", 0)
+        failed = result.get("failed_count", 0)
+        
+        logger.info(
+            "pm.populate_candidates.completed",
+            extra={"populated": populated, "skipped_no_key": skipped, "failed": failed}
+        )
+        
+        return {
+            "pm_job": "pm.populate_candidates",
+            "tab": tab,
+            "populated_count": populated,
+            "skipped_no_key": skipped,
+            "failed_count": failed,
+            "substeps": [
+                {"step": "read_existing", "status": "ok"},
+                {"step": "populate", "status": "ok", "count": populated},
+            ],
+        }
+        
+    except Exception as e:
+        logger.exception("pm.populate_candidates.failed")
+        return {
+            "pm_job": "pm.populate_candidates",
+            "tab": tab,
+            "populated_count": 0,
+            "skipped_no_key": 0,
+            "failed_count": 0,
+            "error": str(e),
+            "substeps": [{"step": "populate", "status": "failed", "error": str(e)}],
+        }
+
+
 def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext) -> Dict[str, Any]:
     """PM Job: Run optimization (Step 1+2+3 solver) on user-selected candidates.
     
@@ -2120,10 +2237,10 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
     
     Orchestration:
       1. Extract selected initiative keys from scope
-      2. Call run_flow5_optimization_step1 with scope_type="selected_only"
+      2. Call run_flow5_optimization with scope_type="selected_only"
       3. Return result with run_id, status, selected_count, solver_status
     """
-    from app.jobs.optimization_job import run_flow5_optimization_step1
+    from app.jobs.optimization_job import run_flow5_optimization
     
     options = ctx.payload.get("options") or {}
     
@@ -2169,7 +2286,7 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
     
     # Run optimization
     try:
-        result = run_flow5_optimization_step1(
+        result = run_flow5_optimization(
             db=db,
             scenario_name=scenario_name,
             constraint_set_name=constraint_set_name,
@@ -2223,7 +2340,7 @@ def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> D
       1. Call run_flow5_optimization_step1 with scope_type="all_candidates"
       2. Return result with run_id, status, selected_count, solver_status
     """
-    from app.jobs.optimization_job import run_flow5_optimization_step1
+    from app.jobs.optimization_job import run_flow5_optimization
     
     options = ctx.payload.get("options") or {}
     
@@ -2245,7 +2362,7 @@ def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> D
     
     # Run optimization
     try:
-        result = run_flow5_optimization_step1(
+        result = run_flow5_optimization(
             db=db,
             scenario_name=scenario_name,
             constraint_set_name=constraint_set_name,
@@ -2319,6 +2436,7 @@ _ACTION_REGISTRY: Dict[str, ActionFn] = {
     "pm.seed_math_params": _action_pm_seed_math_params,
     
     # PM Jobs (V3 Optimization)
+    "pm.populate_candidates": _action_pm_populate_candidates,
     "pm.optimize_run_selected_candidates": _action_pm_optimize_run_selected_candidates,
     "pm.optimize_run_all_candidates": _action_pm_optimize_run_all_candidates,
 }

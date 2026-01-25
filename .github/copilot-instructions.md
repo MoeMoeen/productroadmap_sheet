@@ -5,7 +5,7 @@ You are an AI coding agent working in this repository. Your job is to produce hi
 If you have not grounded your answer in `projectscope.md` and verified referenced symbols, do not answer yet.
 
 ## 0) Non-negotiables
-- Prefer correctness, clarity, maintainability, and security over cleverness or speed.
+- Prefer correctness, production grade development, proper implementation, best practices, clarity, maintainability, and security over cleverness or speed and over-simplification. 
 - Do NOT introduce breaking changes unless explicitly requested.
 - Do NOT add new dependencies or services unless explicitly approved by the user.
 - Keep changes minimal and localized; avoid broad refactors unless asked.

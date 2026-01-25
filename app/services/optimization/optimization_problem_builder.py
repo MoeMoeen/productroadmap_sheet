@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from app.db.models.initiative import Initiative
-from app.db.models.optimization import OptimizationScenario, OptimizationConstraintSet
+from app.db.models.optimization import OptimizationScenario, OptimizationConstraintSet, OrganizationMetricConfig
 from app.utils.periods import parse_period_key
 from app.services.optimization.feasibility_filters import is_deadline_feasible
 from app.schemas.optimization_problem import (
@@ -38,6 +38,46 @@ from app.schemas.optimization_problem import (
 logger = logging.getLogger(__name__)
 
 ScopeType = Literal["selected_only", "all_candidates"]
+
+
+def _resolve_active_north_star_kpi_key(db: Session) -> str:
+    """
+    Resolve the single active North Star KPI key from OrganizationMetricConfig.
+    
+    Production rule (Phase 5):
+      - Exactly one row with kpi_level="north_star" AND is_active=True required
+    
+    Returns:
+        The kpi_key of the active north_star KPI
+        
+    Raises:
+        ValueError: If zero or multiple active north_star KPIs found
+    """
+    rows = db.scalars(select(OrganizationMetricConfig)).all()
+    
+    north_stars = [
+        r for r in rows
+        if str(r.kpi_level).strip().lower() == "north_star" and r.is_active is True
+    ]
+    
+    if len(north_stars) == 0:
+        all_ns = [r for r in rows if str(r.kpi_level).strip().lower() == "north_star"]
+        raise ValueError(
+            f"No active north_star KPI found in OrganizationMetricConfig. "
+            f"Found {len(all_ns)} north_star KPIs total (all inactive or is_active=False). "
+            f"Please set is_active=True for exactly 1 north_star KPI."
+        )
+    
+    if len(north_stars) > 1:
+        keys = [str(r.kpi_key) for r in north_stars]
+        raise ValueError(
+            f"Expected exactly 1 active north_star KPI, found {len(north_stars)}: {keys}. "
+            f"Please ensure only 1 KPI has kpi_level='north_star' AND is_active=True."
+        )
+    
+    kpi_key = str(north_stars[0].kpi_key).strip()
+    logger.info(f"Resolved north_star KPI: {kpi_key} (is_active=True)")
+    return kpi_key
 
 
 def build_optimization_problem(
@@ -122,7 +162,7 @@ def build_optimization_problem(
             raise ValueError(
                 "selected_initiative_keys is required when scope_type='selected_only'"
             )
-        # PRODUCTION FIX: Use modern SQLAlchemy select() syntax
+        # Use modern SQLAlchemy select() syntax
         stmt = select(Initiative).where(
             Initiative.initiative_key.in_(selected_initiative_keys)
         )
@@ -135,7 +175,7 @@ def build_optimization_problem(
 
     initiatives: List[Initiative] = list(db.execute(stmt).scalars().all())
 
-    # PRODUCTION FIX: Warn if candidate pool is unexpectedly empty
+    # Warn if candidate pool is unexpectedly empty
     if not initiatives:
         logger.warning(
             "No candidates found for optimization problem",
@@ -178,17 +218,17 @@ def build_optimization_problem(
     for i in feasible:
         tokens = i.engineering_tokens
         if tokens is None:
-            # PRODUCTION FIX: Fail fast with clear message
+            # Fail fast with clear message
             raise ValueError(
                 f"Missing engineering_tokens for candidate '{i.initiative_key}'. "
                 f"All candidates must have engineering_tokens defined for optimization."
             )
 
-        # PRODUCTION FIX: Convert Decimal to float (SQLAlchemy may return Decimal from JSON)
+        # Convert Decimal to float (SQLAlchemy may return Decimal from JSON)
         if isinstance(tokens, Decimal):
             tokens = float(tokens)
 
-        # PRODUCTION FIX: Validate tokens >= 0 (caught early before solver)
+        # Validate tokens >= 0 (caught early before solver)
         if float(tokens) < 0:  # type: ignore[arg-type]
             raise ValueError(
                 f"Invalid engineering_tokens for candidate '{i.initiative_key}': "
@@ -198,7 +238,7 @@ def build_optimization_problem(
         # KPI contributions are stored on Initiative.kpi_contribution_json
         kpi_contrib = i.kpi_contribution_json or {}
         
-        # PRODUCTION FIX: Ensure numeric floats, handle Decimal/string creep
+        # Ensure numeric floats, handle Decimal/string creep
         cleaned_contrib: Dict[str, float] = {}
         if isinstance(kpi_contrib, dict):
             for k, v in kpi_contrib.items():
@@ -209,7 +249,7 @@ def build_optimization_problem(
                     else:
                         cleaned_contrib[str(k)] = float(v)
                 except (TypeError, ValueError):
-                    # PRODUCTION FIX: Log warning but don't fail - skip non-numeric contributions
+                    # Log warning but don't fail - skip non-numeric contributions
                     logger.warning(
                         "Skipping non-numeric KPI contribution",
                         extra={
@@ -220,14 +260,14 @@ def build_optimization_problem(
                     )
                     continue
 
-        # PRODUCTION FIX: Correct field mapping from Initiative to Candidate
+        # Correct field mapping from Initiative to Candidate
         # Note: SQLAlchemy ORM instance attributes return Python values, not Column objects
         # type: ignore comments suppress false positives from Pylance static analysis
         candidates.append(
             Candidate(
                 initiative_key=str(i.initiative_key),  # type: ignore[arg-type]
                 engineering_tokens=float(tokens),  # type: ignore[arg-type]
-                # Dimension mapping (PRODUCTION FIX: Use correct Initiative fields)
+                # Dimension mapping (Use correct Initiative fields)
                 country=i.country,  # type: ignore[arg-type]
                 department=i.department,  # type: ignore[arg-type]
                 category=i.category,  # type: ignore[arg-type]
@@ -243,7 +283,7 @@ def build_optimization_problem(
         )
 
     # --- 6) Build ObjectiveSpec ---
-    # PRODUCTION FIX: Ensure objective_mode is properly typed
+    # Ensure objective_mode is properly typed
     obj_mode = str(scenario.objective_mode or "north_star").strip()
     if obj_mode not in ("north_star", "weighted_kpis", "lexicographic"):
         raise ValueError(
@@ -255,13 +295,23 @@ def build_optimization_problem(
         mode=obj_mode,  # type: ignore[arg-type]
         weights=scenario.objective_weights_json or None,  # type: ignore[arg-type]
         normalization="targets",
-        # PRODUCTION FIX: Could add north_star_kpi_key if stored somewhere. We are supposed to persist metrics including north star
-        # in OrganizationMetricsConfig.kpi_key,	OrganizationMetricsConfig.kpi_name, OrganizationMetricsConfig.kpi_level, etc.
-        # north_star_kpi_key="north_star_gmv",
     )
+    
+    # Step 6.1: Resolve north_star_kpi_key if mode is "north_star"
+    if objective.mode == "north_star":
+        try:
+            objective.north_star_kpi_key = _resolve_active_north_star_kpi_key(db)
+            logger.info(
+                "Resolved north_star_kpi_key for objective",
+                extra={"north_star_kpi_key": objective.north_star_kpi_key}
+            )
+        except ValueError as e:
+            raise ValueError(
+                f"Failed to resolve north_star_kpi_key for scenario '{scenario.name}': {e}"
+            ) from e
 
     # --- 7) Build ConstraintSetPayload from DB JSON fields ---
-    # PRODUCTION FIX: Governance rules come ONLY from cset.*_json, not from Initiative
+    # Governance rules come ONLY from cset.*_json, not from Initiative
     # SQLAlchemy ORM attributes return Python dicts/lists, not Column objects
     constraint_payload = ConstraintSetPayload(
         floors=cset.floors_json or {},  # type: ignore[arg-type]
@@ -277,7 +327,7 @@ def build_optimization_problem(
     )
 
     # --- 8) Post-build validation: governance constraints must reference valid candidates ---
-    # PRODUCTION FIX: Catch governance mismatches early
+    # Catch governance mismatches early
     candidate_keys = {c.initiative_key for c in candidates}
     _validate_governance_references(constraint_payload, candidate_keys)
 
@@ -326,7 +376,7 @@ def _validate_governance_references(
     candidate_keys: set[str],
 ) -> None:
     """
-    PRODUCTION FIX: Validate that all governance constraint references
+    Validate that all governance constraint references
     point to initiatives that exist in the candidate pool.
     
     This catches configuration errors early before solver runs.

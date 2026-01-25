@@ -113,16 +113,17 @@ class OrtoolsCpSatSolverAdapter:
 
     def solve(self, problem: "OptimizationProblem") -> "OptimizationSolution":
         """
-        STEP 1+2+3+4+5+6+6.5:
-        - binary decision x_i ∈ {0,1}
-        - mandatory initiatives: x_i = 1 for each mandatory initiative
-        - exclusions: x_i = 0 for each excluded initiative, x_a + x_b <= 1 for each excluded pair
-        - prerequisites: x_dep <= x_req for each prerequisite edge (if dependent selected, prerequisite must be selected)
-        - bundles: x_m1 = x_m2 = ... = x_mk for each bundle (all-or-nothing)
-        - capacity caps: global cap and per-dimension caps from constraint_set.caps
-        - capacity floors: per-dimension minimum token allocations from constraint_set.floors
-        - target floors: sum(contrib_i * x_i) >= floor for each floor target (scaled to int)
-        - temporary objective: maximize capacity usage (avoid empty solutions)
+        STEP 1-8: Build and solve CP-SAT model with all constraints
+        
+        Step 1: Binary decision variables x_i ∈ {0,1}
+        Step 2: Mandatory initiatives (x_i = 1 for each mandatory)
+        Step 3: Exclusions (single: x_i = 0, pairs: x_a + x_b <= 1)
+        Step 4: Prerequisites (x_dep <= x_req for each prerequisite edge)
+        Step 5: Bundles (all-or-nothing: x_m1 = x_m2 = ... = x_mk)
+        Step 6: Capacity caps (global and per-dimension token limits)
+        Step 6.5: Capacity floors (per-dimension minimum token allocations)
+        Step 7: Target floors (sum(contrib_i * x_i) >= floor for each KPI floor target)
+        Step 8: Objective function (north_star, weighted_kpis, or lexicographic)
 
         Returns:
             OptimizationSolution with status and which initiatives were selected.
@@ -130,7 +131,7 @@ class OrtoolsCpSatSolverAdapter:
         from app.schemas.optimization_solution import OptimizationSolution, SelectedItem
         
         logger.info(
-            "Building CP-SAT model: Step 1+2+3+4+5+6+6.5 (capacity, mandatory, exclusions, prerequisites, bundles, capacity floors, target floors)",
+            "Building CP-SAT model: Steps 1-8 (decision vars, mandatory, exclusions, prerequisites, bundles, capacity caps/floors, target floors, objective)",
             extra={
                 "candidate_count": len(problem.candidates),
                 "scenario": problem.scenario_name,
@@ -386,7 +387,7 @@ class OrtoolsCpSatSolverAdapter:
             },
         )
 
-        # ---- Capacity caps ----
+        # ---- Capacity caps (Step 6) ----
         # We may have both:
         #  - scenario.capacity_total_tokens
         #  - caps["all"]["all"]
@@ -544,7 +545,7 @@ class OrtoolsCpSatSolverAdapter:
             },
         )
 
-        # ---- Target floors (Step 6) ----
+        # ---- Target floors (Step 7) ----
         targets = problem.constraint_set.targets or {}
         target_floors_total = 0
         target_floors_applied = 0
@@ -669,13 +670,71 @@ class OrtoolsCpSatSolverAdapter:
             },
         )
 
-        # ---- Step 1 temporary objective: maximize capacity usage (avoid empty solutions) ----
-
-        # Without an objective, CP-SAT may return the trivial solution (select nothing).
-        # For Step 1, we maximize total tokens used to "fill the capacity" and avoid confusion.
-        # TODO Step 7: Replace with real objective modes (north_star, weighted_kpis, lexicographic)
-        model.Maximize(sum(token_cost[k] * x[k] for k in x.keys()))  # type: ignore[attr-defined]
-        logger.info("Step 1 objective: maximize capacity usage")
+        # ---- Step 8: Objective function ----
+        # Objective modes: north_star, weighted_kpis, lexicographic
+        
+        obj_mode = getattr(problem.objective, "mode", None)
+        obj_mode_str = str(obj_mode or "").strip().lower()
+        
+        if obj_mode_str == "north_star":
+            # Step 8.1: North Star objective - maximize contribution to single north_star KPI
+            ns_key = getattr(problem.objective, "north_star_kpi_key", None)
+            ns_key_str = str(ns_key or "").strip() if ns_key else ""
+            
+            if not ns_key_str:
+                logger.error("north_star objective mode requires north_star_kpi_key")
+                return OptimizationSolution(
+                    status="model_invalid",
+                    diagnostics={"error": "north_star_kpi_key_missing", "objective_mode": "north_star"},
+                )
+            
+            # Build objective: Maximize sum(contrib_i[north_star_kpi_key] * x_i)
+            terms = []
+            missing_contrib_count = 0
+            
+            for c in problem.candidates:
+                contrib_val = (c.kpi_contributions or {}).get(ns_key_str)
+                if contrib_val is None:
+                    missing_contrib_count += 1
+                    continue
+                
+                try:
+                    contrib_float = float(contrib_val)
+                    contrib_int = _scaled_int(contrib_float, KPI_SCALE)
+                except (TypeError, ValueError) as e:
+                    logger.warning(
+                        f"Invalid north_star contribution for {c.initiative_key}: {contrib_val}",
+                        extra={"initiative_key": c.initiative_key, "contrib_val": contrib_val, "error": str(e)}
+                    )
+                    continue
+                
+                if contrib_int == 0:
+                    continue
+                
+                terms.append(contrib_int * x[c.initiative_key])
+            
+            # If nobody contributes, objective is 0; still solve feasibility
+            objective_expr = sum(terms) if terms else 0
+            model.Maximize(objective_expr)  # type: ignore[attr-defined]
+            
+            logger.info(
+                "Step 8 objective: maximize north_star",
+                extra={
+                    "north_star_kpi_key": ns_key_str,
+                    "contributing_candidates": len(terms),
+                    "missing_contrib": missing_contrib_count,
+                    "total_candidates": len(problem.candidates),
+                }
+            )
+        
+        else:
+            # Fallback: temporary objective (maximize capacity usage)
+            # TODO: Implement weighted_kpis (Step 8.2) and lexicographic (Step 8.3)
+            model.Maximize(sum(token_cost[k] * x[k] for k in x.keys()))  # type: ignore[attr-defined]
+            logger.info(
+                "Step 8 objective fallback: maximize capacity usage (temporary)",
+                extra={"objective_mode": obj_mode_str or "not_specified"}
+            )
         
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = float(self.config.max_time_seconds)

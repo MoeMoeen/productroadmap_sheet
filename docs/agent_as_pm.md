@@ -662,3 +662,133 @@ T2: pm.score_selected runs
     "writeback_count": 7,       # Total rows written back to sheet
 }
 ```
+
+
+---
+
+You're **absolutely right** — I made a critical error! Let me correct this:
+
+## **Candidates Tab Column Ownership (Per Live Sheets Registry)**
+
+Looking at the **actual metadata** from projectscope.md:
+
+### **Group 1: Formula Columns (PM Copies from Backlog via Formula)** ✅ SKIP
+- `initiative_key`, `title`, `country`, `department`, `lifecycle_status`, `active_scoring_framework`, `active_overall_score`
+- **Metadata**: "PM Copies via formula from Backlog; Sheet→Sheet (formula), read-only."
+
+### **Group 2: PM Input Columns (EDITABLE by PM)** ⚠️ **I WAS WRONG**
+| Column | Metadata | Action |
+|--------|----------|--------|
+| `engineering_tokens` | "PM input Sheet → DB" | **DO NOT OVERWRITE** |
+| `deadline_date` | "PM input Sheet → DB" | **DO NOT OVERWRITE** |
+| `category` | "PM input - categorize work type for optimization" | **DO NOT OVERWRITE** |
+| `program_key` | "PM input - assign initiative to a program for cross-functional tracking" | **DO NOT OVERWRITE** |
+
+**You're correct**: These are **PM entry surfaces on the Candidates tab**, not derived from DB. They should be **preserved**, not overwritten.
+
+### **Group 3: DB-Derived Columns (Backend Computes)** ✅ WRITE
+| Column | Metadata | Action |
+|--------|----------|--------|
+| `north_star_contribution` | "Backend derives ← DB (display only here); entry surface is ProductOps/KPI_contributions" | **WRITE from DB** |
+| `strategic_kpi_contributions` | "Backend derives ← DB (display only here); entry surface is ProductOps/KPI_contributions" | **WRITE from DB** |
+| `immediate_kpi_key` | "PM input → DB" | **WRITE from DB** |
+
+### **Group 4: Constraint-Derived Columns (READ-ONLY, Display Only)** ✅ WRITE
+| Column | Metadata | Action |
+|--------|----------|--------|
+| `is_mandatory` | "READ-ONLY. Derived from Constraints tab. Edit constraints on Constraints tab only." | **WRITE from Constraints** |
+| `mandate_reason` | "?" | **WRITE from Constraints** |
+| `bundle_key` | "READ-ONLY. Derived from Constraints tab (bundle_all_or_nothing). Display only." | **WRITE from Constraints** |
+| `prerequisite_keys` | "READ-ONLY. Derived from Constraints tab (require_prereq). Display only." | **WRITE from Constraints** |
+| `exclusion_keys` | "READ-ONLY. Derived from Constraints tab (exclude_* constraints). Display only." | **WRITE from Constraints** |
+| `synergy_group_keys` | "READ-ONLY. Derived from Constraints tab (synergy_bonus). Display only." | **WRITE from Constraints** |
+
+### **Group 5: Sheet-Only PM Input** ✅ SKIP
+- `notes`, `is_selected_for_run`
+- **Metadata**: "PM input: Sheet-only notes/checkbox"
+
+### **Group 6: Backend Status** ✅ WRITE
+- `run_status`, `updated_source`, `updated_at`
+
+---
+
+## **Corrected Writer Behavior**
+
+The writer should **NOT overwrite PM input columns** (`engineering_tokens`, `deadline_date`, `category`, `program_key`). Instead:
+
+1. **On first populate (initiative not in sheet)**: Write all columns (including PM input defaults from DB)
+2. **On subsequent updates (initiative exists)**: **SKIP PM input columns**, only update:
+   - Derived KPI columns (from DB)
+   - Constraint indicators (from Constraints tab)
+   - Status columns
+
+**This makes the Candidates tab a hybrid**:
+- **PM enters**: `engineering_tokens`, `deadline_date`, `category`, `program_key` directly in sheet
+- **Backend syncs PM inputs to DB**: Via your new `sync_candidates_from_sheet()` function (already implemented!)
+- **Backend writes read-only indicators**: KPI contributions, constraint flags, status
+
+---
+
+## **Updated Implementation Plan**
+
+### **Writer Logic**
+
+```python
+def populate_candidates_from_db(...):
+    # Read existing rows to detect which initiatives already exist
+    existing_keys = _read_existing_initiative_keys(...)
+    
+    for initiative in initiatives:
+        is_new = initiative.initiative_key not in existing_keys
+        
+        if is_new:
+            # NEW INITIATIVE: Write ALL columns (including PM input defaults from DB)
+            write_columns = [
+                "initiative_key",  # Formula (will be overwritten by formula anyway)
+                "engineering_tokens",  # PM input (seed initial value from DB)
+                "deadline_date",  # PM input (seed initial value from DB)
+                "category",  # PM input (seed initial value from DB)
+                "program_key",  # PM input (seed initial value from DB)
+                "north_star_contribution",  # Derived
+                "strategic_kpi_contributions",  # Derived
+                "is_mandatory",  # Constraint-derived
+                "bundle_key",  # Constraint-derived
+                # ... etc
+            ]
+        else:
+            # EXISTING INITIATIVE: Skip PM input columns, only update derived/system fields
+            write_columns = [
+                # SKIP: engineering_tokens, deadline_date, category, program_key
+                "north_star_contribution",  # Derived (UPDATE)
+                "strategic_kpi_contributions",  # Derived (UPDATE)
+                "is_mandatory",  # Constraint-derived (UPDATE)
+                "bundle_key",  # Constraint-derived (UPDATE)
+                "run_status",  # Status (UPDATE)
+                "updated_source",  # Provenance (UPDATE)
+                "updated_at",  # Timestamp (UPDATE)
+            ]
+```
+
+---
+
+## **Sync Flow (Bidirectional)**
+
+### **Sheet → DB** (Already Implemented ✅)
+```
+PM edits Candidates tab (engineering_tokens, category, etc.)
+  ↓
+PM runs: Roadmap AI → "Save Selected"
+  ↓
+sync_candidates_from_sheet() persists edits to DB
+```
+
+### **DB → Sheet** (New Writer)
+```
+PM runs: Roadmap AI → "Populate Candidates"
+  ↓
+populate_candidates_from_db()
+  ├─ NEW initiatives: Write ALL columns (seed PM inputs from DB)
+  └─ EXISTING initiatives: Update ONLY derived/constraint/status columns
+```
+
+---

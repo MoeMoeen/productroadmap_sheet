@@ -82,7 +82,7 @@ class Candidate(BaseModel):
     engineering_tokens: float = Field(..., ge=0)
 
     # Dimensions used by floors/caps/targets slicing
-    # PRODUCTION FIX: All dimensions optional (not all initiatives have all dimensions)
+    # All dimensions optional (not all initiatives have all dimensions)
     country: Optional[str] = None
     segment: Optional[str] = None  # Maps from Initiative.customer_segment
     product: Optional[str] = None  # Maps from Initiative.product_area
