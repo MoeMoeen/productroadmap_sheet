@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ortools.sat.python import cp_model
 
@@ -96,6 +96,71 @@ def _get_candidate_dim_value_for_targets(c: "Candidate", dimension: str) -> Opti
     if v is None:
         return None
     return str(v).strip().lower()
+
+
+def _resolve_kpi_scale_from_targets_any(
+    targets: Dict[str, Any],
+    kpi_key: str,
+) -> tuple[float, str, int]:
+    """
+    Resolve normalization scale for a KPI from targets with fallback aggregation.
+    
+    Resolution order (Phase 5 production):
+    1. Prefer targets['all']['all'][kpi_key]['value'] (global scale)
+    2. Else aggregate across all dimensions: max(valid target values)
+    3. Else fallback to 1.0
+    
+    Returns:
+        (scale, source, count) where:
+        - scale: float > 0 (normalization denominator)
+        - source: "all/all" | "max_of_targets" | "fallback_1"
+        - count: number of target values found across dimensions
+    """
+    # Step 1: Try global all/all target (preferred)
+    try:
+        all_dim = targets.get("all") or {}
+        all_key = all_dim.get("all") or {}
+        spec = all_key.get(kpi_key) or {}
+        val = spec.get("value", None)
+        if val is not None:
+            v = float(val)
+            if v > 0:
+                return (v, "all/all", 1)
+    except Exception:
+        pass
+    
+    # Step 2: Aggregate across all dimensional targets (max for stability)
+    valid_values: list[float] = []
+    
+    for dim, dim_map in targets.items():
+        if not isinstance(dim_map, dict):
+            continue
+        # Skip all/all to avoid double-counting (already tried in Step 1)
+        if dim == "all":
+            continue
+        for dim_key, kpi_map in dim_map.items():
+            if not isinstance(kpi_map, dict):
+                continue
+            spec = kpi_map.get(kpi_key)
+            if not isinstance(spec, dict):
+                continue
+            val = spec.get("value", None)
+            if val is None:
+                continue
+            try:
+                v = float(val)
+                if v > 0:  # Reject zero/negative scales
+                    valid_values.append(v)
+            except Exception:
+                continue
+    
+    if valid_values:
+        # Use max to avoid over-weighting from small denominators
+        scale = max(valid_values)
+        return (scale, "max_of_targets", len(valid_values))
+    
+    # Step 3: Fallback to 1.0
+    return (1.0, "fallback_1", 0)
 
 
 class OrtoolsCpSatSolverAdapter:
@@ -676,6 +741,9 @@ class OrtoolsCpSatSolverAdapter:
         obj_mode = getattr(problem.objective, "mode", None)
         obj_mode_str = str(obj_mode or "").strip().lower()
         
+        # Initialize objective diagnostics (updated per mode)
+        objective_diag: Dict[str, Any] = {"objective_mode": obj_mode_str or "not_specified"}
+        
         if obj_mode_str == "north_star":
             # Step 8.1: North Star objective - maximize contribution to single north_star KPI
             ns_key = getattr(problem.objective, "north_star_kpi_key", None)
@@ -726,15 +794,136 @@ class OrtoolsCpSatSolverAdapter:
                     "total_candidates": len(problem.candidates),
                 }
             )
+            
+            objective_diag.update({
+                "north_star_kpi_key": ns_key_str,
+                "contributing_candidates": len(terms),
+                "missing_contrib": missing_contrib_count,
+            })
+        
+        elif obj_mode_str == "weighted_kpis":
+            # Step 8.2: Weighted KPIs objective - maximize weighted sum of normalized KPI contributions
+            weights = problem.objective.weights or {}
+            if not weights:
+                logger.error("weighted_kpis objective mode requires weights")
+                return OptimizationSolution(
+                    status="model_invalid",
+                    diagnostics={"error": "weighted_kpis_missing_weights", "objective_mode": "weighted_kpis"},
+                )
+            
+            targets = problem.constraint_set.targets or {}
+            missing_scales: List[str] = []
+            
+            # Step 8.2.1: Resolve per-KPI scale from targets with aggregation fallback
+            kpi_scale_map: Dict[str, float] = {}
+            scale_source_map: Dict[str, str] = {}
+            scale_targets_count: Dict[str, int] = {}
+            filtered_weights: Dict[str, float] = {}  # Track filtered weights for weights_sum
+            
+            for kpi_key, w in weights.items():
+                try:
+                    w_f = float(w)
+                except Exception:
+                    continue
+                if w_f <= 0:
+                    continue
+                
+                filtered_weights[str(kpi_key)] = w_f
+                
+                scale, source, count = _resolve_kpi_scale_from_targets_any(targets, str(kpi_key))
+                kpi_scale_map[str(kpi_key)] = scale
+                scale_source_map[str(kpi_key)] = source
+                scale_targets_count[str(kpi_key)] = count
+                
+                if source == "fallback_1":
+                    missing_scales.append(str(kpi_key))
+                    logger.warning(
+                        "No target found for weighted KPI (using fallback scale=1.0)",
+                        extra={"kpi_key": str(kpi_key)}
+                    )
+                elif source == "max_of_targets":
+                    logger.info(
+                        "Using aggregated target scale for weighted KPI",
+                        extra={
+                            "kpi_key": str(kpi_key),
+                            "scale": scale,
+                            "source": "max_of_targets",
+                            "targets_found": count
+                        }
+                    )
+            
+            # Step 8.2.2: Build candidate coefficients: coeff_i = sum_k(w_k * contrib_i,k / scale_k)
+            coeffs: Dict[str, int] = {}
+            zero_coeff_count = 0
+            
+            for c in problem.candidates:
+                total_weighted_normalized = 0.0
+                
+                # Use filtered_weights (already validated w_f > 0)
+                for kpi_key, w_f in filtered_weights.items():
+                    contrib = (c.kpi_contributions or {}).get(kpi_key)
+                    if contrib is None:
+                        continue
+                    
+                    try:
+                        contrib_f = float(contrib)
+                    except Exception:
+                        continue
+                    
+                    scale = kpi_scale_map.get(kpi_key, 1.0)
+                    total_weighted_normalized += w_f * (contrib_f / scale)
+                
+                # Scale to integer coefficient
+                coeff_int = _scaled_int(total_weighted_normalized, KPI_SCALE)
+                coeffs[c.initiative_key] = coeff_int
+                
+                if coeff_int == 0:
+                    zero_coeff_count += 1
+            
+            # Step 8.2.3: Maximize sum(coeff_i * x_i)
+            objective_expr = sum(coeffs[k] * x[k] for k in x.keys())
+            model.Maximize(objective_expr)  # type: ignore[attr-defined]
+            
+            # Compute weights_sum from filtered weights (safe against non-float values)
+            weights_sum = sum(filtered_weights.values())
+            nonzero_coeff_candidates = len(problem.candidates) - zero_coeff_count
+            
+            logger.info(
+                "Step 8.2 objective: maximize weighted_kpis",
+                extra={
+                    "weights_count": len(weights),
+                    "weights_sum": weights_sum,
+                    "kpi_keys": list(weights.keys()),
+                    "missing_scales": missing_scales[:10],
+                    "zero_coeff_candidates": zero_coeff_count,
+                    "nonzero_coeff_candidates": nonzero_coeff_candidates,
+                    "total_candidates": len(problem.candidates),
+                    "scale_sources": scale_source_map,
+                }
+            )
+            
+            objective_diag.update({
+                "weights": weights,
+                "weights_sum": weights_sum,
+                "kpi_scale_map": kpi_scale_map,
+                "scale_source_map": scale_source_map,
+                "scale_targets_count": scale_targets_count,
+                "missing_target_scales": missing_scales,
+                "zero_coeff_candidates": zero_coeff_count,
+                "nonzero_coeff_candidates": nonzero_coeff_candidates,
+                "kpi_scale": KPI_SCALE,
+            })
         
         else:
             # Fallback: temporary objective (maximize capacity usage)
-            # TODO: Implement weighted_kpis (Step 8.2) and lexicographic (Step 8.3)
+            # TODO: Implement lexicographic (Step 8.3)
             model.Maximize(sum(token_cost[k] * x[k] for k in x.keys()))  # type: ignore[attr-defined]
             logger.info(
                 "Step 8 objective fallback: maximize capacity usage (temporary)",
                 extra={"objective_mode": obj_mode_str or "not_specified"}
             )
+            
+            objective_diag.update({"fallback_reason": "unsupported_objective_mode"})
         
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = float(self.config.max_time_seconds)
@@ -795,25 +984,31 @@ class OrtoolsCpSatSolverAdapter:
             },
         )
 
+        # Merge objective diagnostics into base diagnostics
+        base_diagnostics = {
+            "token_scale": TOKEN_SCALE,
+            "candidate_count": len(problem.candidates),
+            "mandatory_count": len(problem.constraint_set.mandatory_initiatives or []),
+            "mandatory_applied": mandatory_applied,
+            "excluded_initiatives_count": len(problem.constraint_set.exclusions_initiatives or []),
+            "excluded_pairs_count": len(problem.constraint_set.exclusions_pairs or []),
+            "prereq_dependents_count": len(problem.constraint_set.prerequisites or {}),
+            "bundles_count": len(problem.constraint_set.bundles or []),
+            "capacity_floors_total": floors_total,
+            "capacity_floors_applied": floors_applied,
+            "target_floors_total": target_floors_total,
+            "target_floors_applied": target_floors_applied,
+            "kpi_scale": KPI_SCALE,
+            "caps_dimensions": list((problem.constraint_set.caps or {}).keys()),
+            "solver_wall_time_seconds": solver.WallTime(),
+        }
+        
+        # Merge objective-specific diagnostics
+        base_diagnostics.update(objective_diag)
+        
         return OptimizationSolution(
             status=out_status,  # type: ignore[arg-type]
             selected=selected_items,
             capacity_used_tokens=used_tokens,
-            diagnostics={
-                "token_scale": TOKEN_SCALE,
-                "candidate_count": len(problem.candidates),
-                "mandatory_count": len(problem.constraint_set.mandatory_initiatives or []),
-                "mandatory_applied": mandatory_applied,
-                "excluded_initiatives_count": len(problem.constraint_set.exclusions_initiatives or []),
-                "excluded_pairs_count": len(problem.constraint_set.exclusions_pairs or []),
-                "prereq_dependents_count": len(problem.constraint_set.prerequisites or {}),
-                "bundles_count": len(problem.constraint_set.bundles or []),
-                "capacity_floors_total": floors_total,
-                "capacity_floors_applied": floors_applied,
-                "target_floors_total": target_floors_total,
-                "target_floors_applied": target_floors_applied,
-                "kpi_scale": KPI_SCALE,
-                "caps_dimensions": list((problem.constraint_set.caps or {}).keys()),
-                "solver_wall_time_seconds": solver.WallTime(),
-            },
+            diagnostics=base_diagnostics,
         )

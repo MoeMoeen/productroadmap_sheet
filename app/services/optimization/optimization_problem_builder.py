@@ -57,7 +57,7 @@ def _resolve_active_north_star_kpi_key(db: Session) -> str:
     
     north_stars = [
         r for r in rows
-        if str(r.kpi_level).strip().lower() == "north_star" and r.is_active is True
+        if str(r.kpi_level).strip().lower() == "north_star" and bool(r.is_active)
     ]
     
     if len(north_stars) == 0:
@@ -309,6 +309,55 @@ def build_optimization_problem(
             raise ValueError(
                 f"Failed to resolve north_star_kpi_key for scenario '{scenario.name}': {e}"
             ) from e
+    
+    # Step 6.2: Validate weighted_kpis KPI keys against OrganizationMetricConfig
+    elif objective.mode == "weighted_kpis":
+        if not objective.weights:
+            raise ValueError(
+                f"objective.weights is required when objective.mode='weighted_kpis' for scenario '{scenario.name}'"
+            )
+        
+        # Load active KPIs from OrganizationMetricConfig
+        all_kpi_rows = db.scalars(select(OrganizationMetricConfig)).all()
+        active_kpis = {
+            str(r.kpi_key).strip(): str(r.kpi_level).strip().lower()
+            for r in all_kpi_rows
+            if bool(r.is_active)
+        }
+        
+        # Validate each weighted KPI exists and is active
+        invalid_kpis: List[str] = []
+        non_strategic_kpis: List[str] = []
+        
+        for kpi_key in objective.weights.keys():
+            kpi_key_str = str(kpi_key).strip()
+            if kpi_key_str not in active_kpis:
+                invalid_kpis.append(kpi_key_str)
+            else:
+                level = active_kpis[kpi_key_str]
+                # Allow north_star and strategic KPIs only (immediate KPIs are too granular for portfolio optimization)
+                if level not in ("north_star", "strategic"):
+                    non_strategic_kpis.append(f"{kpi_key_str} (level={level})")
+        
+        if invalid_kpis:
+            raise ValueError(
+                f"Invalid KPI keys in objective.weights for scenario '{scenario.name}': {invalid_kpis}. "
+                f"These KPIs are not active in OrganizationMetricConfig."
+            )
+        
+        if non_strategic_kpis:
+            raise ValueError(
+                f"Invalid KPI levels in objective.weights for scenario '{scenario.name}': {non_strategic_kpis}. "
+                f"Only 'north_star' and 'strategic' KPIs are allowed in weighted_kpis objective."
+            )
+        
+        logger.info(
+            "Validated weighted_kpis objective KPI keys",
+            extra={
+                "weights_count": len(objective.weights),
+                "kpi_keys": list(objective.weights.keys())
+            }
+        )
 
     # --- 7) Build ConstraintSetPayload from DB JSON fields ---
     # Governance rules come ONLY from cset.*_json, not from Initiative

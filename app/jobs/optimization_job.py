@@ -66,7 +66,11 @@ def run_flow5_optimization(
     - Bundles (x_m1 = x_m2 = ... = x_mk for each bundle, all-or-nothing)
     - Capacity floors (sum(tokens_i * x_i) >= min_tokens for each dimension slice)
     - Target floors (sum(contrib_i * x_i) >= floor for each floor target)
-    - Objective function: north_star mode (maximize north_star KPI contribution) or fallback (maximize capacity usage)
+    - Objective function:
+      * Step 8.1: north_star mode (maximize single north_star KPI contribution)
+      * Step 8.2: weighted_kpis mode (maximize weighted sum of normalized KPI contributions)
+        - Normalization: prefers targets["all"]["all"][kpi]["value"], else max aggregation across dimensions
+      * Fallback: maximize capacity usage (temporary for unsupported modes)
 
     Writes durable artifacts:
     - OptimizationRun.inputs_snapshot_json

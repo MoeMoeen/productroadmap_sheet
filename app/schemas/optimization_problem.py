@@ -38,12 +38,12 @@ class ObjectiveSpec(BaseModel):
 
     @model_validator(mode="after")
     def _validate_objective(self) -> "ObjectiveSpec":
-        """PRODUCTION FIX: Validate objective configuration consistency."""
+        """Validate objective configuration consistency."""
         if self.mode == "weighted_kpis":
             if not self.weights:
                 raise ValueError("objective.weights is required when objective.mode='weighted_kpis'")
             
-            # PRODUCTION FIX: Clean + validate non-negative weights
+            # Clean + validate non-negative weights
             cleaned: Dict[str, float] = {}
             for k, v in self.weights.items():
                 try:
@@ -60,7 +60,7 @@ class ObjectiveSpec(BaseModel):
             
             self.weights = cleaned
             
-            # PRODUCTION FIX: Set default normalization
+            # Set default normalization
             if self.normalization is None:
                 self.normalization = "targets"
         
