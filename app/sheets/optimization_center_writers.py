@@ -388,9 +388,18 @@ class OptimizationCenterWriter:
         header = [normalize_header(str(h)) for h in header_values[0]]
         alias_lookup = _build_alias_lookup(OPT_RUNS_HEADER_MAP)
         
-        # Find next empty row
+        # Find next empty row by scanning for last non-empty run_id
         all_values = self.client.get_values(spreadsheet_id, f"{tab_name}!A:A")
-        next_row = len(all_values) + 1 if all_values else 2  # Header is row 1, data starts at 2
+        if not all_values or len(all_values) < 4:
+            next_row = 4  # Row 1=header, 2-3=metadata, data starts at 4
+        else:
+            # Scan backwards from end to find last non-empty row
+            next_row = 4
+            for idx, val in enumerate(all_values):
+                if idx >= 3 and val and str(val[0]).strip():  # Skip rows 1-3 (header + metadata)
+                    next_row = idx + 2  # idx is 0-based, want next row after last non-empty
+            if next_row < 4:
+                next_row = 4
         
         # Build row values
         row_values = []
@@ -431,9 +440,18 @@ class OptimizationCenterWriter:
         header = [normalize_header(str(h)) for h in header_values[0]]
         alias_lookup = _build_alias_lookup(OPT_RESULTS_HEADER_MAP)
         
-        # Find next empty row
+        # Find next empty row by scanning for last non-empty run_id
         all_values = self.client.get_values(spreadsheet_id, f"{tab_name}!A:A")
-        next_row = len(all_values) + 1 if all_values else 2
+        if not all_values or len(all_values) < 4:
+            next_row = 4  # Row 1=header, 2-3=metadata, data starts at 4
+        else:
+            # Scan backwards from end to find last non-empty row
+            next_row = 4
+            for idx, val in enumerate(all_values):
+                if idx >= 3 and val and str(val[0]).strip():  # Skip rows 1-3 (header + metadata)
+                    next_row = idx + 2  # idx is 0-based, want next row after last non-empty
+            if next_row < 4:
+                next_row = 4
         
         # Build batch values
         batch_values = []
@@ -481,9 +499,18 @@ class OptimizationCenterWriter:
         header = [normalize_header(str(h)) for h in header_values[0]]
         alias_lookup = _build_alias_lookup(OPT_GAPS_ALERTS_HEADER_MAP)
         
-        # Find next empty row
+        # Find next empty row by scanning for last non-empty run_id
         all_values = self.client.get_values(spreadsheet_id, f"{tab_name}!A:A")
-        next_row = len(all_values) + 1 if all_values else 2
+        if not all_values or len(all_values) < 4:
+            next_row = 4  # Row 1=header, 2-3=metadata, data starts at 4
+        else:
+            # Scan backwards from end to find last non-empty row
+            next_row = 4
+            for idx, val in enumerate(all_values):
+                if idx >= 3 and val and str(val[0]).strip():  # Skip rows 1-3 (header + metadata)
+                    next_row = idx + 2  # idx is 0-based, want next row after last non-empty
+            if next_row < 4:
+                next_row = 4
         
         # Build batch values
         batch_values = []
@@ -519,24 +546,31 @@ class OptimizationCenterWriter:
         )
 
     def write_results(self, spreadsheet_id: str, tab_name: str, rows: Iterable[Any]) -> int:
+        """Write results with composite key: run_id|initiative_key."""
         return self._write_tab(
             spreadsheet_id=spreadsheet_id,
             tab_name=tab_name,
             header_map=OPT_RESULTS_HEADER_MAP,
-            key_fields=["initiative_key"],
-            key_builder=lambda rd: str(rd.get("initiative_key", "")).strip(),
+            key_fields=["run_id", "initiative_key"],
+            key_builder=lambda rd: "|".join([
+                str(rd.get("run_id", "")).strip(),
+                str(rd.get("initiative_key", "")).strip(),
+            ]).strip("|"),
             write_fields=OPT_RESULTS_OUTPUT_FIELDS + _SYSTEM_STATUS_FIELDS,
             rows=rows,
         )
 
     def write_gaps_alerts(self, spreadsheet_id: str, tab_name: str, rows: Iterable[Any]) -> int:
+        """Write gaps with composite key: run_id|dimension|dimension_key|kpi_key."""
         return self._write_tab(
             spreadsheet_id=spreadsheet_id,
             tab_name=tab_name,
             header_map=OPT_GAPS_ALERTS_HEADER_MAP,
-            key_fields=["country", "kpi_key"],
+            key_fields=["run_id", "dimension", "dimension_key", "kpi_key"],
             key_builder=lambda rd: "|".join([
-                str(rd.get("country", "")).strip(),
+                str(rd.get("run_id", "")).strip(),
+                str(rd.get("dimension", "")).strip(),
+                str(rd.get("dimension_key", "")).strip(),
                 str(rd.get("kpi_key", "")).strip(),
             ]).strip("|"),
             write_fields=OPT_GAPS_ALERTS_OUTPUT_FIELDS + _SYSTEM_STATUS_FIELDS,

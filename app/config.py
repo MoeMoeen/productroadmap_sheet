@@ -109,6 +109,28 @@ class ProductOpsConfig(BaseModel):
         return v
 
 
+class OptimizationCenterConfig(BaseModel):
+    """Configuration for Optimization Center Google Sheet"""
+    spreadsheet_id: str
+    candidates_tab: str = "Candidates"
+    scenario_config_tab: str = "Scenario_Config"
+    constraints_tab: str = "Constraints"
+    targets_tab: str = "Targets"
+    runs_tab: str = "Runs"
+    results_tab: str = "Results"
+    gaps_and_alerts_tab: str = "Gaps_and_Alerts"
+
+    @field_validator("spreadsheet_id")
+    @classmethod
+    def validate_spreadsheet_id(cls, v: str) -> str:
+        if not v or v == "YOUR_OPTIMIZATION_CENTER_SPREADSHEET_ID":
+            raise ValueError(
+                "OptimizationCenter spreadsheet_id not configured. "
+                "Please set it in optimization_center_sheet_config.json"
+            )
+        return v
+
+
 BASE_DIR = Path(__file__).resolve().parent.parent  # project root folder
 
 
@@ -146,6 +168,10 @@ class Settings(BaseSettings):
     # Product Ops workbook (control plane for Product)
     PRODUCT_OPS: Optional[ProductOpsConfig] = None
     PRODUCT_OPS_CONFIG_FILE: Optional[str] = None # path to JSON object with spreadsheet_id + tab names
+
+    # Optimization Center workbook (Phase 5 optimization inputs/outputs)
+    OPTIMIZATION_CENTER: Optional[OptimizationCenterConfig] = None
+    OPTIMIZATION_CENTER_CONFIG_FILE: Optional[str] = None  # path to JSON object with spreadsheet_id + tab names
 
     # Intake rules (no hardcoded magic numbers)
     INTAKE_CREATE_MAX_RETRIES: int = 3
@@ -236,6 +262,34 @@ class Settings(BaseSettings):
                 )
 
             self.PRODUCT_OPS = ProductOpsConfig.model_validate(raw)
+
+        return self
+
+    @model_validator(mode="after")
+    def load_optimization_center_from_file(self) -> "Settings":
+        """
+        If OPTIMIZATION_CENTER_CONFIG_FILE is set, read that JSON file
+        and use it to populate OPTIMIZATION_CENTER.
+        """
+        if self.OPTIMIZATION_CENTER_CONFIG_FILE:
+            cfg_path = Path(self.OPTIMIZATION_CENTER_CONFIG_FILE)
+            if not cfg_path.is_absolute():
+                cfg_path = BASE_DIR / cfg_path
+
+            if not cfg_path.exists():
+                raise FileNotFoundError(
+                    f"OPTIMIZATION_CENTER_CONFIG_FILE points to {cfg_path}, but it does not exist."
+                )
+
+            with cfg_path.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+
+            if not isinstance(raw, dict):
+                raise ValueError(
+                    "OPTIMIZATION_CENTER config file must contain a JSON object with spreadsheet_id and tab names."
+                )
+
+            self.OPTIMIZATION_CENTER = OptimizationCenterConfig.model_validate(raw)
 
         return self
 

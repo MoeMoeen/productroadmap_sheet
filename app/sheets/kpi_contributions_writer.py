@@ -132,9 +132,9 @@ def write_kpi_contributions_to_sheet(
             key = entry
         key = str(key).strip()
         if key:
-            row_index_by_key[key] = offset + 2  # Row 1 = header, data starts at 2
+            row_index_by_key[key] = offset + 4  # Row 1=header, 2-3=metadata, data starts at 4
 
-    next_append_row = len(existing_keys_raw) + 2  # Next empty row for append
+    next_append_row = len(existing_keys_raw) + 4  # Next empty row for append (skip header + 2 metadata rows)
 
     # Step 4: Load initiatives from DB
     if initiative_keys is not None and initiative_keys:

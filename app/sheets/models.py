@@ -733,12 +733,14 @@ class OptRunRow(BaseModel):
     run_id: str
     scenario_name: Optional[str] = None
     period_key: Optional[str] = None
-    status: Optional[str] = None
+    optimization_db_status: Optional[str] = None
     created_at: Optional[str] = None
+    started_at: Optional[str] = None
     finished_at: Optional[str] = None
     selected_count: Optional[int] = None
-    total_objective: Optional[float] = None
     capacity_used: Optional[float] = None
+    total_objective_raw: Optional[int] = None
+    total_objective: Optional[float] = None
     gap_summary: Optional[str] = None
     results_tab_ref: Optional[str] = None
     run_status: Optional[str] = None
@@ -751,18 +753,26 @@ class OptResultRow(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    run_id: str
     initiative_key: str
     selected: Optional[bool] = None
     allocated_tokens: Optional[float] = None
+    # Frozen dimension snapshot from candidate
     country: Optional[str] = None
     department: Optional[str] = None
     category: Optional[str] = None
+    program: Optional[str] = None
+    product: Optional[str] = None
+    segment: Optional[str] = None
+    # Objective attribution
+    objective_mode: Optional[str] = None
+    objective_contribution: Optional[float] = None
     north_star_gain: Optional[float] = None
+    # Display fields
     active_overall_score: Optional[float] = None
-    mandate_reason: Optional[str] = None
-    bundle_key: Optional[str] = None
     dependency_status: Optional[str] = None
     notes: Optional[str] = None
+    # System
     run_status: Optional[str] = None
     updated_source: Optional[str] = None
     updated_at: Optional[str] = None
@@ -773,7 +783,9 @@ class OptGapAlertRow(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    country: str
+    run_id: str
+    dimension: str
+    dimension_key: str
     kpi_key: str
     target: Optional[float] = None
     achieved: Optional[float] = None

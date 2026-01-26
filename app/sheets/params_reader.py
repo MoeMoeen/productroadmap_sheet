@@ -78,7 +78,7 @@ class ParamsReader:
         spreadsheet_id: str,
         tab_name: str,
         header_row: int = 1,
-        start_data_row: int = 2,
+        start_data_row: int = 4,  # Row 1=header, 2-3=metadata, data starts at 4
         max_rows: Optional[int] = None,
     ) -> List[ParamRowPair]:
         """Read Param rows for a given sheet/tab as (row_number, ParamRow).

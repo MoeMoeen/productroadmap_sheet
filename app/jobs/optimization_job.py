@@ -32,6 +32,10 @@ from app.services.optimization.optimization_run_persistence import (
 )
 from app.services.optimization.feasibility_checker import FeasibilityChecker
 from app.services.optimization.feasibility_persistence import persist_feasibility_report
+from app.services.optimization import optimization_results_service
+from app.sheets.optimization_center_writers import OptimizationCenterWriter
+from app.sheets.client import SheetsClient, get_sheets_service
+from app.config import settings
 
 from app.services.solvers.ortools_cp_sat_adapter import (
     OrtoolsCpSatSolverAdapter,
@@ -186,6 +190,16 @@ def run_flow5_optimization(
                 "errors_count": len(feasibility.errors),
             },
         )
+        
+        # Publish infeasible run to sheets (if configured)
+        _publish_results_to_sheets(
+            db=db,
+            opt_run=opt_run,
+            problem=problem,
+            solution=None,  # No solution for infeasible case
+            feasibility=feasibility,  # Include feasibility context
+        )
+        
         return {
             "run_id": opt_run.run_id,
             "scenario_name": scenario_name,
@@ -222,6 +236,15 @@ def run_flow5_optimization(
     )
 
     selected_count = sum(1 for item in solution.selected if item.selected)
+    
+    # Publish results to Optimization Center sheet (if configured)
+    _publish_results_to_sheets(
+        db=db,
+        opt_run=opt_run,
+        problem=problem,
+        solution=solution,
+        feasibility=None,  # Not needed for feasible runs
+    )
 
     logger.info(
         "Flow 5 optimization completed",
@@ -247,3 +270,132 @@ def run_flow5_optimization(
         "solver_status": solution.status,
         "feasibility_warnings_count": len(feasibility.warnings),
     }
+
+
+def _publish_results_to_sheets(
+    *,
+    db: Session,
+    opt_run,
+    problem,
+    solution: Optional[OptimizationSolution],
+    feasibility: Optional[FeasibilityReport] = None,
+) -> None:
+    """
+    Publish optimization results to Optimization Center sheet.
+    
+    Writes to three tabs:
+    - Runs: Single row with run summary
+    - Results: N rows (one per candidate)
+    - Gaps_and_Alerts: M rows (one per target constraint)
+    
+    Args:
+        db: Database session
+        opt_run: OptimizationRun DB model
+        problem: OptimizationProblem schema (frozen snapshot)
+        solution: OptimizationSolution (None for infeasible runs)
+        feasibility: FeasibilityReport (for infeasible runs to show why)
+    """
+    # Check if Optimization Center is configured
+    if not settings.OPTIMIZATION_CENTER:
+        logger.info("OPTIMIZATION_CENTER not configured - skipping results publishing")
+        return
+    
+    config = settings.OPTIMIZATION_CENTER
+    
+    try:
+        # Initialize sheets client and writer
+        service = get_sheets_service()
+        client = SheetsClient(service=service)
+        writer = OptimizationCenterWriter(client=client)
+        
+        # For infeasible runs: create empty solution with failed status and feasibility diagnostics
+        if solution is None:
+            from app.schemas.optimization_solution import OptimizationSolution
+            
+            # Include feasibility summary and errors in diagnostics for visibility
+            infeasible_diagnostics = {}
+            if feasibility:
+                infeasible_diagnostics["feasibility_summary"] = feasibility.summary
+                infeasible_diagnostics["feasibility_errors_count"] = len(feasibility.errors)
+                infeasible_diagnostics["feasibility_warnings_count"] = len(feasibility.warnings)
+                # Truncate error list to first 5 for readability
+                if feasibility.errors:
+                    infeasible_diagnostics["feasibility_errors"] = [
+                        {"code": err.code, "message": err.message}
+                        for err in feasibility.errors[:5]
+                    ]
+            
+            solution = OptimizationSolution(
+                status="infeasible",
+                selected=[],
+                capacity_used_tokens=0.0,
+                diagnostics=infeasible_diagnostics,
+            )
+        
+        # Build row data using service
+        runs_row = optimization_results_service.build_runs_row(
+            run=opt_run,
+            problem=problem,
+            solution=solution,
+        )
+        
+        results_rows = optimization_results_service.build_results_rows(
+            run_id=opt_run.run_id,
+            problem=problem,
+            solution=solution,
+        )
+        
+        gaps_rows = optimization_results_service.build_gaps_rows(
+            run_id=opt_run.run_id,
+            problem=problem,
+            solution=solution,
+        )
+        
+        # Publish to sheets
+        logger.info(
+            "Publishing results to Optimization Center sheet",
+            extra={
+                "run_id": opt_run.run_id,
+                "spreadsheet_id": config.spreadsheet_id,
+                "results_count": len(results_rows),
+                "gaps_count": len(gaps_rows),
+            },
+        )
+        
+        writer.append_runs_row(
+            spreadsheet_id=config.spreadsheet_id,
+            tab_name=config.runs_tab,
+            row=runs_row,
+        )
+        
+        writer.append_results_rows(
+            spreadsheet_id=config.spreadsheet_id,
+            tab_name=config.results_tab,
+            rows=results_rows,
+        )
+        
+        writer.append_gaps_rows(
+            spreadsheet_id=config.spreadsheet_id,
+            tab_name=config.gaps_and_alerts_tab,
+            rows=gaps_rows,
+        )
+        
+        logger.info(
+            "Successfully published results to Optimization Center",
+            extra={
+                "run_id": opt_run.run_id,
+                "runs_published": 1,
+                "results_published": len(results_rows),
+                "gaps_published": len(gaps_rows),
+            },
+        )
+        
+    except Exception as e:
+        logger.error(
+            f"Failed to publish results to Optimization Center: {e}",
+            exc_info=True,
+            extra={"run_id": opt_run.run_id},
+        )
+        # Don't fail the optimization run if publishing fails
+        # Results are already persisted to DB
+

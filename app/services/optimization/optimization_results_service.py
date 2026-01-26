@@ -23,6 +23,8 @@ from app.db.models.optimization import OptimizationRun
 logger = logging.getLogger(__name__)
 
 # Scaling factor used in solver (must match ortools_cp_sat_adapter.py)
+# Note: Not used in computations here (we consume pre-scaled values from diagnostics)
+# but documented for reference when reading objective_value_raw vs objective_value
 KPI_SCALE = 1_000_000
 
 
@@ -66,7 +68,11 @@ def build_runs_row(
     total_objective = diagnostics.get("objective_value", 0.0)
     
     # Build gap summary string (first 3 gaps, truncated)
-    gap_summary = _build_gap_summary(problem, solution)
+    # For infeasible runs, use feasibility_summary from diagnostics if available
+    if solution.status == "infeasible" and "feasibility_summary" in diagnostics:
+        gap_summary = f"INFEASIBLE: {diagnostics['feasibility_summary']}"
+    else:
+        gap_summary = _build_gap_summary(problem, solution)
     
     # Extract values from problem snapshot (stable/frozen)
     scenario_name = getattr(problem, "scenario_name", None) or "unknown"
@@ -168,9 +174,9 @@ def build_results_rows(
             "north_star_gain": north_star_gain,
             # Display fields
             "active_overall_score": candidate.active_overall_score,
-            "notes": "",  # PM-owned, preserve if editing supported
             "dependency_status": "",  # Future
             # System
+            # Note: "notes" field omitted - PM-owned, preserved in sheet (not overwritten)
             "run_status": "published",
             "updated_source": "optimization_engine",
             "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -204,7 +210,8 @@ def build_gaps_rows(
     selected_keys = {item.initiative_key for item in selected_items if item.selected}
     
     rows = []
-    for dimension, dim_map in targets.items():
+    for dimension_raw, dim_map in targets.items():
+        dimension = str(dimension_raw).strip().lower()  # Normalize for matching logic
         if not isinstance(dim_map, dict):
             continue
         for dimension_key, kpi_map in dim_map.items():
@@ -245,7 +252,7 @@ def build_gaps_rows(
                     "achieved": achieved,
                     "gap": gap,
                     "severity": severity,
-                    "notes": "",  # PM-owned
+                    # Note: "notes" field omitted - PM-owned, preserved in sheet (not overwritten)
                     "recommendation": "",  # Future
                     "run_status": "published",
                     "updated_source": "optimization_engine",
@@ -314,7 +321,8 @@ def _compute_achieved_contribution(
     """
     total = 0.0
     
-    # Normalize dimension_key for case-insensitive comparison (matches solver)
+    # Normalize both dimension and dimension_key for case-insensitive comparison (matches solver)
+    dimension = str(dimension).strip().lower()
     dim_key_lower = str(dimension_key).strip().lower()
     
     for c in candidates:
@@ -392,7 +400,8 @@ def _build_gap_summary(problem: OptimizationProblem, solution: OptimizationSolut
     selected_keys = {item.initiative_key for item in selected_items if item.selected}
     
     gap_items = []
-    for dimension, dim_map in targets.items():
+    for dimension_raw, dim_map in targets.items():
+        dimension = str(dimension_raw).strip().lower()
         if not isinstance(dim_map, dict):
             continue
         for dimension_key, kpi_map in dim_map.items():

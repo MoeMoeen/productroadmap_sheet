@@ -493,8 +493,8 @@ class ParamsWriter:
         
         ua_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_at")
 
-        # Scan rows starting from row 2 (skip header)
-        for row_idx, row in enumerate(all_values[1:], start=2):
+        # Scan rows starting from row 4 (row 1=header, rows 2-3=metadata)
+        for row_idx, row in enumerate(all_values[3:], start=4):  # Skip header + 2 metadata rows
             notes_val = row[notes_col_idx - 1] if notes_col_idx and notes_col_idx <= len(row) else None
             updated_source_val = row[updated_source_col_idx - 1] if updated_source_col_idx and updated_source_col_idx <= len(row) else None
             is_auto_seeded_val = row[is_auto_seeded_col_idx - 1] if is_auto_seeded_col_idx and is_auto_seeded_col_idx <= len(row) else None

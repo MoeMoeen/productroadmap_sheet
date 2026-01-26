@@ -159,12 +159,14 @@ class _BaseOptReader:
         self.client = client
 
     def _read_raw(self, spreadsheet_id: str, tab_name: str, header_row: int = 1) -> Tuple[List[Any], List[List[Any]]]:
+        """Read header and data rows. Skips rows 2-3 (metadata)."""
         header_values = self.client.get_values(spreadsheet_id, f"{tab_name}!{header_row}:{header_row}")
         if not header_values or not header_values[0]:
             return [], []
         header = header_values[0]
         end_col_letter = _col_index_to_a1(len(header))
-        data_range = f"{tab_name}!A{header_row + 1}:{end_col_letter}"
+        # Skip rows 2-3 (metadata), start reading data from row 4
+        data_range = f"{tab_name}!A4:{end_col_letter}"
         data_rows = self.client.get_values(
             spreadsheet_id=spreadsheet_id,
             range_=data_range,
@@ -180,7 +182,7 @@ class CandidatesReader(_BaseOptReader):
             return []
         lookup = _build_alias_lookup(OPT_CANDIDATES_HEADER_MAP)
         rows: List[Tuple[int, OptCandidateRow]] = []
-        row_num = 2
+        row_num = 4  # Data starts at row 4 (1=header, 2-3=metadata)
         blank_run = 0
         blank_run_cutoff = 50
         for row_cells in data_rows:
@@ -229,7 +231,7 @@ class ScenarioConfigReader(_BaseOptReader):
             return []
         lookup = _build_alias_lookup(OPT_SCENARIO_CONFIG_HEADER_MAP)
         rows: List[Tuple[int, OptScenarioConfigRow]] = []
-        row_num = 2
+        row_num = 4  # Data starts at row 4 (1=header, 2-3=metadata)
         blank_run = 0
         blank_run_cutoff = 50
         for row_cells in data_rows:
@@ -271,7 +273,7 @@ class ConstraintsReader(_BaseOptReader):
             return []
         lookup = _build_alias_lookup(OPT_CONSTRAINTS_HEADER_MAP)
         rows: List[Tuple[int, OptConstraintRow]] = []
-        row_num = 2
+        row_num = 4  # Data starts at row 4 (1=header, 2-3=metadata)
         blank_run = 0
         blank_run_cutoff = 50
         for row_cells in data_rows:
@@ -314,7 +316,7 @@ class TargetsReader(_BaseOptReader):
             return []
         lookup = _build_alias_lookup(OPT_TARGETS_HEADER_MAP)
         rows: List[Tuple[int, OptTargetRow]] = []
-        row_num = 2
+        row_num = 4  # Data starts at row 4 (1=header, 2-3=metadata)
         blank_run = 0
         blank_run_cutoff = 50
         for row_cells in data_rows:
@@ -355,7 +357,7 @@ class RunsReader(_BaseOptReader):
             return []
         lookup = _build_alias_lookup(OPT_RUNS_HEADER_MAP)
         rows: List[Tuple[int, OptRunRow]] = []
-        row_num = 2
+        row_num = 4  # Data starts at row 4 (1=header, 2-3=metadata)
         blank_run = 0
         blank_run_cutoff = 50
         for row_cells in data_rows:
@@ -400,7 +402,7 @@ class ResultsReader(_BaseOptReader):
             return []
         lookup = _build_alias_lookup(OPT_RESULTS_HEADER_MAP)
         rows: List[Tuple[int, OptResultRow]] = []
-        row_num = 2
+        row_num = 4  # Data starts at row 4 (1=header, 2-3=metadata)
         blank_run = 0
         blank_run_cutoff = 50
         for row_cells in data_rows:
@@ -444,7 +446,7 @@ class GapsAlertsReader(_BaseOptReader):
             return []
         lookup = _build_alias_lookup(OPT_GAPS_ALERTS_HEADER_MAP)
         rows: List[Tuple[int, OptGapAlertRow]] = []
-        row_num = 2
+        row_num = 4  # Data starts at row 4 (1=header, 2-3=metadata)
         blank_run = 0
         blank_run_cutoff = 50
         for row_cells in data_rows:

@@ -169,7 +169,7 @@ def write_scores_to_productops_sheet(
     blank_run_cutoff = 50  # stop if we see too many consecutive blank keys
 
     for offset in range(max_rows):
-        row_idx = offset + 2  # Sheet row number
+        row_idx = offset + 4  # Sheet row number (1=header, 2-3=metadata, data starts at 4)
 
         # Extract initiative key from this row
         key_cell = col_values.get(key_col, [])
@@ -342,7 +342,7 @@ def write_status_to_productops_sheet(
     blank_run = 0
     blank_run_cutoff = 50
     for offset in range(max_rows):
-        row_idx = offset + 2
+        row_idx = offset + 4  # Row 1=header, 2-3=metadata, data starts at 4
         key_cell = col_values.get(key_col, [])
         if offset < len(key_cell):
             entry = key_cell[offset]

@@ -469,6 +469,31 @@ ProductOps/KPI_Contributions:
 | app/sheets/productops_writer.py | Write scores to sheet |
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ## **✅ Implementation Complete: KPI Contributions Writeback**
 
 I've successfully implemented the KPI contributions writeback feature with three components:
@@ -562,6 +587,36 @@ _action_pm_score_selected(keys)
 ```
 
 ---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 ---
@@ -662,6 +717,30 @@ T2: pm.score_selected runs
     "writeback_count": 7,       # Total rows written back to sheet
 }
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 ---
@@ -792,3 +871,275 @@ populate_candidates_from_db()
 ```
 
 ---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Sheet Readers and Writers: Plain English Explanation
+
+## **Core Principles**
+
+### **Sheet Structure (Universal)**
+Every sheet tab follows this structure:
+- **Row 1**: Column headers (e.g., "initiative_key", "engineering_tokens")
+- **Rows 2-3**: Metadata rows (descriptions, validation rules, etc.) - **NEVER touched by system**
+- **Row 4+**: Actual data starts here
+
+---
+
+## **How READERS Work**
+
+### **Step-by-Step Reading Process:**
+
+1. **Read the header row (row 1)**
+   - Get all column names from the sheet
+   - Example: `["initiative_key", "title", "engineering_tokens", "country"]`
+
+2. **Build a lookup map (header normalization)**
+   - Normalize headers to handle aliases (e.g., "Initiative Key" = "initiative_key")
+   - Create mapping: `sheet_column_name → canonical_field_name`
+   - Example: Both "initiative_key" and "Initiative Key" map to the field `initiative_key`
+
+3. **Read data rows (starting from row 4)**
+   - Read range: `A4:Z{last_row}` (skips rows 1-3)
+   - Each row becomes a list of values: `["INIT_001", "Build feature X", 120, "US"]`
+
+4. **Stop at blank runs**
+   - Tracks consecutive blank rows (typically stops after 50 blanks)
+   - Prevents reading thousands of empty rows (performance + quota optimization)
+
+5. **Convert rows to objects**
+   - For each row, zip values with headers: `{"initiative_key": "INIT_001", "title": "Build feature X", ...}`
+   - Handle missing/empty cells as `None` or `""`
+   - Parse special fields (JSON strings → dicts, date strings → datetime objects)
+
+6. **Return structured data**
+   - Returns list of typed objects (e.g., `List[OptCandidateRow]`)
+
+### **Powers:**
+- ✅ Handles column reordering (uses header lookup, not position)
+- ✅ Handles column aliases (multiple names for same field)
+- ✅ Skips unknown columns gracefully
+- ✅ Stops at blank regions (efficient)
+
+### **Limitations:**
+- ❌ Assumes row 1 is always header
+- ❌ Doesn't detect merged cells well
+- ❌ Can't read comments or cell formatting
+- ❌ Stops at first 50-blank-row run (can miss isolated rows far below)
+
+---
+
+## **How WRITERS Work**
+
+There are **two writing strategies** used across the codebase:
+
+---
+
+### **Strategy A: Upsert by Key (e.g., Backlog Writer)**
+
+**Use case:** Update existing rows OR append new ones based on a unique key (e.g., `initiative_key`)
+
+#### **Step-by-Step:**
+
+1. **Read header (row 1)**
+   - Get column names and positions
+   - Build map: `column_name → column_index` (e.g., `{"initiative_key": 0, "title": 1}`)
+
+2. **Read key column only (starting from row 4)**
+   - Example: Read column A (initiative_key) from rows 4 onwards
+   - Build map: `initiative_key → row_number`
+   - Example: `{"INIT_001": 4, "INIT_002": 5, "INIT_003": 6}`
+   - Stops after 50 consecutive blanks
+
+3. **Determine target row for each record**
+   - If key exists in map → **update that row**
+   - If key doesn't exist → **append to next empty row**
+
+4. **Build batch updates grouped by column**
+   - Instead of writing cell-by-cell (slow), groups writes by column
+   - Example: Write all "engineering_tokens" values in one request
+   - Groups consecutive rows to minimize API calls
+
+5. **Write in batches**
+   - Sends updates in chunks (200 ranges per request to avoid API limits)
+   - Uses `USER_ENTERED` mode (Google Sheets parses formulas, dates, numbers)
+
+6. **Apply protections (optional)**
+   - Protects system-owned columns with "warning-only" mode
+   - Users can still edit but see a warning
+
+#### **Example Flow:**
+```
+DB has: INIT_001, INIT_002, INIT_004 (new)
+Sheet has: INIT_001 (row 4), INIT_002 (row 5)
+
+Map: {"INIT_001": 4, "INIT_002": 5}
+Next append row: 6
+
+Actions:
+- INIT_001 → update row 4
+- INIT_002 → update row 5  
+- INIT_004 → append to row 6
+```
+
+#### **Powers:**
+- ✅ Updates existing rows without duplicating
+- ✅ Appends new rows automatically
+- ✅ Batch operations (fast, quota-efficient)
+- ✅ Only touches owned columns (preserves PM edits in other columns)
+
+#### **Limitations:**
+- ❌ Requires unique key column
+- ❌ Can't handle duplicate keys well
+- ❌ Doesn't delete removed records (append/update only)
+
+---
+
+### **Strategy B: Append-Only (e.g., Optimization Results Writer)**
+
+**Use case:** Add new records without updating existing ones (e.g., optimization run results)
+
+#### **Step-by-Step:**
+
+1. **Read header (row 1)**
+   - Get column names and build alias map
+
+2. **Find next empty row**
+   - Reads column A (key column like `run_id`) from row 4 onwards
+   - Scans backwards to find last non-empty row
+   - Next append row = last_used_row + 1
+
+3. **Build new rows as lists**
+   - Each row is a list matching header order
+   - Example: `["RUN_123", "INIT_001", True, 120, ...]`
+
+4. **Append in batch**
+   - Writes all rows in one API call
+   - Uses range like `A10:Z15` (calculates exact range)
+
+#### **Example Flow:**
+```
+Sheet has data in rows 4-8
+Last non-empty row: 8
+Next append row: 9
+
+Write 3 new results:
+- Row 9: [run_123, INIT_001, True, ...]
+- Row 10: [run_123, INIT_002, False, ...]
+- Row 11: [run_123, INIT_003, True, ...]
+```
+
+#### **Powers:**
+- ✅ Never overwrites existing data
+- ✅ Supports multi-run accumulation (run_id distinguishes)
+- ✅ Simple and safe
+- ✅ Handles blank rows in middle (scans backwards)
+
+#### **Limitations:**
+- ❌ Can't update existing rows
+- ❌ Sheet grows indefinitely (manual cleanup needed)
+- ❌ No deduplication (duplicate keys possible)
+
+---
+
+## **Key Design Patterns**
+
+### **1. Header Normalization (Alias Handling)**
+```python
+normalize_header("Initiative Key") == normalize_header("initiative_key")
+# Both map to canonical field "initiative_key"
+```
+Allows sheets to have flexible column names while system uses consistent field names.
+
+### **2. Blank Run Detection**
+```python
+blank_run = 0
+for row in rows:
+    if is_blank(row):
+        blank_run += 1
+        if blank_run >= 50:
+            break  # Stop reading
+    else:
+        blank_run = 0  # Reset counter
+```
+Prevents reading 10,000 empty rows. Stops after 50 consecutive blanks.
+
+### **3. Batch Grouping**
+Instead of:
+```
+Write A4 = value1
+Write A5 = value2
+Write A6 = value3  (3 API calls)
+```
+
+We do:
+```
+Write A4:A6 = [value1, value2, value3]  (1 API call)
+```
+
+### **4. Column-Based Ownership**
+Writers only touch columns they "own" (defined in header maps). Other columns are preserved. This allows:
+- PM-editable columns (notes, custom flags)
+- Formula columns (cross-sheet references)
+- System-owned columns (updated_at, run_status)
+
+---
+
+## **Real-World Example: Optimization Results Publishing**
+
+**Scenario:** Optimization run completes, need to publish results to sheet.
+
+**What happens:**
+
+1. **Runs Tab (append-only)**
+   - Read Runs tab, find last row = 15
+   - Append 1 new row at row 16 with run summary
+
+2. **Results Tab (append-only, multi-run)**
+   - Read Results tab, find last row = 423
+   - Append 50 new rows (rows 424-473) with candidate selections
+   - Each row has `run_id` to distinguish from previous runs
+
+3. **Gaps Tab (append-only, multi-run)**
+   - Read Gaps tab, find last row = 89
+   - Append 12 new rows (rows 90-101) with target gaps
+   - Each row has `run_id` + `dimension` + `kpi_key`
+
+**Result:** Sheet now contains historical record of all runs. PM can filter by `run_id` to see specific run results.
+
+---
+
+## **Summary Table**
+
+| Aspect | Readers | Upsert Writers | Append Writers |
+|--------|---------|----------------|----------------|
+| **Read header** | Yes (row 1) | Yes (row 1) | Yes (row 1) |
+| **Skip metadata** | Yes (rows 2-3) | Yes (rows 2-3) | Yes (rows 2-3) |
+| **Key lookup** | No | Yes (builds map) | No |
+| **Update existing** | N/A | Yes (by key) | No |
+| **Add new** | N/A | Yes (append) | Yes (append) |
+| **Quota efficiency** | High (batch reads) | High (batch writes) | High (batch writes) |
+| **Data safety** | Read-only | Preserves unknown columns | Preserves all existing |
+| **Use case** | Load data to DB | Sync bidirectional | Accumulate history |

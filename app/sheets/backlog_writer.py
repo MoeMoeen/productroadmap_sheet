@@ -142,14 +142,14 @@ def write_backlog_from_db(
     end_row = grid_rows if grid_rows > 0 else 1
     key_col_values = client.get_values(
         spreadsheet_id=backlog_spreadsheet_id,
-        range_=f"{backlog_tab_name}!{init_col_a1}2:{init_col_a1}{end_row}",
+        range_=f"{backlog_tab_name}!{init_col_a1}4:{init_col_a1}{end_row}",  # Row 1=header, 2-3=metadata, data starts at 4
         value_render_option="UNFORMATTED_VALUE",
     ) or []
 
     init_key_to_rownum: Dict[str, int] = {}
     blank_run = 0
     BLANK_STOP_THRESHOLD = 50
-    for offset, row_cells in enumerate(key_col_values, start=2):
+    for offset, row_cells in enumerate(key_col_values, start=4):  # Row 1=header, 2-3=metadata, data starts at 4
         cell_val = row_cells[0] if row_cells else None
         if cell_val is None or cell_val == "":
             blank_run += 1
@@ -165,7 +165,7 @@ def write_backlog_from_db(
             continue
         init_key_to_rownum[key] = offset
 
-    next_append_row = max(init_key_to_rownum.values(), default=1) + 1
+    next_append_row = max(init_key_to_rownum.values(), default=3) + 1  # Default to row 4 if no data (1=header, 2-3=metadata)
 
     # 3) Build batch updates grouped by column to reduce request count
     owned_headers = [col for col in header if col in owned_sheet_to_canonical]
