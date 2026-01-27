@@ -86,7 +86,9 @@ class MathModelsReader:
             return []
         
         header = raw_values[0]
-        data_rows = raw_values[1:]
+        # Skip rows 2-3 (metadata), start data from row 4+ to prevent row number misalignment
+        # when empty rows exist between metadata and data
+        data_rows = raw_values[3:] if len(raw_values) > 3 else []
         
         rows: List[MathModelRowPair] = []
         current_row_number = start_data_row

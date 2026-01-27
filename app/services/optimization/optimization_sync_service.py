@@ -20,11 +20,100 @@ from app.schemas.optimization_center import (
     ValidationMessage,
 )
 from app.sheets.client import SheetsClient
-from app.sheets.optimization_center_readers import CandidatesReader, ConstraintsReader, TargetsReader
+from app.sheets.optimization_center_readers import CandidatesReader, ConstraintsReader, ScenarioConfigReader, TargetsReader
 from app.services.optimization.optimization_compiler import compile_constraint_sets
 from app.utils.provenance import Provenance, token
 
 logger = logging.getLogger(__name__)
+
+
+def sync_scenarios_from_sheet(
+    sheets_client: SheetsClient,
+    spreadsheet_id: str,
+    scenario_config_tab: str,
+    session: Optional[Session] = None,
+) -> Tuple[List[OptimizationScenario], List[str]]:
+    """Read Scenario_Config tab and upsert OptimizationScenario rows.
+    
+    Args:
+        sheets_client: Sheets API client
+        spreadsheet_id: Optimization Center spreadsheet ID
+        scenario_config_tab: Tab name (e.g., "Scenario_Config")
+        session: Optional DB session (creates new if None)
+    
+    Returns:
+        Tuple of (synced_scenarios, errors)
+    """
+    db: Session = session or SessionLocal()
+    created_session = session is None
+    
+    try:
+        reader = ScenarioConfigReader(sheets_client)
+        rows = reader.get_rows(spreadsheet_id, scenario_config_tab)
+        logger.info("opt_sync.scenarios_loaded", extra={"count": len(rows)})
+        
+        synced: List[OptimizationScenario] = []
+        errors: List[str] = []
+        
+        for row_num, scenario_row in rows:
+            if not scenario_row.scenario_name or not str(scenario_row.scenario_name).strip():
+                errors.append(f"Row {row_num}: Missing scenario_name")
+                continue
+            
+            scenario_name = str(scenario_row.scenario_name).strip()
+            
+            try:
+                # Check if scenario exists
+                existing = db.query(OptimizationScenario).filter(
+                    OptimizationScenario.name == scenario_name
+                ).first()
+                
+                if existing:
+                    # Update existing scenario
+                    setattr(existing, "period_key", scenario_row.period_key)
+                    setattr(existing, "capacity_total_tokens", scenario_row.capacity_total_tokens)
+                    setattr(existing, "objective_mode", scenario_row.objective_mode)
+                    setattr(existing, "objective_weights_json", scenario_row.objective_weights_json)
+                    logger.info(
+                        "opt_sync.scenario_updated",
+                        extra={"scenario": scenario_name, "id": existing.id}
+                    )
+                    synced.append(existing)
+                else:
+                    # Create new scenario
+                    new_scenario = OptimizationScenario(
+                        name=scenario_name,
+                        period_key=scenario_row.period_key,
+                        capacity_total_tokens=scenario_row.capacity_total_tokens,
+                        objective_mode=scenario_row.objective_mode,
+                        objective_weights_json=scenario_row.objective_weights_json,
+                    )
+                    db.add(new_scenario)
+                    db.flush()  # Get the ID
+                    logger.info(
+                        "opt_sync.scenario_created",
+                        extra={"scenario": scenario_name, "id": new_scenario.id}
+                    )
+                    synced.append(new_scenario)
+            
+            except Exception as e:
+                logger.exception("opt_sync.scenario_sync_failed")
+                errors.append(f"Row {row_num} ({scenario_name}): {str(e)[:100]}")
+                continue
+        
+        if synced:
+            db.commit()
+        
+        logger.info(
+            "opt_sync.scenarios_complete",
+            extra={"synced": len(synced), "errors": len(errors)}
+        )
+        
+        return synced, errors
+    
+    finally:
+        if created_session:
+            db.close()
 
 
 def _capacity_to_json(items: Sequence[CapacityFloor | CapacityCap], value_attr: str) -> Dict[str, Dict[str, float]]:

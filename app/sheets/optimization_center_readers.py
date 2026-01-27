@@ -165,14 +165,17 @@ class _BaseOptReader:
             return [], []
         header = header_values[0]
         end_col_letter = _col_index_to_a1(len(header))
-        # Skip rows 2-3 (metadata), start reading data from row 4
-        data_range = f"{tab_name}!A4:{end_col_letter}"
-        data_rows = self.client.get_values(
+        # Read all rows from row 1 onwards, then manually skip rows 2-3
+        # (If we start from A4, Google Sheets skips empty rows, causing row number misalignment)
+        data_range = f"{tab_name}!A1:{end_col_letter}"
+        all_rows = self.client.get_values(
             spreadsheet_id=spreadsheet_id,
             range_=data_range,
             value_render_option="UNFORMATTED_VALUE",
         )
-        return header, (data_rows or [])
+        # Skip header (row 1) and metadata (rows 2-3), keep rows 4+
+        data_rows = all_rows[3:] if len(all_rows) > 3 else []
+        return header, data_rows
 
 
 class CandidatesReader(_BaseOptReader):
@@ -196,6 +199,9 @@ class CandidatesReader(_BaseOptReader):
             rd["exclusion_keys"] = _split_keys(rd.get("exclusion_keys"))
             rd["synergy_group_keys"] = _split_keys(rd.get("synergy_group_keys"))
             rd["deadline_date"] = _to_date_iso(rd.get("deadline_date"))
+            # strategic_kpi_contributions must be string (for JSON), but may come as number from sheets
+            if rd.get("strategic_kpi_contributions") is not None and not isinstance(rd.get("strategic_kpi_contributions"), str):
+                rd["strategic_kpi_contributions"] = str(rd["strategic_kpi_contributions"])
             for k in list(rd.keys()):
                 rd[k] = _blank_to_none(rd.get(k))
             key_val = rd.get("initiative_key")

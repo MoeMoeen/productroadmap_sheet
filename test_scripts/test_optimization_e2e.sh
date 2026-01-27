@@ -20,8 +20,8 @@ echo ""
 # Step 2: Trigger optimization run (selected candidates only)
 echo "2. Triggering optimization run..."
 echo "   Action: pm.optimize_run_selected_candidates"
-echo "   Scenario: Q1_2026"
-echo "   Constraint Set: baseline"
+echo "   Scenario: 2026-Q1 Growth"
+echo "   Constraint Set: Baseline"
 echo ""
 
 RESPONSE=$(curl -s -X POST "$API_URL/actions/run" \
@@ -30,8 +30,8 @@ RESPONSE=$(curl -s -X POST "$API_URL/actions/run" \
   -d '{
     "action": "pm.optimize_run_selected_candidates",
     "options": {
-      "scenario_name": "Q1_2026",
-      "constraint_set_name": "baseline"
+      "scenario_name": "2026-Q1 Growth",
+      "constraint_set_name": "Baseline"
     }
   }')
 
@@ -66,7 +66,7 @@ while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
   
   echo "   Attempt $ATTEMPT: Status = $STATUS"
   
-  if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ]; then
+  if [ "$STATUS" = "completed" ] || [ "$STATUS" = "success" ] || [ "$STATUS" = "failed" ]; then
     echo ""
     echo "Final Response:"
     echo "$STATUS_RESPONSE" | python3 -m json.tool 2>/dev/null || echo "$STATUS_RESPONSE"
@@ -78,7 +78,7 @@ done
 
 echo ""
 echo "======================================"
-if [ "$STATUS" = "completed" ]; then
+if [ "$STATUS" = "completed" ] || [ "$STATUS" = "success" ]; then
   echo "✓ TEST PASSED"
   echo "======================================"
   echo ""

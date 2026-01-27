@@ -1,6 +1,22 @@
 TODO:
 
+You may terminate the employment during the probationary period in order to join another employer in the UAE
+by giving the Company at least one month's prior written notice.
 
+
+You may terminate the employment during the probationary period in order to join another employer outside the
+UAE by giving the Company at least 14 days' prior written notice.
+
+1. 28 01 Wed
+2. 29 01 Thu
+3. 30 01 Fri - salmon
+4. 31 01 Sat - loobia 1
+5. 01 02 Sun - loobia 2
+6. 02 02 Mon - morgh
+7. 03 02 Tue - 
+8. 04 02 Wed
+9. 05 02 Thu
+10. 06 02 Fri
 --------------------------------------------------------------------------------------------
 
 

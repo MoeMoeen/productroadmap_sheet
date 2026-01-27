@@ -1143,3 +1143,93 @@ Writers only touch columns they "own" (defined in header maps). Other columns ar
 | **Quota efficiency** | High (batch reads) | High (batch writes) | High (batch writes) |
 | **Data safety** | Read-only | Preserves unknown columns | Preserves all existing |
 | **Use case** | Load data to DB | Sync bidirectional | Accumulate history |
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## The Key Insight: "selected_candidates" Mode
+
+The action name is **`pm.optimize_run_selected_candidates`** - note the word **"selected"**.
+
+This mode **reads the selection from the sheet itself**, not from the API request!
+
+## How It Works
+
+1. **Sheet has a column**: `is_selected_for_run` (Boolean flag)
+2. **PM marks candidates in sheet**: Sets `is_selected_for_run = TRUE` for desired initiatives
+3. **API call triggers optimization**: System reads sheet, filters candidates where `is_selected_for_run = TRUE`
+4. **Optimization runs on those candidates only**
+
+## The Three Optimization Actions
+
+There are actually **3 different actions** for different use cases:
+
+**A) `pm.optimize_run_selected_candidates`** (current test)
+- **Scope**: Reads `is_selected_for_run` column from Candidates tab
+- **Use case**: PM pre-selects in sheet, then clicks "Run Optimization" button
+- **No scope needed in API request** ✅
+
+**B) `pm.optimize_run_all_candidates`**
+- **Scope**: All candidates in the scenario/period
+- **Use case**: Full portfolio optimization
+- **No scope needed in API request** ✅
+
+**C) Ad-hoc scope (if we want to add it; not implemented yet)**
+- **Scope**: Specific `initiative_keys` list in request body
+- **Use case**: API-driven selection
+- **Would need** `scope: { initiative_keys: ["INIT_001", "INIT_002"] }` in request
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## ✅ Fixed ALL Sheet Readers
+
+Applied the empty-row resilience fix to **all 8 reader files**:
+
+### ✅ Pattern A: Read A1 to end, skip metadata in Python
+1. **backlog_reader.py** - Now skips rows 2-3 before iterating
+2. **intake_reader.py** - Now skips rows 2-3 before iterating  
+3. **math_models_reader.py** - Now skips rows 2-3 before iterating
+4. **optimization_center_readers.py** - Already fixed (base class `_read_raw`)
+   - Applies to all 7 optimization readers (Candidates, Scenarios, Constraints, Targets, Runs, Results, Gaps)
+
+### ✅ Pattern B: Read A{start_data_row}, changed to read A1 + skip
+5. **kpi_contributions_reader.py** - Now reads from A1 and skips rows 2-3
+6. **metrics_config_reader.py** - Now reads from A1 and skips rows 2-3
+7. **params_reader.py** - Now reads from A1 and skips rows 2-3
+
+### ℹ️ Pattern C: No row tracking (not vulnerable)
+8. **scoring_inputs_reader.py** - Doesn't track row numbers, just filters by key
+
+**The Fix:** Instead of asking Google Sheets API to start from row 4 (which skips empty rows and causes misalignment), all readers now:
+1. Read from row 1
+2. Manually skip rows 2-3 (metadata) in Python: `data_rows = all_values[3:]`
+3. Start row numbering at 4 with correct alignment
+
+This prevents the bug where an empty row 4 would cause row 5 to be read but assigned row number 4. Now **all readers are resilient** to empty rows between header/metadata and data! 🎯

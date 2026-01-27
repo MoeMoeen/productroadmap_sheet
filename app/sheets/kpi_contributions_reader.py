@@ -53,12 +53,17 @@ class KPIContributionsReader:
         header = header_values[0]
         end_col_letter = _col_index_to_a1(len(header))
 
-        data_range = f"{tab_name}!A{start_data_row}:{end_col_letter}"
-        data_values = self.client.get_values(
+        # Read from row 1 and skip rows 2-3 to prevent empty row misalignment
+        # (If we start from A4, Google Sheets skips empty rows causing row number drift)
+        data_range = f"{tab_name}!A1:{end_col_letter}"
+        all_values = self.client.get_values(
             spreadsheet_id=spreadsheet_id,
             range_=data_range,
             value_render_option="UNFORMATTED_VALUE",
         ) or []
+        
+        # Skip header (row 1) and metadata (rows 2-3), keep rows 4+
+        data_values = all_values[3:] if len(all_values) > 3 else []
 
         if max_rows is not None:
             data_values = data_values[:max_rows]

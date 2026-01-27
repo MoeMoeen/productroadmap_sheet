@@ -2230,17 +2230,24 @@ def _action_pm_populate_candidates(db: Session, ctx: ActionContext) -> Dict[str,
 def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext) -> Dict[str, Any]:
     """PM Job: Run optimization (Step 1+2+3 solver) on user-selected candidates.
     
+    Reads Optimization Center sheet's Candidates tab and filters for is_selected_for_run=TRUE.
+    
     Payload:
-      - sheet_context: {spreadsheet_id, tab}
       - options: {scenario_name, constraint_set_name}
-      - scope: {initiative_keys: list[str]}
+      - scope: {initiative_keys: list[str]} (optional - if provided, uses these instead of sheet)
     
     Orchestration:
-      1. Extract selected initiative keys from scope
-      2. Call run_flow5_optimization with scope_type="selected_only"
-      3. Return result with run_id, status, selected_count, solver_status
+      1. Read Candidates tab from Optimization Center sheet
+      2. Filter for is_selected_for_run = TRUE
+      3. Call run_flow5_optimization with scope_type="selected_only"
+      4. Return result with run_id, status, selected_count, solver_status
     """
     from app.jobs.optimization_job import run_flow5_optimization
+    from app.sheets.optimization_center_readers import CandidatesReader
+    from app.services.optimization.optimization_sync_service import (
+        sync_scenarios_from_sheet,
+        sync_constraint_sets_from_sheets,
+    )
     
     options = ctx.payload.get("options") or {}
     
@@ -2257,27 +2264,118 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
             "substeps": [{"step": "validate", "status": "failed", "reason": "missing_params"}],
         }
     
-    # Extract selected initiative keys from scope
+    # Check if scope.initiative_keys is provided (explicit selection)
     scope = ctx.payload.get("scope") or {}
-    keys = scope.get("initiative_keys") or []
+    explicit_keys = scope.get("initiative_keys") or []
     
-    if not isinstance(keys, list):
-        keys = []
+    # Track sync results for reporting
+    synced_scenarios = []
+    synced_constraints = []
     
-    # Sanitize: skip blanks, dedupe
-    original_count = len(keys)
-    keys = [k.strip() for k in keys if isinstance(k, str) and k.strip()]
-    keys = list(dict.fromkeys(keys))  # dedupe while preserving order
-    skipped_no_key = original_count - len(keys)
+    if explicit_keys and isinstance(explicit_keys, list):
+        # Use explicitly provided keys (backwards compatibility)
+        keys = [k.strip() for k in explicit_keys if isinstance(k, str) and k.strip()]
+        keys = list(dict.fromkeys(keys))  # dedupe
+        logger.info(
+            "pm.optimize_run_selected_candidates.using_explicit_keys",
+            extra={"count": len(keys)}
+        )
+    else:
+        # Read from Optimization Center sheet
+        if not settings.OPTIMIZATION_CENTER:
+            logger.error("pm.optimize_run_selected_candidates.no_config")
+            return {
+                "pm_job": "pm.optimize_run_selected_candidates",
+                "optimization_status": "failed",
+                "error": "Optimization Center sheet not configured",
+                "substeps": [{"step": "read_sheet", "status": "failed", "reason": "no_config"}],
+            }
+        
+        try:
+            service = get_sheets_service()
+            sheets_client = SheetsClient(service)
+            
+            # AUTO-SYNC: Sync scenarios and constraints from sheet to DB before optimization
+            # This ensures DB has latest data without requiring manual sync
+            logger.info("pm.optimize_run_selected_candidates.auto_sync_start")
+            
+            # 1. Sync scenarios first (constraints depend on scenarios existing)
+            scenario_config_tab = settings.OPTIMIZATION_CENTER.scenario_config_tab or "Scenario_Config"
+            synced_scenarios, scenario_errors = sync_scenarios_from_sheet(
+                sheets_client=sheets_client,
+                spreadsheet_id=settings.OPTIMIZATION_CENTER.spreadsheet_id,
+                scenario_config_tab=scenario_config_tab,
+                session=db,
+            )
+            
+            if scenario_errors:
+                logger.warning(
+                    "pm.optimize_run_selected_candidates.scenario_sync_errors",
+                    extra={"errors": scenario_errors}
+                )
+            
+            logger.info(
+                "pm.optimize_run_selected_candidates.scenarios_synced",
+                extra={"count": len(synced_scenarios)}
+            )
+            
+            # 2. Sync constraint sets (now that scenarios exist)
+            constraints_tab = settings.OPTIMIZATION_CENTER.constraints_tab or "Constraints"
+            targets_tab = settings.OPTIMIZATION_CENTER.targets_tab or "Targets"
+            synced_constraints, constraint_messages = sync_constraint_sets_from_sheets(
+                sheets_client=sheets_client,
+                spreadsheet_id=settings.OPTIMIZATION_CENTER.spreadsheet_id,
+                constraints_tab=constraints_tab,
+                targets_tab=targets_tab,
+                session=db,
+            )
+            
+            logger.info(
+                "pm.optimize_run_selected_candidates.constraints_synced",
+                extra={"count": len(synced_constraints)}
+            )
+            
+            # 3. Now read candidates for selection
+            reader = CandidatesReader(sheets_client)
+            
+            # Read candidates tab - returns List[Tuple[row_num, OptCandidateRow]]
+            candidates_with_rows = reader.get_rows(
+                spreadsheet_id=settings.OPTIMIZATION_CENTER.spreadsheet_id,
+                tab_name=settings.OPTIMIZATION_CENTER.candidates_tab,
+            )
+            
+            # Extract just the OptCandidateRow objects
+            candidates = [row for _, row in candidates_with_rows]
+            
+            # Filter for is_selected_for_run = TRUE
+            selected = [c for c in candidates if getattr(c, "is_selected_for_run", False)]
+            keys = [str(c.initiative_key) for c in selected if c.initiative_key]
+            
+            logger.info(
+                "pm.optimize_run_selected_candidates.read_from_sheet",
+                extra={
+                    "total_candidates": len(candidates),
+                    "selected_count": len(keys),
+                    "spreadsheet_id": settings.OPTIMIZATION_CENTER.spreadsheet_id,
+                }
+            )
+        except Exception as e:
+            logger.exception("pm.optimize_run_selected_candidates.sheet_read_failed")
+            return {
+                "pm_job": "pm.optimize_run_selected_candidates",
+                "optimization_status": "failed",
+                "error": f"Failed to read Candidates tab: {str(e)[:100]}",
+                "substeps": [{"step": "read_sheet", "status": "failed", "error": str(e)[:50]}],
+            }
     
     if not keys:
         logger.warning("pm.optimize_run_selected_candidates.no_valid_keys")
         return {
             "pm_job": "pm.optimize_run_selected_candidates",
             "input_candidates_count": 0,
-            "skipped_no_key": skipped_no_key,
+            "skipped_no_key": 0,
             "optimization_status": "skipped",
-            "reason": "No valid initiative keys",
+            "reason": "No candidates selected (is_selected_for_run=TRUE not found)",
             "substeps": [{"step": "validate", "status": "skipped", "reason": "no_keys"}],
         }
     
@@ -2303,13 +2401,16 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
             "constraint_set_name": result["constraint_set_name"],
             "scope_type": result["scope_type"],
             "input_candidates_count": len(keys),
-            "skipped_no_key": skipped_no_key,
+            "skipped_no_key": 0,
             "optimization_status": result["status"],
             "selected_initiatives_count": result.get("selected_count", 0),
             "capacity_used_tokens": result.get("capacity_used_tokens", 0),
             "solver_status": result.get("solver_status", "unknown"),
             "feasibility_warnings": result.get("feasibility_warnings_count", 0),
             "substeps": [
+                {"step": "auto_sync_scenarios", "status": "ok", "synced": len(synced_scenarios)},
+                {"step": "auto_sync_constraints", "status": "ok", "synced": len(synced_constraints)},
+                {"step": "read_sheet", "status": "ok", "selected_count": len(keys)},
                 {"step": "build_problem", "status": "ok"},
                 {"step": "feasibility_check", "status": "ok", "warnings": result.get("feasibility_warnings_count", 0)},
                 {"step": "solve", "status": result["status"], "solver": result.get("solver_status", "unknown")},
@@ -2321,7 +2422,7 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
         return {
             "pm_job": "pm.optimize_run_selected_candidates",
             "input_candidates_count": len(keys),
-            "skipped_no_key": skipped_no_key,
+            "skipped_no_key": 0,
             "optimization_status": "failed",
             "selected_initiatives_count": 0,
             "error": str(e)[:100],
