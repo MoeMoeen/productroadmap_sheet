@@ -44,8 +44,11 @@ jobs:
           items = results.get('files', [])
           
           for item in items:
+            try:
               service.files().delete(fileId=item['id'], supportsAllDrives=True).execute()
               print(f"Deleted old file: {item['id']}")
+            except Exception as e:
+              print(f"Error deleting file {item['id']}: {e}")
 
           # Upload new file
           file_metadata = {'name': 'repository.zip', 'parents': [folder_id]}
