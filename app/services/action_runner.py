@@ -2272,6 +2272,69 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
     synced_scenarios = []
     synced_constraints = []
     
+    # AUTO-SYNC: Always sync scenarios and constraints from sheet to DB before optimization
+    # This ensures DB has latest data regardless of selection method
+    if not settings.OPTIMIZATION_CENTER:
+        logger.error("pm.optimize_run_selected_candidates.no_config")
+        return {
+            "pm_job": "pm.optimize_run_selected_candidates",
+            "optimization_status": "failed",
+            "error": "Optimization Center sheet not configured",
+            "substeps": [{"step": "config_check", "status": "failed", "reason": "no_config"}],
+        }
+    
+    try:
+        service = get_sheets_service()
+        sheets_client = SheetsClient(service)
+        
+        logger.info("pm.optimize_run_selected_candidates.auto_sync_start")
+        
+        # 1. Sync scenarios first (constraints depend on scenarios existing)
+        scenario_config_tab = settings.OPTIMIZATION_CENTER.scenario_config_tab or "Scenario_Config"
+        synced_scenarios, scenario_errors = sync_scenarios_from_sheet(
+            sheets_client=sheets_client,
+            spreadsheet_id=settings.OPTIMIZATION_CENTER.spreadsheet_id,
+            scenario_config_tab=scenario_config_tab,
+            session=db,
+        )
+        
+        if scenario_errors:
+            logger.warning(
+                "pm.optimize_run_selected_candidates.scenario_sync_errors",
+                extra={"errors": scenario_errors}
+            )
+        
+        logger.info(
+            "pm.optimize_run_selected_candidates.scenarios_synced",
+            extra={"count": len(synced_scenarios)}
+        )
+        
+        # 2. Sync constraint sets (now that scenarios exist)
+        constraints_tab = settings.OPTIMIZATION_CENTER.constraints_tab or "Constraints"
+        targets_tab = settings.OPTIMIZATION_CENTER.targets_tab or "Targets"
+        synced_constraints, constraint_messages = sync_constraint_sets_from_sheets(
+            sheets_client=sheets_client,
+            spreadsheet_id=settings.OPTIMIZATION_CENTER.spreadsheet_id,
+            constraints_tab=constraints_tab,
+            targets_tab=targets_tab,
+            session=db,
+        )
+        
+        logger.info(
+            "pm.optimize_run_selected_candidates.constraints_synced",
+            extra={"count": len(synced_constraints)}
+        )
+        
+    except Exception as e:
+        logger.exception("pm.optimize_run_selected_candidates.auto_sync_failed")
+        return {
+            "pm_job": "pm.optimize_run_selected_candidates",
+            "optimization_status": "failed",
+            "error": f"Auto-sync failed: {str(e)[:100]}",
+            "substeps": [{"step": "auto_sync", "status": "failed", "error": str(e)[:50]}],
+        }
+    
+    # Now determine selection method: explicit keys or sheet reading
     if explicit_keys and isinstance(explicit_keys, list):
         # Use explicitly provided keys (backwards compatibility)
         keys = [k.strip() for k in explicit_keys if isinstance(k, str) and k.strip()]
@@ -2281,7 +2344,7 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
             extra={"count": len(keys)}
         )
     else:
-        # Read from Optimization Center sheet
+        # Read from Optimization Center sheet (auto-sync already completed above)
         if not settings.OPTIMIZATION_CENTER:
             logger.error("pm.optimize_run_selected_candidates.no_config")
             return {
@@ -2294,48 +2357,6 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
         try:
             service = get_sheets_service()
             sheets_client = SheetsClient(service)
-            
-            # AUTO-SYNC: Sync scenarios and constraints from sheet to DB before optimization
-            # This ensures DB has latest data without requiring manual sync
-            logger.info("pm.optimize_run_selected_candidates.auto_sync_start")
-            
-            # 1. Sync scenarios first (constraints depend on scenarios existing)
-            scenario_config_tab = settings.OPTIMIZATION_CENTER.scenario_config_tab or "Scenario_Config"
-            synced_scenarios, scenario_errors = sync_scenarios_from_sheet(
-                sheets_client=sheets_client,
-                spreadsheet_id=settings.OPTIMIZATION_CENTER.spreadsheet_id,
-                scenario_config_tab=scenario_config_tab,
-                session=db,
-            )
-            
-            if scenario_errors:
-                logger.warning(
-                    "pm.optimize_run_selected_candidates.scenario_sync_errors",
-                    extra={"errors": scenario_errors}
-                )
-            
-            logger.info(
-                "pm.optimize_run_selected_candidates.scenarios_synced",
-                extra={"count": len(synced_scenarios)}
-            )
-            
-            # 2. Sync constraint sets (now that scenarios exist)
-            constraints_tab = settings.OPTIMIZATION_CENTER.constraints_tab or "Constraints"
-            targets_tab = settings.OPTIMIZATION_CENTER.targets_tab or "Targets"
-            synced_constraints, constraint_messages = sync_constraint_sets_from_sheets(
-                sheets_client=sheets_client,
-                spreadsheet_id=settings.OPTIMIZATION_CENTER.spreadsheet_id,
-                constraints_tab=constraints_tab,
-                targets_tab=targets_tab,
-                session=db,
-            )
-            
-            logger.info(
-                "pm.optimize_run_selected_candidates.constraints_synced",
-                extra={"count": len(synced_constraints)}
-            )
-            
-            # 3. Now read candidates for selection
             reader = CandidatesReader(sheets_client)
             
             # Read candidates tab - returns List[Tuple[row_num, OptCandidateRow]]
@@ -2431,17 +2452,23 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
 
 
 def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> Dict[str, Any]:
-    """PM Job: Run optimization (Step 1 capacity-only solver) on all candidates in scenario.
+    """PM Job: Run optimization on all candidates in scenario (full portfolio optimization).
     
     Payload:
-      - sheet_context: {spreadsheet_id, tab}
       - options: {scenario_name, constraint_set_name}
     
     Orchestration:
-      1. Call run_flow5_optimization_step1 with scope_type="all_candidates"
-      2. Return result with run_id, status, selected_count, solver_status
+      1. Auto-sync scenarios and constraints from sheet to DB
+      2. Build optimization problem with scope_type="all_candidates"
+      3. Run solver (capacity + governance + KPI optimization)
+      4. Publish results to Runs/Results/Gaps tabs
+      5. Return result with run_id, status, selected_count, solver_status
     """
     from app.jobs.optimization_job import run_flow5_optimization
+    from app.services.optimization.optimization_sync_service import (
+        sync_scenarios_from_sheet,
+        sync_constraint_sets_from_sheets,
+    )
     
     options = ctx.payload.get("options") or {}
     
@@ -2456,6 +2483,70 @@ def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> D
             "optimization_status": "failed",
             "error": "Missing scenario_name or constraint_set_name in options",
             "substeps": [{"step": "validate", "status": "failed", "reason": "missing_params"}],
+        }
+    
+    # AUTO-SYNC: Sync scenarios and constraints from sheet to DB before optimization
+    if not settings.OPTIMIZATION_CENTER:
+        logger.error("pm.optimize_run_all_candidates.no_config")
+        return {
+            "pm_job": "pm.optimize_run_all_candidates",
+            "optimization_status": "failed",
+            "error": "Optimization Center sheet not configured",
+            "substeps": [{"step": "config_check", "status": "failed", "reason": "no_config"}],
+        }
+    
+    synced_scenarios = []
+    synced_constraints = []
+    
+    try:
+        service = get_sheets_service()
+        sheets_client = SheetsClient(service)
+        
+        logger.info("pm.optimize_run_all_candidates.auto_sync_start")
+        
+        # 1. Sync scenarios first (constraints depend on scenarios existing)
+        scenario_config_tab = settings.OPTIMIZATION_CENTER.scenario_config_tab or "Scenario_Config"
+        synced_scenarios, scenario_errors = sync_scenarios_from_sheet(
+            sheets_client=sheets_client,
+            spreadsheet_id=settings.OPTIMIZATION_CENTER.spreadsheet_id,
+            scenario_config_tab=scenario_config_tab,
+            session=db,
+        )
+        
+        if scenario_errors:
+            logger.warning(
+                "pm.optimize_run_all_candidates.scenario_sync_errors",
+                extra={"errors": scenario_errors}
+            )
+        
+        logger.info(
+            "pm.optimize_run_all_candidates.scenarios_synced",
+            extra={"count": len(synced_scenarios)}
+        )
+        
+        # 2. Sync constraint sets (now that scenarios exist)
+        constraints_tab = settings.OPTIMIZATION_CENTER.constraints_tab or "Constraints"
+        targets_tab = settings.OPTIMIZATION_CENTER.targets_tab or "Targets"
+        synced_constraints, constraint_messages = sync_constraint_sets_from_sheets(
+            sheets_client=sheets_client,
+            spreadsheet_id=settings.OPTIMIZATION_CENTER.spreadsheet_id,
+            constraints_tab=constraints_tab,
+            targets_tab=targets_tab,
+            session=db,
+        )
+        
+        logger.info(
+            "pm.optimize_run_all_candidates.constraints_synced",
+            extra={"count": len(synced_constraints)}
+        )
+        
+    except Exception as e:
+        logger.exception("pm.optimize_run_all_candidates.auto_sync_failed")
+        return {
+            "pm_job": "pm.optimize_run_all_candidates",
+            "optimization_status": "failed",
+            "error": f"Auto-sync failed: {str(e)[:100]}",
+            "substeps": [{"step": "auto_sync", "status": "failed", "error": str(e)[:50]}],
         }
     
     # Generate run_id (use local helper)
@@ -2486,6 +2577,8 @@ def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> D
             "solver_status": result.get("solver_status", "unknown"),
             "feasibility_warnings": result.get("feasibility_warnings_count", 0),
             "substeps": [
+                {"step": "auto_sync_scenarios", "status": "ok", "synced": len(synced_scenarios)},
+                {"step": "auto_sync_constraints", "status": "ok", "synced": len(synced_constraints)},
                 {"step": "build_problem", "status": "ok"},
                 {"step": "feasibility_check", "status": "ok", "warnings": result.get("feasibility_warnings_count", 0)},
                 {"step": "solve", "status": result["status"], "solver": result.get("solver_status", "unknown")},

@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 from decimal import Decimal
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -375,10 +375,68 @@ def build_optimization_problem(
         notes=cset.notes,  # type: ignore[arg-type]
     )
 
-    # --- 8) Post-build validation: governance constraints must reference valid candidates ---
-    # Catch governance mismatches early
+    # --- 8) Validate/filter constraints based on scope policy ---
+    # CRITICAL: Different validation strategy based on scope type
+    #
+    # scope_type="all_candidates": STRICT validation
+    #   - Constraints are authoritative for full portfolio
+    #   - Any missing reference is a configuration error → FAIL FAST
+    #
+    # scope_type="selected_only": FILTER + WARN (subset sandbox mode)
+    #   - User explicitly selected subset for quick test
+    #   - Filter constraints to only apply to selected pool
+    #   - Log warnings for auditability, mark run as sandboxed
+    
     candidate_keys = {c.initiative_key for c in candidates}
-    _validate_governance_references(constraint_payload, candidate_keys)
+    
+    # Initialize variables for metadata tracking
+    warnings: List[str] = []
+    counts: Dict[str, int] = {}
+    total_dropped = 0
+    
+    if scope_type == "all_candidates":
+        # Strict validation: fail if any constraint references missing initiative
+        _validate_constraints_references_strict(constraint_payload, candidate_keys)
+        
+        logger.info(
+            "opt_problem_builder.strict_validation_passed",
+            extra={
+                "scope_type": scope_type,
+                "candidate_count": len(candidates),
+            }
+        )
+    
+    elif scope_type == "selected_only":
+        # Filter mode: apply constraints only to selected pool, log warnings
+        filtered_payload, warnings, counts = _filter_constraints_for_pool(
+            constraint_payload,
+            candidate_keys
+        )
+        
+        # Replace payload with filtered version
+        constraint_payload = filtered_payload
+        
+        # Log detailed warnings
+        total_dropped = sum(counts.values())
+        if total_dropped > 0:
+            logger.warning(
+                "opt_problem_builder.constraints_filtered_for_subset",
+                extra={
+                    "scope_type": scope_type,
+                    "total_dropped": total_dropped,
+                    "counts_by_type": counts,
+                    "warning_samples": warnings[:10],
+                }
+            )
+        
+        logger.info(
+            "opt_problem_builder.filter_mode_applied",
+            extra={
+                "scope_type": scope_type,
+                "candidate_count": len(candidates),
+                "constraints_dropped": total_dropped,
+            }
+        )
 
     # --- 9) RunScope ---
     scope = RunScope(
@@ -388,6 +446,24 @@ def build_optimization_problem(
 
     # --- 10) Pack OptimizationProblem with diagnostic metadata ---
     # SQLAlchemy ORM attributes return Python values at runtime
+    metadata_dict: Dict[str, Any] = {
+        "deadline_filter_period_end": period_end_date.isoformat(),
+        "excluded_due_to_deadline": excluded_deadline,
+        "candidate_count_before_deadline_filter": len(initiatives),
+        "candidate_count_after_deadline_filter": len(candidates),
+        "scenario_id": scenario.id,
+        "constraint_set_id": cset.id,
+    }
+    
+    # Add constraint filtering metadata for selected_only runs
+    if scope_type == "selected_only":
+        metadata_dict["scope_is_sandboxed_subset"] = True
+        metadata_dict["constraint_filter_applied"] = True
+        if total_dropped > 0:
+            metadata_dict["constraint_filter_warnings"] = warnings[:50]  # Store first 50 for auditability
+            metadata_dict["constraint_filter_counts"] = counts
+            metadata_dict["constraint_filter_total_dropped"] = total_dropped
+    
     problem = OptimizationProblem(
         scenario_name=str(scenario.name),  # type: ignore[arg-type]
         constraint_set_name=str(cset.name),  # type: ignore[arg-type]
@@ -397,14 +473,7 @@ def build_optimization_problem(
         candidates=candidates,
         constraint_set=constraint_payload,
         scope=scope,
-        metadata={
-            "deadline_filter_period_end": period_end_date.isoformat(),
-            "excluded_due_to_deadline": excluded_deadline,
-            "candidate_count_before_deadline_filter": len(initiatives),
-            "candidate_count_after_deadline_filter": len(candidates),
-            "scenario_id": scenario.id,
-            "constraint_set_id": cset.id,
-        },
+        metadata=metadata_dict,
     )
 
     logger.info(
@@ -412,6 +481,7 @@ def build_optimization_problem(
         extra={
             "scenario_name": scenario_name,
             "constraint_set_name": constraint_set_name,
+            "scope_type": scope_type,
             "candidate_count": len(candidates),
             "excluded_deadline_count": len(excluded_deadline),
         },
@@ -420,89 +490,178 @@ def build_optimization_problem(
     return problem
 
 
-def _validate_governance_references(
+def _validate_constraints_references_strict(
     constraint_payload: ConstraintSetPayload,
     candidate_keys: set[str],
 ) -> None:
     """
-    Validate that all governance constraint references
+    STRICT validation: Ensure all governance constraint references
     point to initiatives that exist in the candidate pool.
     
-    This catches configuration errors early before solver runs.
+    Use this for scope_type="all_candidates" runs where constraints
+    are authoritative and mismatches indicate configuration errors.
     
     Raises:
-        ValueError: If governance constraints reference non-existent candidates
+        ValueError: If any governance constraint references non-existent candidates
     """
     errors: List[str] = []
-
+    
     # Check mandatory initiatives
-    for key in constraint_payload.mandatory_initiatives:
-        if key not in candidate_keys:
-            errors.append(
-                f"Mandatory initiative '{key}' is not in candidate pool"
-            )
-
-    # Check bundle members
+    missing_mandatory = [k for k in constraint_payload.mandatory_initiatives if k not in candidate_keys]
+    if missing_mandatory:
+        errors.append(f"Mandatory initiatives not in candidate pool: {missing_mandatory}")
+    
+    # Check bundles
     for bundle in constraint_payload.bundles:
         bundle_key = bundle.get("bundle_key", "")
         members = bundle.get("members", [])
-        for member in members:
-            if member not in candidate_keys:
-                errors.append(
-                    f"Bundle '{bundle_key}' member '{member}' is not in candidate pool"
-                )
-
-    # Check prerequisite references
+        missing_members = [m for m in members if m not in candidate_keys]
+        if missing_members:
+            errors.append(f"Bundle '{bundle_key}' references missing initiatives: {missing_members}")
+    
+    # Check prerequisites
     for dependent, prereqs in constraint_payload.prerequisites.items():
         if dependent not in candidate_keys:
-            errors.append(
-                f"Prerequisite dependent '{dependent}' is not in candidate pool"
-            )
-        for prereq in prereqs:
-            if prereq not in candidate_keys:
-                errors.append(
-                    f"Prerequisite '{prereq}' (for '{dependent}') is not in candidate pool"
-                )
-
+            errors.append(f"Prerequisite dependent '{dependent}' not in candidate pool")
+        missing_prereqs = [p for p in prereqs if p not in candidate_keys]
+        if missing_prereqs:
+            errors.append(f"Prerequisites for '{dependent}' reference missing initiatives: {missing_prereqs}")
+    
     # Check single-initiative exclusions
-    for key in constraint_payload.exclusions_initiatives:
-        if key not in candidate_keys:
-            errors.append(
-                f"Excluded initiative '{key}' is not in candidate pool"
-            )
-
+    missing_exclusions = [k for k in constraint_payload.exclusions_initiatives if k not in candidate_keys]
+    if missing_exclusions:
+        errors.append(f"Exclusion initiatives not in candidate pool: {missing_exclusions}")
+    
     # Check exclusion pairs
     for pair in constraint_payload.exclusions_pairs:
         if len(pair) == 2:
             a, b = pair
-            if a not in candidate_keys:
-                errors.append(
-                    f"Exclusion pair member '{a}' is not in candidate pool"
-                )
-            if b not in candidate_keys:
-                errors.append(
-                    f"Exclusion pair member '{b}' is not in candidate pool"
-                )
-
-    # Check synergy pairs
+            if a not in candidate_keys or b not in candidate_keys:
+                errors.append(f"Exclusion pair ({a}, {b}) references missing initiatives")
+    
+    # Check synergy bonuses
     for pair in constraint_payload.synergy_bonuses:
         if len(pair) == 2:
             a, b = pair
-            if a not in candidate_keys:
-                errors.append(
-                    f"Synergy pair member '{a}' is not in candidate pool"
-                )
-            if b not in candidate_keys:
-                errors.append(
-                    f"Synergy pair member '{b}' is not in candidate pool"
-                )
-
+            if a not in candidate_keys or b not in candidate_keys:
+                errors.append(f"Synergy bonus pair ({a}, {b}) references missing initiatives")
+    
     if errors:
-        # PRODUCTION FIX: Fail fast with clear, actionable error message
-        error_msg = (
-            "Governance constraints reference initiatives not in candidate pool:\n"
-            + "\n".join(f"  - {e}" for e in errors[:10])  # Show first 10
-        )
+        error_msg = "Governance constraints reference initiatives not in candidate pool:\\n" + "\\n".join(errors[:10])
         if len(errors) > 10:
-            error_msg += f"\n  ... and {len(errors) - 10} more errors"
+            error_msg += f"\\n... and {len(errors) - 10} more errors"
         raise ValueError(error_msg)
+
+
+def _filter_constraints_for_pool(
+    constraint_payload: ConstraintSetPayload,
+    candidate_keys: set[str],
+) -> tuple[ConstraintSetPayload, List[str], Dict[str, int]]:
+    """
+    FILTER mode: Return new constraint payload with only references
+    that exist in candidate pool. Used for scope_type="selected_only" subset runs.
+    
+    This is a PURE function - does not mutate input payload.
+    
+    Args:
+        constraint_payload: Original constraint set
+        candidate_keys: Set of initiative keys in selected pool
+    
+    Returns:
+        Tuple of:
+        - New filtered ConstraintSetPayload
+        - List of warning messages (all dropped constraints)
+        - Dict of counts per constraint type dropped
+    """
+    warnings: List[str] = []
+    counts: Dict[str, int] = {
+        "mandatory": 0,
+        "bundles": 0,
+        "prerequisites": 0,
+        "exclusions_initiatives": 0,
+        "exclusions_pairs": 0,
+        "synergy_bonuses": 0,
+    }
+    
+    # Filter mandatory initiatives - keep only those in pool
+    filtered_mandatory = []
+    for key in constraint_payload.mandatory_initiatives:
+        if key in candidate_keys:
+            filtered_mandatory.append(key)
+        else:
+            warnings.append(f"Mandatory initiative '{key}' not in selected pool (dropped)")
+            counts["mandatory"] += 1
+    
+    # Filter bundles - keep only bundles where ALL members are in pool
+    filtered_bundles = []
+    for bundle in constraint_payload.bundles:
+        bundle_key = bundle.get("bundle_key", "")
+        members = bundle.get("members", [])
+        missing_members = [m for m in members if m not in candidate_keys]
+        if missing_members:
+            warnings.append(f"Bundle '{bundle_key}' dropped (members not in pool: {', '.join(missing_members)})")
+            counts["bundles"] += 1
+        else:
+            filtered_bundles.append(bundle)
+    
+    # Filter prerequisites - keep only where both dependent and all prereqs are in pool
+    filtered_prereqs = {}
+    for dependent, prereqs in constraint_payload.prerequisites.items():
+        if dependent not in candidate_keys:
+            warnings.append(f"Prerequisite for '{dependent}' dropped (dependent not in pool)")
+            counts["prerequisites"] += 1
+            continue
+        valid_prereqs = [p for p in prereqs if p in candidate_keys]
+        missing_prereqs = [p for p in prereqs if p not in candidate_keys]
+        if missing_prereqs:
+            warnings.append(f"Prerequisites for '{dependent}' partially dropped (missing: {', '.join(missing_prereqs)})")
+            counts["prerequisites"] += len(missing_prereqs)
+        if valid_prereqs:
+            filtered_prereqs[dependent] = valid_prereqs
+    
+    # Filter single-initiative exclusions - keep only those in pool
+    filtered_exclusions = []
+    for key in constraint_payload.exclusions_initiatives:
+        if key in candidate_keys:
+            filtered_exclusions.append(key)
+        else:
+            warnings.append(f"Exclusion initiative '{key}' dropped (not in pool)")
+            counts["exclusions_initiatives"] += 1
+    
+    # Filter exclusion pairs - keep only pairs where BOTH are in pool
+    filtered_exclusion_pairs = []
+    for pair in constraint_payload.exclusions_pairs:
+        if len(pair) == 2:
+            a, b = pair
+            if a not in candidate_keys or b not in candidate_keys:
+                warnings.append(f"Exclusion pair ({a}, {b}) dropped (not both in pool)")
+                counts["exclusions_pairs"] += 1
+            else:
+                filtered_exclusion_pairs.append(pair)
+    
+    # Filter synergy bonuses - keep only pairs where BOTH are in pool
+    filtered_synergy = []
+    for pair in constraint_payload.synergy_bonuses:
+        if len(pair) == 2:
+            a, b = pair
+            if a not in candidate_keys or b not in candidate_keys:
+                warnings.append(f"Synergy bonus ({a}, {b}) dropped (not both in pool)")
+                counts["synergy_bonuses"] += 1
+            else:
+                filtered_synergy.append(pair)
+    
+    # Create new payload (immutable pattern)
+    filtered_payload = ConstraintSetPayload(
+        floors=constraint_payload.floors,
+        caps=constraint_payload.caps,
+        targets=constraint_payload.targets,
+        mandatory_initiatives=filtered_mandatory,
+        bundles=filtered_bundles,
+        exclusions_initiatives=filtered_exclusions,
+        exclusions_pairs=filtered_exclusion_pairs,
+        prerequisites=filtered_prereqs,
+        synergy_bonuses=filtered_synergy,
+        notes=constraint_payload.notes,
+    )
+    
+    return filtered_payload, warnings, counts
