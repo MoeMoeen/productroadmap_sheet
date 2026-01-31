@@ -236,7 +236,21 @@ def build_optimization_problem(
             )
 
         # KPI contributions are stored on Initiative.kpi_contribution_json
-        kpi_contrib = i.kpi_contribution_json or {}
+        kpi_contrib_raw = i.kpi_contribution_json
+        
+        # Handle JSON column type differences (psycopg2 returns string, psycopg returns dict)
+        kpi_contrib: Dict[str, Any] = {}
+        if isinstance(kpi_contrib_raw, dict):
+            kpi_contrib = kpi_contrib_raw
+        elif isinstance(kpi_contrib_raw, str) and kpi_contrib_raw.strip():
+            try:
+                import json
+                kpi_contrib = json.loads(kpi_contrib_raw)
+            except Exception as e:
+                logger.warning(
+                    "Failed to parse kpi_contribution_json as JSON",
+                    extra={"initiative_key": i.initiative_key, "error": str(e)},
+                )
         
         # Ensure numeric floats, handle Decimal/string creep
         cleaned_contrib: Dict[str, float] = {}

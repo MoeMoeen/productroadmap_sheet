@@ -476,7 +476,7 @@ class OrtoolsCpSatSolverAdapter:
                     continue
                 cap_val = _scaled_int(float(max_tokens), TOKEN_SCALE)
                 dim_s = str(dim).strip().lower()
-                dkey_s = str(dim_key).strip()
+                dkey_s = str(dim_key).strip().lower()
 
                 # Determine which candidates are in this slice
                 in_slice: List[str] = []
@@ -486,7 +486,7 @@ class OrtoolsCpSatSolverAdapter:
                         continue
                     # For targets you lowercase country; for caps you decided not to lowercase dimension_key.
                     # Keep exact match semantics.
-                    if str(v) == dkey_s:
+                    if str(v).strip().lower() == dkey_s:
                         in_slice.append(c.initiative_key)
 
                 # If cap is defined for a slice but no candidates match, that's okay; cap is vacuously satisfied.
@@ -550,7 +550,7 @@ class OrtoolsCpSatSolverAdapter:
                     floors_skipped_trivial += 1
                     continue
 
-                dkey_s = str(dim_key).strip()
+                dkey_s = str(dim_key).strip().lower()
 
                 # Build slice token sum
                 slice_keys: List[str] = []
@@ -565,7 +565,7 @@ class OrtoolsCpSatSolverAdapter:
                         slice_keys.append(c.initiative_key)
                     else:
                         # Floors match exact dimension_key (same semantics as caps)
-                        if str(v) == dkey_s:
+                        if str(v).strip().lower() == dkey_s:
                             slice_keys.append(c.initiative_key)
 
                 if not slice_keys:

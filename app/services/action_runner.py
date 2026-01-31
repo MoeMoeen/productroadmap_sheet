@@ -2247,6 +2247,7 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
     from app.services.optimization.optimization_sync_service import (
         sync_scenarios_from_sheet,
         sync_constraint_sets_from_sheets,
+        sync_candidates_from_sheet,
     )
     
     options = ctx.payload.get("options") or {}
@@ -2323,6 +2324,15 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
         logger.info(
             "pm.optimize_run_selected_candidates.constraints_synced",
             extra={"count": len(synced_constraints)}
+        )
+
+        # 3. Sync candidates (PM-editable fields) from sheet to DB
+        candidates_tab = settings.OPTIMIZATION_CENTER.candidates_tab or "Candidates"
+        sync_candidates_from_sheet(
+            sheets_client=sheets_client,
+            spreadsheet_id=settings.OPTIMIZATION_CENTER.spreadsheet_id,
+            candidates_tab=candidates_tab,
+            session=db,
         )
         
     except Exception as e:
@@ -2468,6 +2478,7 @@ def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> D
     from app.services.optimization.optimization_sync_service import (
         sync_scenarios_from_sheet,
         sync_constraint_sets_from_sheets,
+        sync_candidates_from_sheet,
     )
     
     options = ctx.payload.get("options") or {}
@@ -2538,6 +2549,15 @@ def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> D
         logger.info(
             "pm.optimize_run_all_candidates.constraints_synced",
             extra={"count": len(synced_constraints)}
+        )
+
+        # 3. Sync candidates (PM-editable fields) from sheet to DB
+        candidates_tab = settings.OPTIMIZATION_CENTER.candidates_tab or "Candidates"
+        sync_candidates_from_sheet(
+            sheets_client=sheets_client,
+            spreadsheet_id=settings.OPTIMIZATION_CENTER.spreadsheet_id,
+            candidates_tab=candidates_tab,
+            session=db,
         )
         
     except Exception as e:

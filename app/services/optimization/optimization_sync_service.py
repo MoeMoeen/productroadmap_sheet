@@ -11,7 +11,13 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, cast
 from sqlalchemy.orm import Session
 
 from app.db.models.initiative import Initiative
-from app.db.models.optimization import OrganizationMetricConfig, OptimizationConstraintSet, OptimizationScenario
+from app.db.models.optimization import (
+    OrganizationMetricConfig,
+    OptimizationConstraintSet,
+    OptimizationScenario,
+    OptimizationRun,
+    Portfolio,
+)
 from app.db.session import SessionLocal
 from app.schemas.optimization_center import (
     CapacityCap,
@@ -101,14 +107,51 @@ def sync_scenarios_from_sheet(
                 errors.append(f"Row {row_num} ({scenario_name}): {str(e)[:100]}")
                 continue
         
+
         if synced:
             db.commit()
-        
+        # Mirror behavior: remove any DB scenarios for which there is no sheet row
+        # SAFETY: Only perform mirroring when sheet read returned rows; skip if empty to avoid accidental mass-deletes.
+        if not rows:
+            logger.warning(
+                "opt_sync.scenario_mirror_skipped_empty_sheet",
+                extra={"reason": "no rows read from sheet; skipping mirror deletions"},
+            )
+            return synced, errors
+        # Build set of scenario names from the sheet
+        sheet_names = {str(r[1].scenario_name).strip() for r in rows if r[1].scenario_name}
+        # Find DB scenarios not present on sheet and delete only if safe
+        db_scenarios = db.query(OptimizationScenario).all()
+        to_delete: list[OptimizationScenario] = []
+        for s in db_scenarios:
+            if s.name not in sheet_names:
+                runs_count = db.query(OptimizationRun).filter(OptimizationRun.scenario_id == s.id).count()
+                # Count portfolios referencing this scenario via their runs (safer than assuming Portfolio.scenario_id exists)
+                portfolios_count = (
+                    db.query(Portfolio)
+                    .join(OptimizationRun, Portfolio.optimization_run_id == OptimizationRun.id)
+                    .filter(OptimizationRun.scenario_id == s.id)
+                    .count()
+                )
+                if runs_count == 0 and portfolios_count == 0:
+                    to_delete.append(s)
+                else:
+                    logger.warning(
+                        "opt_sync.scenario_skip_delete_has_dependents",
+                        extra={"scenario": s.name, "runs": runs_count, "portfolios": portfolios_count},
+                    )
+
+        if to_delete:
+            for s in to_delete:
+                logger.info("opt_sync.scenario_deleting", extra={"scenario": s.name, "id": s.id})
+                db.delete(s)
+            db.commit()
+
         logger.info(
             "opt_sync.scenarios_complete",
             extra={"synced": len(synced), "errors": len(errors)}
         )
-        
+
         return synced, errors
     
     finally:
@@ -230,6 +273,62 @@ def sync_constraint_sets_from_sheets(
 
         if persisted:
             db.commit()
+
+        # Mirror constraint sets: remove any DB OptimizationConstraintSet rows
+        # that are not present in the compiled sheet output for their scenario.
+        # SAFETY: Only perform mirroring when compile produced results; skip if compiled is empty to avoid accidental mass-deletes.
+        if not compiled:
+            logger.warning(
+                "opt_sync.constraint_set_mirror_skipped_empty_compile",
+                extra={"reason": "compiled constraint sets empty; skipping mirror deletions"},
+            )
+            return persisted, messages
+        # Build mapping: scenario_name -> set(constraint_set_names)
+        compiled_by_scenario: Dict[str, set[str]] = {}
+        for (sc_name, cs_name) in compiled.keys():
+            compiled_by_scenario.setdefault(str(sc_name).strip(), set()).add(str(cs_name).strip())
+
+        # For each scenario in DB, delete constraint sets not present in compiled_by_scenario
+        db_scenarios = db.query(OptimizationScenario).all()
+        deleted_any = False
+        for sc in db_scenarios:
+            allowed = compiled_by_scenario.get(str(sc.name).strip(), set())
+            existing_sets = db.query(OptimizationConstraintSet).filter(OptimizationConstraintSet.scenario_id == sc.id).all()
+            for es in existing_sets:
+                if es.name not in allowed:
+                    # Check dependent OptimizationRun referencing this constraint set
+                    runs_count = db.query(OptimizationRun).filter(OptimizationRun.constraint_set_id == es.id).count()
+                    # Also check for any persisted Portfolio that references a run tied to this constraint set
+                    portfolios_count = (
+                        db.query(Portfolio)
+                        .join(OptimizationRun, Portfolio.optimization_run_id == OptimizationRun.id)
+                        .filter(OptimizationRun.constraint_set_id == es.id)
+                        .count()
+                    )
+
+                    if runs_count > 0 or portfolios_count > 0:
+                        logger.warning(
+                            "opt_sync.constraint_set_skip_delete_has_dependents",
+                            extra={
+                                "scenario": sc.name,
+                                "cset": es.name,
+                                "id": es.id,
+                                "runs": runs_count,
+                                "portfolios": portfolios_count,
+                            },
+                        )
+                        continue
+
+                    logger.info(
+                        "opt_sync.constraint_set_deleting",
+                        extra={"scenario": sc.name, "cset": es.name, "id": es.id},
+                    )
+                    db.delete(es)
+                    deleted_any = True
+
+        if deleted_any:
+            db.commit()
+
         return persisted, messages
     finally:
         if created_session:
@@ -279,6 +378,7 @@ def sync_candidates_from_sheet(
     try:
         reader = CandidatesReader(sheets_client)
         rows = reader.get_rows(spreadsheet_id, candidates_tab)
+        original_row_count = len(rows)
         logger.info("opt_candidates_sync.rows_loaded", extra={"count": len(rows)})
         
         updated_count = 0
@@ -319,18 +419,42 @@ def sync_candidates_from_sheet(
                     setattr(initiative, "engineering_tokens", float(row.engineering_tokens))
                 
                 if row.deadline_date is not None:
-                    # Parse ISO date string to date object
-                    from datetime import datetime
-                    if isinstance(row.deadline_date, str):
+                    # Parse date with a forgiving strategy: try ISO, common formats, then dateutil if available
+                    from datetime import datetime, date
+
+                    def _parse_date_flexible(val) -> Optional[date]:
+                        if isinstance(val, date):
+                            return val
+                        if not isinstance(val, str):
+                            return None
+                        s = val.strip()
+                        # Try iso format first
                         try:
-                            setattr(initiative, "deadline_date", datetime.fromisoformat(row.deadline_date).date())
-                        except ValueError:
-                            logger.warning(
-                                "opt_candidates_sync.invalid_date",
-                                extra={"key": initiative_key, "date": row.deadline_date},
-                            )
+                            return datetime.fromisoformat(s).date()
+                        except Exception:
+                            pass
+                        # Try common separators
+                        for fmt in ("%Y/%m/%d", "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
+                            try:
+                                return datetime.strptime(s, fmt).date()
+                            except Exception:
+                                pass
+                        # Fallback to dateutil if available
+                        try:
+                            from dateutil import parser as _parser
+
+                            return _parser.parse(s).date()
+                        except Exception:
+                            return None
+
+                    parsed_date = _parse_date_flexible(row.deadline_date)
+                    if parsed_date:
+                        setattr(initiative, "deadline_date", parsed_date)
                     else:
-                        setattr(initiative, "deadline_date", row.deadline_date)
+                        logger.warning(
+                            "opt_candidates_sync.invalid_date",
+                            extra={"key": initiative_key, "date": row.deadline_date},
+                        )
                 
                 if row.category is not None:
                     setattr(initiative, "category", str(row.category).strip() if row.category else None)
@@ -371,7 +495,8 @@ def sync_candidates_from_sheet(
         )
         
         return {
-            "row_count": len(rows),
+            "original_row_count": original_row_count,
+            "processed_row_count": len(rows),
             "updated": updated_count,
             "skipped_no_key": skipped_no_key,
             "errors": errors,
