@@ -37,6 +37,8 @@ from app.jobs.math_model_generation_job import run_math_model_generation_job
 from app.jobs.param_seeding_job import run_param_seeding_job
 from app.llm.client import LLMClient
 
+# Note: optimization explainer imports are deferred inside functions to keep import graph light
+
 
 logger = logging.getLogger("app.services.action_runner")
 
@@ -252,6 +254,12 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         summary["success"] = selected_count - failed
         summary["skipped"] = skipped
         summary["failed"] = failed
+
+    elif action in {"pm.explain_selection", "pm.explain_why_not"}:
+        summary["total"] = result.get("input_candidates_count", 0)
+        summary["success"] = 1 if result.get("status") == "ok" else 0
+        summary["failed"] = 0 if result.get("status") == "ok" else 1
+        summary["skipped"] = 1 if result.get("status") == "skipped" else 0
 
     elif action == "pm.save_selected":
         selected_count = result.get("selected_count", 0)
@@ -2617,6 +2625,236 @@ def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> D
         }
 
 
+def _serialize_explainer_outputs(ev: Any, rp: Any) -> Dict[str, Any]:
+    """Serialize explainer outputs to JSON-friendly dicts."""
+    eval_dict = {
+        "is_feasible": bool(getattr(ev, "is_feasible", False)),
+        "selected_keys": sorted(getattr(ev, "selected_keys", []) or []),
+        "totals": getattr(ev, "totals", {}) or {},
+        "violations": [
+            {
+                "code": v.code,
+                "message": v.message,
+                "severity": v.severity,
+                "details": v.details,
+            }
+            for v in (getattr(ev, "violations", []) or [])
+        ],
+    }
+
+    rp_dict = None
+    if rp is not None:
+        final_eval = getattr(rp, "final_evaluation", None)
+        rp_dict = {
+            "initial_selected": sorted(getattr(rp, "initial_selected", []) or []),
+            "final_selected": sorted(getattr(rp, "final_selected", []) or []),
+            "steps": [
+                {
+                    "action": s.action,
+                    "initiative_key": s.initiative_key,
+                    "reason": s.reason,
+                    "impact": s.impact or {},
+                }
+                for s in (getattr(rp, "steps", []) or [])
+            ],
+            "summary": getattr(rp, "summary", {}) or {},
+            "final_evaluation": {
+                "is_feasible": getattr(final_eval, "is_feasible", False),
+                "selected_keys": sorted(getattr(final_eval, "selected_keys", []) or []),
+                "totals": getattr(final_eval, "totals", {}) or {},
+                "violations": [
+                    {
+                        "code": v.code,
+                        "message": v.message,
+                        "severity": v.severity,
+                        "details": v.details,
+                    }
+                    for v in (getattr(final_eval, "violations", []) or [])
+                ],
+            } if final_eval is not None else {},
+        }
+
+    return {
+        "evaluation": eval_dict,
+        "repair_plan": rp_dict,
+    }
+
+
+def _action_pm_explain_selection(db: Session, ctx: ActionContext) -> Dict[str, Any]:
+    """PM Job: Explain infeasibility of current selection and propose greedy repairs.
+
+    Payload:
+      - sheet_context: {spreadsheet_id, candidates_tab, scenario_config_tab, constraints_tab, targets_tab} (optional)
+      - options: {scenario_name, constraint_set_name, sync_candidates_first: bool}
+      - scope: {initiative_keys: list[str]} (optional; otherwise reads is_selected_for_run from Candidates tab)
+    """
+    from app.services.optimization.optimization_problem_builder import build_optimization_problem
+    from app.sheets.optimization_center_readers import CandidatesReader
+    from app.services.optimization.optimization_sync_service import (
+        sync_scenarios_from_sheet,
+        sync_constraint_sets_from_sheets,
+        sync_candidates_from_sheet,
+    )
+    from app.services.optimization.constraint_explainer import evaluate_selection, suggest_repairs
+    from app.services.optimization.optimization_compiler import normalize_initiative_key
+
+    options = ctx.payload.get("options") or {}
+    scenario_name = options.get("scenario_name")
+    constraint_set_name = options.get("constraint_set_name")
+    sync_candidates = bool(options.get("sync_candidates_first", False))
+    
+    if not scenario_name or not constraint_set_name:
+        return {
+            "pm_job": "pm.explain_selection",
+            "status": "failed",
+            "error": "Missing scenario_name or constraint_set_name in options",
+            "substeps": [{"step": "validate", "status": "failed", "reason": "missing_params"}],
+        }
+
+    scope = ctx.payload.get("scope") or {}
+    explicit_keys = scope.get("initiative_keys") or []
+
+    # Resolve sheet config: prefer sheet_context, fallback to settings.OPTIMIZATION_CENTER
+    sheet_ctx = ctx.payload.get("sheet_context") or {}
+    if not isinstance(sheet_ctx, dict):
+        sheet_ctx = {}
+    
+    cfg = settings.OPTIMIZATION_CENTER
+    spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (cfg.spreadsheet_id if cfg else None)
+    scenario_config_tab = sheet_ctx.get("scenario_config_tab") or (cfg.scenario_config_tab if cfg else "Scenario_Config")
+    constraints_tab = sheet_ctx.get("constraints_tab") or (cfg.constraints_tab if cfg else "Constraints")
+    targets_tab = sheet_ctx.get("targets_tab") or (cfg.targets_tab if cfg else "Targets")
+    candidates_tab = sheet_ctx.get("candidates_tab") or (cfg.candidates_tab if cfg else "Candidates")
+    
+    if not spreadsheet_id:
+        return {
+            "pm_job": "pm.explain_selection",
+            "status": "failed",
+            "error": "Optimization Center sheet not configured (no spreadsheet_id)",
+            "substeps": [{"step": "config_check", "status": "failed", "reason": "no_config"}],
+        }
+
+    synced_scenarios = []
+    synced_constraints = []
+
+    try:
+        # Use ctx.sheets_client (already initialized in ActionContext)
+        synced_scenarios, scenario_errors = sync_scenarios_from_sheet(
+            sheets_client=ctx.sheets_client,
+            spreadsheet_id=spreadsheet_id,
+            scenario_config_tab=scenario_config_tab,
+            session=db,
+        )
+        if scenario_errors:
+            logger.warning("pm.explain_selection.scenario_sync_errors", extra={"error_count": len(scenario_errors)})
+
+        synced_constraints, constraint_messages = sync_constraint_sets_from_sheets(
+            sheets_client=ctx.sheets_client,
+            spreadsheet_id=spreadsheet_id,
+            constraints_tab=constraints_tab,
+            targets_tab=targets_tab,
+            session=db,
+        )
+        if constraint_messages:
+            # Truncate large message lists to avoid log explosion
+            msg_sample = constraint_messages[:3] if len(constraint_messages) > 3 else constraint_messages
+            logger.info("pm.explain_selection.constraints_synced", extra={"message_count": len(constraint_messages), "sample": msg_sample})
+
+        # Optional: sync candidates only if explicitly requested (avoids persisting half-edited data)
+        if sync_candidates:
+            sync_candidates_from_sheet(
+                sheets_client=ctx.sheets_client,
+                spreadsheet_id=spreadsheet_id,
+                candidates_tab=candidates_tab,
+                session=db,
+            )
+    except Exception as e:
+        logger.exception("pm.explain_selection.auto_sync_failed")
+        return {
+            "pm_job": "pm.explain_selection",
+            "status": "failed",
+            "error": f"Auto-sync failed: {str(e)[:100]}",
+            "substeps": [{"step": "auto_sync", "status": "failed", "error": str(e)[:50]}],
+        }
+
+    # Resolve selection keys
+    if explicit_keys and isinstance(explicit_keys, list):
+        keys = [k.strip() for k in explicit_keys if isinstance(k, str) and k.strip()]
+        keys = list(dict.fromkeys(keys))  # Dedupe preserving order
+    else:
+        try:
+            reader = CandidatesReader(ctx.sheets_client)
+            candidates_with_rows = reader.get_rows(
+                spreadsheet_id=spreadsheet_id,
+                tab_name=candidates_tab,
+            )
+            candidates = [row for _, row in candidates_with_rows]
+            keys = [str(c.initiative_key) for c in candidates if getattr(c, "is_selected_for_run", False) and c.initiative_key]
+        except Exception as e:
+            logger.exception("pm.explain_selection.read_sheet_failed")
+            return {
+                "pm_job": "pm.explain_selection",
+                "status": "failed",
+                "error": f"Failed to read Candidates tab: {str(e)[:100]}",
+                "substeps": [{"step": "read_sheet", "status": "failed", "error": str(e)[:50]}],
+            }
+    
+    # Normalize keys using compiler's canonicalizer (handles INIT-4, INIT_4, init0004, etc.)
+    keys = [normalize_initiative_key(k) for k in keys]
+    keys = list(dict.fromkeys(keys))  # Dedupe after normalization
+
+    if not keys:
+        return {
+            "pm_job": "pm.explain_selection",
+            "status": "skipped",
+            "reason": "No candidates selected (is_selected_for_run=TRUE not found)",
+            "input_candidates_count": 0,
+            "substeps": [{"step": "validate", "status": "skipped", "reason": "no_keys"}],
+        }
+
+    try:
+        problem = build_optimization_problem(
+            db=db,
+            scenario_name=scenario_name,
+            constraint_set_name=constraint_set_name,
+            scope_type="selected_only",
+            selected_initiative_keys=keys,
+        )
+
+        ev = evaluate_selection(problem, keys)
+        rp = suggest_repairs(problem, keys)
+        serialized = _serialize_explainer_outputs(ev, rp)
+
+        return {
+            "pm_job": "pm.explain_selection",
+            "status": "ok",
+            "scenario_name": scenario_name,
+            "constraint_set_name": constraint_set_name,
+            "input_candidates_count": len(keys),
+            "selected_keys": keys,
+            "violations_count": len(serialized["evaluation"].get("violations", [])),
+            "is_feasible": serialized["evaluation"]["is_feasible"],
+            "substeps": [
+                {"step": "auto_sync_scenarios", "status": "ok", "synced": len(synced_scenarios)},
+                {"step": "auto_sync_constraints", "status": "ok", "synced": len(synced_constraints)},
+                {"step": "sync_candidates", "status": "ok" if sync_candidates else "skipped"},
+                {"step": "read_sheet", "status": "ok", "selected_count": len(keys)},
+                {"step": "evaluate", "status": "ok"},
+                {"step": "suggest_repairs", "status": "ok"},
+            ],
+            **serialized,
+        }
+    except Exception as e:
+        logger.exception("pm.explain_selection.failed")
+        return {
+            "pm_job": "pm.explain_selection",
+            "status": "failed",
+            "error": str(e)[:150],
+            "input_candidates_count": len(keys),
+            "substeps": [{"step": "evaluate", "status": "failed", "error": str(e)[:80]}],
+        }
+
+
 ## ---------- Action Registry ----------
 
 _ACTION_REGISTRY: Dict[str, ActionFn] = {
@@ -2653,4 +2891,5 @@ _ACTION_REGISTRY: Dict[str, ActionFn] = {
     "pm.populate_candidates": _action_pm_populate_candidates,
     "pm.optimize_run_selected_candidates": _action_pm_optimize_run_selected_candidates,
     "pm.optimize_run_all_candidates": _action_pm_optimize_run_all_candidates,
+    "pm.explain_selection": _action_pm_explain_selection,
 }

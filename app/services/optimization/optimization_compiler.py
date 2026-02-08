@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 _INIT_KEY_RE = re.compile(r"^\s*INIT[-_]?0*(\d+)\s*$", re.IGNORECASE)
 
 
-def _normalize_initiative_key(key: str) -> str:
+def normalize_initiative_key(key: str) -> str:
     """Normalize initiative key into canonical form `INIT-XXXX` where XXXX is zero-padded 4 digits.
 
     If the key doesn't match the expected pattern, return the stripped uppercased key unchanged.
@@ -61,7 +61,7 @@ def _normalize_key_list(keys: list[str]) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     for k in keys:
-        nk = _normalize_initiative_key(k)
+        nk = normalize_initiative_key(k)
         if nk and nk not in seen:
             seen.add(nk)
             out.append(nk)
@@ -150,7 +150,7 @@ def compile_constraint_sets(
             )
         elif isinstance(parsed, MandatoryRowSchema):
             if parsed.dimension_key:
-                constraint_set.mandatory_initiatives.append(_normalize_initiative_key(parsed.dimension_key))
+                constraint_set.mandatory_initiatives.append(normalize_initiative_key(parsed.dimension_key))
         elif isinstance(parsed, BundleRowSchema):
             if parsed.dimension_key:
                 members = [p.strip() for p in (parsed.bundle_member_keys or "").split("|") if p.strip()]
@@ -160,8 +160,8 @@ def compile_constraint_sets(
         elif isinstance(parsed, ExcludePairRowSchema):
             parts = [p.strip() for p in (parsed.dimension_key or "").split("|") if p.strip()]
             if len(parts) >= 2:
-                left = _normalize_initiative_key(parts[0])
-                right = _normalize_initiative_key(parts[1])
+                left = normalize_initiative_key(parts[0])
+                right = normalize_initiative_key(parts[1])
                 constraint_set.exclusions_pairs.append([left, right])
             else:
                 logger.warning(
@@ -184,7 +184,7 @@ def compile_constraint_sets(
         elif isinstance(parsed, RequirePrereqRowSchema):
             # dimension_key = dependent initiative, prereq_member_keys = pipe-separated prerequisites
             dependent = (parsed.dimension_key or "").strip()
-            dependent = _normalize_initiative_key(dependent) if dependent else dependent
+            dependent = normalize_initiative_key(dependent) if dependent else dependent
             prereq_keys = parsed.prereq_member_keys or ""
             prereqs = [p.strip() for p in prereq_keys.split("|") if p.strip()]
             prereqs = _normalize_key_list(prereqs)
