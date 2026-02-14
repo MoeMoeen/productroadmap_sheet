@@ -723,14 +723,78 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
        - Behavior: Scenario scope → fast capacity-constrained solver → write Results tab
        - Summary: candidate_count, solved_count, selected_initiatives, total_objective
 
-   * **Apps Script UI Layer** (Bound scripts in ProductOps & Central Backlog sheets)
-     - Custom menu "Roadmap AI" with items for all 6 jobs
+   * **Apps Script UI Layer** (Bound scripts in ProductOps, Central Backlog, and Optimization Center sheets)
+     - Custom menu "Roadmap AI" with items for all PM jobs (ProductOps/Central Backlog) and Optimization actions (Optimization Center)
      - Selection extraction: Reads initiative_keys from active selected rows; skips blanks
      - HTTP integration: config.gs (API URL + secret), api.gs (POST /actions/run, GET /actions/run/{run_id} helpers)
      - Authentication: Shared-secret header X-ROADMAP-AI-SECRET from Script Properties
      - Error handling: Try/catch blocks surface API errors via in-sheet toast notifications
      - Optional polling: Apps Script can poll status until completion for UX feedback
      - Tab-aware branching: pm.save_selected intelligently routes based on active sheet name
+     
+     **AppScript Module Architecture** (docs/appscripts/optimization_appscripts.md):
+     
+     1. **config.gs** - Central configuration
+        - `getRoadmapApiBaseUrl()` - Returns backend API URL (ngrok/localhost/prod)
+        - `getRoadmapApiSecret()` - Reads X-ROADMAP-AI-SECRET from Script Properties
+     
+     2. **api.gs** - HTTP client layer
+        - `_safeJsonParse_(text)` - Parses JSON with HTML/error detection (ngrok resilience)
+        - `_request_(method, path, bodyObj)` - Low-level HTTP wrapper with auth headers
+        - `_formatHttpError_(ctx, hint)` - Formats error messages from API responses
+        - `postActionRun(actionName, payload)` - POST /actions/run endpoint wrapper
+        - `getActionRun(runId)` - GET /actions/run/{run_id} status endpoint wrapper
+        - `pollRunUntilDone(runId, tries, sleepMs)` - Polls until success/failed/timeout
+     
+     3. **selection.gs** - User selection extraction
+        - `getSelectedInitiativeKeys()` - Extracts initiative_key from user's current row selection
+        - Supports multi-range selections (Ctrl+Click, Shift+Select)
+        - Skips header row, filters blank keys, deduplicates
+     
+     4. **selection_optimization.gs** - Optimization-specific selection helpers
+        - `_findHeaderIndex_(headers, aliases)` - Finds column index with alias support
+        - `getOptimizationSelectedCandidateKeys_()` - Reads initiative_keys where is_selected_for_run=TRUE from Candidates tab
+        - Respects sheet structure: row 1 headers, rows 2-3 metadata, row 4+ data
+     
+     5. **settings_reader.gs** - Optimization Center Settings tab reader
+        - `getOptimizationSettings_()` - Reads key/value pairs from Settings tab
+        - `resolveOptimizationScenarioAndCset_(opts)` - Resolves scenario_name + constraint_set_name
+        - Priority: Settings tab values → UI prompt fallback (if allowPromptFallback=true)
+     
+     6. **ui_helpers.gs** - Shared UI utilities
+        - `showRunToast_(run, title)` - Displays toast notifications based on run status (success/failed/running)
+     
+     7. **UI Action Handlers** (ProductOps & Central Backlog):
+        - `uiBacklogSync()` - pm.backlog_sync
+        - `uiScoreSelected()` - pm.score_selected
+        - `uiSwitchFramework()` - pm.switch_framework
+        - `uiSaveSelected()` - pm.save_selected (tab-aware)
+        - `uiSuggestMathModel()` - pm.suggest_math_model_llm
+        - `uiSeedMathParams()` - pm.seed_math_params
+     
+     8. **UI Action Handlers** (Optimization Center):
+        - `uiOptPopulateCandidates()` - pm.populate_candidates
+          * Reads scenario/constraint set from Settings tab (with prompt fallback)
+          * Populates Candidates tab with DB data (KPI contributions, constraint flags)
+        - `uiOptRunSelectedCandidates()` - pm.optimize_run_selected_candidates
+          * Scope: User-selected initiatives (via getSelectedInitiativeKeys)
+          * Full optimization: capacity + governance + targets
+          * Polls for completion, displays results via toast
+        - `uiOptRunAllCandidates()` - pm.optimize_run_all_candidates
+          * Scope: All candidates in scenario
+          * Fast capacity-only optimization (no governance/targets)
+          * Polls for completion, displays results via toast
+        - `uiExplainSelection()` - pm.explain_selection
+          * Reads selected keys or is_selected_for_run checkboxes
+          * Optional candidates sync toggle (YES/NO/CANCEL dialog)
+          * Evaluates constraint violations on current selection
+          * Displays top violation in alert dialog
+          * Returns evaluation + repair_plan with actionable suggestions
+     
+     9. **Menu Registration** (onOpen function):
+        - ProductOps/Central Backlog: "Roadmap AI" menu with 6 PM job items
+        - Optimization Center: "Roadmap AI" menu with 4 optimization items
+        - All menus include "Explain Selection" for constraint debugging
 
    * **Consistent Architecture Across All Jobs**:
      - Server-side orchestration: Single ActionRun per job (no nested enqueues)
