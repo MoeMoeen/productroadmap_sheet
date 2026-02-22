@@ -46,7 +46,9 @@ class ParamsWriter:
     def _get_last_data_row(self, spreadsheet_id: str, tab_name: str) -> int:
         """Return last row index (1-based) that has data in initiative_key column.
         
-        Returns 1 if only header exists.
+        Returns data_start_row - 1 if no data rows exist (i.e. only header/meta).
+        Scans only from data_start_row onward so meta rows are never mistaken
+        for data.
         
         Important: values[idx] corresponds to sheet row (idx + 1).
         """
@@ -56,13 +58,14 @@ class ParamsWriter:
 
             values = self.client.get_values(spreadsheet_id, f"{tab_name}!{col_letter}:{col_letter}") or []
 
-            # Walk backwards; values[idx] corresponds to row (idx + 1)
-            for idx in range(len(values) - 1, 0, -1):  # skip header at idx=0
+            _dri = data_row_index(tab_name)  # 0-indexed start of data
+            # Walk backwards from end; only consider data region (idx >= _dri)
+            for idx in range(len(values) - 1, _dri - 1, -1):
                 cell = values[idx][0] if (isinstance(values[idx], list) and values[idx]) else ""
                 if str(cell).strip():
                     return idx + 1  # Convert list index to sheet row number
 
-            return 1
+            return data_start_row(tab_name) - 1  # no data rows found
         except Exception as e:
             logger.error(f"Error finding last data row in {tab_name}: {e}")
             return 1

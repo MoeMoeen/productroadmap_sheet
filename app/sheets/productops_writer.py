@@ -129,15 +129,16 @@ def write_scores_to_productops_sheet(
     key_col = col_map["initiative_key"]
 
     # Step 3: Fetch only the needed columns (initiative_key + score/provenance columns)
+    _dsr = data_start_row(tab_name)
     needed_cols = sorted(col_map.values())
     ranges: List[str] = []
     for col_idx in needed_cols:
         col_letter = _col_index_to_a1(col_idx + 1)
-        ranges.append(f"{tab_name}!{col_letter}2:{col_letter}")
+        ranges.append(f"{tab_name}!{col_letter}{_dsr}:{col_letter}")
 
     value_ranges = client.batch_get_values(spreadsheet_id, ranges)
 
-    # Map column index -> list of values (starting at row 2)
+    # Map column index -> list of values (starting at data_start_row)
     col_values: Dict[int, List[Any]] = {}
     for col_idx, vr in zip(needed_cols, value_ranges):
         col_values[col_idx] = vr.get("values", []) if vr else []
@@ -326,10 +327,11 @@ def write_status_to_productops_sheet(
         needed_cols.append(updated_at_col)
     needed_cols = sorted(set(needed_cols))
 
+    _dsr = data_start_row(tab_name)
     ranges: List[str] = []
     for col_idx in needed_cols:
         col_letter = _col_index_to_a1(col_idx + 1)
-        ranges.append(f"{tab_name}!{col_letter}2:{col_letter}")
+        ranges.append(f"{tab_name}!{col_letter}{_dsr}:{col_letter}")
 
     value_ranges = client.batch_get_values(spreadsheet_id, ranges)
     col_values: Dict[int, List[Any]] = {}

@@ -119,8 +119,9 @@ def write_kpi_contributions_to_sheet(
     key_col = col_map["initiative_key"]
 
     # Step 3: Read all existing initiative_key values to build row index map
+    _dsr = data_start_row(tab_name)
     key_col_letter = _col_index_to_a1(key_col + 1)
-    key_range = f"{tab_name}!{key_col_letter}2:{key_col_letter}"
+    key_range = f"{tab_name}!{key_col_letter}{_dsr}:{key_col_letter}"
     key_values_result = client.get_values(spreadsheet_id, key_range)
     existing_keys_raw: List[Any] = key_values_result.get("values", []) if key_values_result else []  # type: ignore[assignment]
     

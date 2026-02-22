@@ -25,8 +25,11 @@ from typing import Dict
 DEFAULT_DATA_START_ROW: int = 4   # 1-indexed
 DEFAULT_HEADER_ROW: int = 1      # 1-indexed
 
-# Per-tab overrides.  Key = tab identifier (lowercase, matches tab names or
-# logical keys used in settings / sheet registry).  Value = data_start_row.
+# Per-tab overrides.  Key = **exact sheet tab name**, lowercased and stripped.
+# For example, if the Google Sheet tab is called "Scoring_Inputs", use:
+#   "scoring_inputs": 5
+# NOT a logical alias like "scoring" — the key must match the tab_name string
+# passed to readers/writers (which is always the literal sheet tab name).
 # Example:
 #   "candidates": 5,   # if we ever add an instructions row
 TAB_LAYOUT: Dict[str, int] = {

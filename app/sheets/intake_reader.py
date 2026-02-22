@@ -1,6 +1,5 @@
 # productroadmap_sheet_project/app/sheets/intake_reader.py
 from __future__ import annotations
-from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Tuple
 

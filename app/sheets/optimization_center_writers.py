@@ -57,6 +57,32 @@ def _col_index_to_a1(idx: int) -> str:
     return result
 
 
+def _find_next_append_row(
+    client: SheetsClient,
+    spreadsheet_id: str,
+    tab_name: str,
+) -> int:
+    """Find the next empty row for appending, scanning from last non-empty backward.
+
+    Reads column A, walks backward from the end to find the last row with data
+    *in the data region* (at or after ``data_start_row``).  Returns that row + 1.
+    If no data rows exist, returns ``data_start_row(tab_name)`` so the first
+    append lands on the correct row.
+    """
+    all_values = client.get_values(spreadsheet_id, f"{tab_name}!A:A")
+    _dsr = data_start_row(tab_name)
+    _dri = data_row_index(tab_name)  # 0-indexed start of data
+    if not all_values or len(all_values) <= _dri:
+        return _dsr
+
+    # Walk backward — idx is 0-based, sheet row = idx + 1
+    for idx in range(len(all_values) - 1, _dri - 1, -1):
+        val = all_values[idx]
+        if val and str(val[0]).strip():
+            return idx + 2  # next row after last non-empty
+    return _dsr
+
+
 def _to_sheet_value(value: Any) -> Any:
     """Convert a Python value to a Sheets-compatible value."""
     if value is None:
@@ -134,10 +160,11 @@ def _read_key_rows_composite(
         logger.warning("opt_writer.no_key_columns", extra={"tab": tab_name, "key_fields": key_fields})
         return {}
 
+    _dsr = data_start_row(tab_name)
     ranges = []
     for col_idx in sorted(col_indices):
         col_letter = _col_index_to_a1(col_idx + 1)
-        ranges.append(f"{tab_name}!{col_letter}2:{col_letter}")
+        ranges.append(f"{tab_name}!{col_letter}{_dsr}:{col_letter}")
 
     value_ranges = client.batch_get_values(spreadsheet_id, ranges)
     col_values: Dict[int, List[Any]] = {}
@@ -164,7 +191,7 @@ def _read_key_rows_composite(
                 row_dict[field] = cell_val
         key = key_builder(row_dict)
         key = str(key).strip() if key is not None else ""
-        row_num = offset + 2
+        row_num = offset + _dsr
         if not key:
             blank_run += 1
             if blank_run >= _BLANK_RUN_CUTOFF:
@@ -389,20 +416,8 @@ class OptimizationCenterWriter:
         header = [normalize_header(str(h)) for h in header_values[0]]
         alias_lookup = _build_alias_lookup(OPT_RUNS_HEADER_MAP)
         
-        # Find next empty row by scanning for last non-empty run_id
-        all_values = self.client.get_values(spreadsheet_id, f"{tab_name}!A:A")
-        _dsr = data_start_row(tab_name)
-        _dri = data_row_index(tab_name)
-        if not all_values or len(all_values) < _dsr:
-            next_row = _dsr
-        else:
-            # Scan backwards from end to find last non-empty row
-            next_row = _dsr
-            for idx, val in enumerate(all_values):
-                if idx >= _dri and val and str(val[0]).strip():  # Skip reserved rows
-                    next_row = idx + 2  # idx is 0-based, want next row after last non-empty
-            if next_row < _dsr:
-                next_row = _dsr
+        # Find next empty row (backward scan for robustness)
+        next_row = _find_next_append_row(self.client, spreadsheet_id, tab_name)
         
         # Build row values
         row_values = []
@@ -443,20 +458,8 @@ class OptimizationCenterWriter:
         header = [normalize_header(str(h)) for h in header_values[0]]
         alias_lookup = _build_alias_lookup(OPT_RESULTS_HEADER_MAP)
         
-        # Find next empty row by scanning for last non-empty run_id
-        all_values = self.client.get_values(spreadsheet_id, f"{tab_name}!A:A")
-        _dsr = data_start_row(tab_name)
-        _dri = data_row_index(tab_name)
-        if not all_values or len(all_values) < _dsr:
-            next_row = _dsr
-        else:
-            # Scan backwards from end to find last non-empty row
-            next_row = _dsr
-            for idx, val in enumerate(all_values):
-                if idx >= _dri and val and str(val[0]).strip():  # Skip reserved rows
-                    next_row = idx + 2  # idx is 0-based, want next row after last non-empty
-            if next_row < _dsr:
-                next_row = _dsr
+        # Find next empty row (backward scan for robustness)
+        next_row = _find_next_append_row(self.client, spreadsheet_id, tab_name)
         
         # Build batch values
         batch_values = []
@@ -504,20 +507,8 @@ class OptimizationCenterWriter:
         header = [normalize_header(str(h)) for h in header_values[0]]
         alias_lookup = _build_alias_lookup(OPT_GAPS_ALERTS_HEADER_MAP)
         
-        # Find next empty row by scanning for last non-empty run_id
-        all_values = self.client.get_values(spreadsheet_id, f"{tab_name}!A:A")
-        _dsr = data_start_row(tab_name)
-        _dri = data_row_index(tab_name)
-        if not all_values or len(all_values) < _dsr:
-            next_row = _dsr
-        else:
-            # Scan backwards from end to find last non-empty row
-            next_row = _dsr
-            for idx, val in enumerate(all_values):
-                if idx >= _dri and val and str(val[0]).strip():  # Skip reserved rows
-                    next_row = idx + 2  # idx is 0-based, want next row after last non-empty
-            if next_row < _dsr:
-                next_row = _dsr
+        # Find next empty row (backward scan for robustness)
+        next_row = _find_next_append_row(self.client, spreadsheet_id, tab_name)
         
         # Build batch values
         batch_values = []
