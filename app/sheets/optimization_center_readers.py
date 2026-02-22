@@ -9,6 +9,7 @@ from datetime import datetime, date
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.sheets.client import SheetsClient
+from app.sheets.layout import data_start_row, data_row_index
 from app.sheets.models import (
     OPT_CANDIDATES_HEADER_MAP,
     OPT_SCENARIO_CONFIG_HEADER_MAP,
@@ -159,22 +160,23 @@ class _BaseOptReader:
         self.client = client
 
     def _read_raw(self, spreadsheet_id: str, tab_name: str, header_row: int = 1) -> Tuple[List[Any], List[List[Any]]]:
-        """Read header and data rows. Skips rows 2-3 (metadata)."""
+        """Read header and data rows. Skips reserved/meta rows per layout config."""
         header_values = self.client.get_values(spreadsheet_id, f"{tab_name}!{header_row}:{header_row}")
         if not header_values or not header_values[0]:
             return [], []
         header = header_values[0]
         end_col_letter = _col_index_to_a1(len(header))
-        # Read all rows from row 1 onwards, then manually skip rows 2-3
-        # (If we start from A4, Google Sheets skips empty rows, causing row number misalignment)
+        # Read all rows from row 1 onwards, then skip reserved rows in Python
+        # (If we start from A{data_start_row}, Google Sheets skips empty rows, causing row number misalignment)
         data_range = f"{tab_name}!A1:{end_col_letter}"
         all_rows = self.client.get_values(
             spreadsheet_id=spreadsheet_id,
             range_=data_range,
             value_render_option="UNFORMATTED_VALUE",
         )
-        # Skip header (row 1) and metadata (rows 2-3), keep rows 4+
-        data_rows = all_rows[3:] if len(all_rows) > 3 else []
+        # Skip header + meta rows, keep data rows per layout config
+        idx = data_row_index(tab_name)
+        data_rows = all_rows[idx:] if len(all_rows) > idx else []
         return header, data_rows
 
 
@@ -185,7 +187,7 @@ class CandidatesReader(_BaseOptReader):
             return []
         lookup = _build_alias_lookup(OPT_CANDIDATES_HEADER_MAP)
         rows: List[Tuple[int, OptCandidateRow]] = []
-        row_num = 4  # Data starts at row 4 (1=header, 2-3=metadata)
+        row_num = data_start_row(tab_name)
         blank_run = 0
         blank_run_cutoff = 50
         for row_cells in data_rows:
@@ -237,7 +239,7 @@ class ScenarioConfigReader(_BaseOptReader):
             return []
         lookup = _build_alias_lookup(OPT_SCENARIO_CONFIG_HEADER_MAP)
         rows: List[Tuple[int, OptScenarioConfigRow]] = []
-        row_num = 4  # Data starts at row 4 (1=header, 2-3=metadata)
+        row_num = data_start_row(tab_name)
         blank_run = 0
         blank_run_cutoff = 50
         for row_cells in data_rows:
@@ -279,7 +281,7 @@ class ConstraintsReader(_BaseOptReader):
             return []
         lookup = _build_alias_lookup(OPT_CONSTRAINTS_HEADER_MAP)
         rows: List[Tuple[int, OptConstraintRow]] = []
-        row_num = 4  # Data starts at row 4 (1=header, 2-3=metadata)
+        row_num = data_start_row(tab_name)
         blank_run = 0
         blank_run_cutoff = 50
         for row_cells in data_rows:
@@ -322,7 +324,7 @@ class TargetsReader(_BaseOptReader):
             return []
         lookup = _build_alias_lookup(OPT_TARGETS_HEADER_MAP)
         rows: List[Tuple[int, OptTargetRow]] = []
-        row_num = 4  # Data starts at row 4 (1=header, 2-3=metadata)
+        row_num = data_start_row(tab_name)
         blank_run = 0
         blank_run_cutoff = 50
         for row_cells in data_rows:
@@ -363,7 +365,7 @@ class RunsReader(_BaseOptReader):
             return []
         lookup = _build_alias_lookup(OPT_RUNS_HEADER_MAP)
         rows: List[Tuple[int, OptRunRow]] = []
-        row_num = 4  # Data starts at row 4 (1=header, 2-3=metadata)
+        row_num = data_start_row(tab_name)
         blank_run = 0
         blank_run_cutoff = 50
         for row_cells in data_rows:
@@ -408,7 +410,7 @@ class ResultsReader(_BaseOptReader):
             return []
         lookup = _build_alias_lookup(OPT_RESULTS_HEADER_MAP)
         rows: List[Tuple[int, OptResultRow]] = []
-        row_num = 4  # Data starts at row 4 (1=header, 2-3=metadata)
+        row_num = data_start_row(tab_name)
         blank_run = 0
         blank_run_cutoff = 50
         for row_cells in data_rows:
@@ -452,7 +454,7 @@ class GapsAlertsReader(_BaseOptReader):
             return []
         lookup = _build_alias_lookup(OPT_GAPS_ALERTS_HEADER_MAP)
         rows: List[Tuple[int, OptGapAlertRow]] = []
-        row_num = 4  # Data starts at row 4 (1=header, 2-3=metadata)
+        row_num = data_start_row(tab_name)
         blank_run = 0
         blank_run_cutoff = 50
         for row_cells in data_rows:

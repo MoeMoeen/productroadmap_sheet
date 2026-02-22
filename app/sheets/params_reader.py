@@ -8,6 +8,7 @@ import logging
 from typing import Any, Dict, Iterable, List, Tuple, Optional
 
 from app.sheets.client import SheetsClient
+from app.sheets.layout import data_start_row, data_row_index
 from app.sheets.models import ParamRow, PARAMS_HEADER_MAP
 from app.utils.header_utils import normalize_header
 
@@ -78,7 +79,7 @@ class ParamsReader:
         spreadsheet_id: str,
         tab_name: str,
         header_row: int = 1,
-        start_data_row: int = 4,  # Row 1=header, 2-3=metadata, data starts at 4
+        start_data_row: int | None = None,  # defaults to layout config
         max_rows: Optional[int] = None,
     ) -> List[ParamRowPair]:
         """Read Param rows for a given sheet/tab as (row_number, ParamRow).
@@ -104,8 +105,8 @@ class ParamsReader:
         header = header_values[0]
         end_col_letter = _col_index_to_a1(len(header))
         
-        # Read from row 1 and skip rows 2-3 to prevent empty row misalignment
-        # (If we start from A4, Google Sheets skips empty rows causing row number drift)
+        # Read from row 1 and skip reserved rows per layout config
+        # (If we start from A{data_start_row}, Google Sheets skips empty rows causing row number drift)
         # Read data with open-ended range (no end row specified)
         # Sheets API will stop at the last row with data
         data_range = f"{tab_name}!A1:{end_col_letter}"
@@ -115,15 +116,17 @@ class ParamsReader:
             value_render_option="UNFORMATTED_VALUE",
         ) or []
         
-        # Skip header (row 1) and metadata (rows 2-3), keep rows 4+
-        data_values = all_values[3:] if len(all_values) > 3 else []
+        # Skip header + meta rows per layout config
+        _dri = data_row_index(tab_name)
+        data_values = all_values[_dri:] if len(all_values) > _dri else []
         
         # Optionally cap at max_rows
         if max_rows is not None:
             data_values = data_values[:max_rows]
         
         rows: List[ParamRowPair] = []
-        current_row_number = start_data_row
+        _sdr = start_data_row if start_data_row is not None else data_start_row(tab_name)
+        current_row_number = _sdr
         
         for row_cells in data_values:
             if self._is_empty_row(row_cells):

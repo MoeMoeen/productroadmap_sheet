@@ -1,9 +1,11 @@
+# productroadmap_sheet_project/app/sheets/intake_reader.py
 from __future__ import annotations
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Tuple
 
 from app.sheets.client import SheetsClient
+from app.sheets.layout import data_start_row, data_row_index
 
 # Central place for the intake row shape (a single logical row dict)
 IntakeRow = Dict[str, Any]
@@ -28,7 +30,7 @@ class IntakeReader:
         spreadsheet_id: str,
         tab_name: str,
         header_row: int = 1,
-        start_data_row: int = 4,  # Row 1=header, 2-3=metadata, data starts at 4
+        start_data_row: int | None = None,  # defaults to layout config
         max_rows: int | None = None,
     ) -> List[IntakeRowPair]:
         """Read intake rows for a given sheet/tab as (row_number, row_dict)."""
@@ -50,12 +52,13 @@ class IntakeReader:
             return []
 
         header = raw_values[0]
-        # Skip rows 2-3 (metadata), start data from row 4+ to prevent row number misalignment
-        # when empty rows exist between metadata and data
-        data_rows = raw_values[3:] if len(raw_values) > 3 else []
+        # Skip reserved/meta rows per layout config
+        _dri = data_row_index(tab_name)
+        data_rows = raw_values[_dri:] if len(raw_values) > _dri else []
 
         rows: List[IntakeRowPair] = []
-        current_row_number = start_data_row
+        _sdr = start_data_row if start_data_row is not None else data_start_row(tab_name)
+        current_row_number = _sdr
 
         for row_cells in data_rows:
             if self._is_empty_row(row_cells):

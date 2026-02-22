@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models.initiative import Initiative
 from app.sheets.client import SheetsClient
+from app.sheets.layout import data_start_row
 from app.utils.header_utils import normalize_header as _normalize_header
 from app.utils.provenance import Provenance, token
 
@@ -168,8 +169,9 @@ def write_scores_to_productops_sheet(
     blank_run = 0
     blank_run_cutoff = 50  # stop if we see too many consecutive blank keys
 
+    _dsr = data_start_row(tab_name)
     for offset in range(max_rows):
-        row_idx = offset + 4  # Sheet row number (1=header, 2-3=metadata, data starts at 4)
+        row_idx = offset + _dsr
 
         # Extract initiative key from this row
         key_cell = col_values.get(key_col, [])
@@ -341,8 +343,9 @@ def write_status_to_productops_sheet(
     written = 0
     blank_run = 0
     blank_run_cutoff = 50
+    _dsr = data_start_row(tab_name)
     for offset in range(max_rows):
-        row_idx = offset + 4  # Row 1=header, 2-3=metadata, data starts at 4
+        row_idx = offset + _dsr
         key_cell = col_values.get(key_col, [])
         if offset < len(key_cell):
             entry = key_cell[offset]

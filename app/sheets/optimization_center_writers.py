@@ -17,6 +17,7 @@ from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Set, Tuple
 
 from app.sheets.client import SheetsClient
+from app.sheets.layout import data_start_row, data_row_index
 from app.sheets.models import (
     OPT_CANDIDATES_HEADER_MAP,
     OPT_SCENARIO_CONFIG_HEADER_MAP,
@@ -390,16 +391,18 @@ class OptimizationCenterWriter:
         
         # Find next empty row by scanning for last non-empty run_id
         all_values = self.client.get_values(spreadsheet_id, f"{tab_name}!A:A")
-        if not all_values or len(all_values) < 4:
-            next_row = 4  # Row 1=header, 2-3=metadata, data starts at 4
+        _dsr = data_start_row(tab_name)
+        _dri = data_row_index(tab_name)
+        if not all_values or len(all_values) < _dsr:
+            next_row = _dsr
         else:
             # Scan backwards from end to find last non-empty row
-            next_row = 4
+            next_row = _dsr
             for idx, val in enumerate(all_values):
-                if idx >= 3 and val and str(val[0]).strip():  # Skip rows 1-3 (header + metadata)
+                if idx >= _dri and val and str(val[0]).strip():  # Skip reserved rows
                     next_row = idx + 2  # idx is 0-based, want next row after last non-empty
-            if next_row < 4:
-                next_row = 4
+            if next_row < _dsr:
+                next_row = _dsr
         
         # Build row values
         row_values = []
@@ -442,16 +445,18 @@ class OptimizationCenterWriter:
         
         # Find next empty row by scanning for last non-empty run_id
         all_values = self.client.get_values(spreadsheet_id, f"{tab_name}!A:A")
-        if not all_values or len(all_values) < 4:
-            next_row = 4  # Row 1=header, 2-3=metadata, data starts at 4
+        _dsr = data_start_row(tab_name)
+        _dri = data_row_index(tab_name)
+        if not all_values or len(all_values) < _dsr:
+            next_row = _dsr
         else:
             # Scan backwards from end to find last non-empty row
-            next_row = 4
+            next_row = _dsr
             for idx, val in enumerate(all_values):
-                if idx >= 3 and val and str(val[0]).strip():  # Skip rows 1-3 (header + metadata)
+                if idx >= _dri and val and str(val[0]).strip():  # Skip reserved rows
                     next_row = idx + 2  # idx is 0-based, want next row after last non-empty
-            if next_row < 4:
-                next_row = 4
+            if next_row < _dsr:
+                next_row = _dsr
         
         # Build batch values
         batch_values = []
@@ -501,16 +506,18 @@ class OptimizationCenterWriter:
         
         # Find next empty row by scanning for last non-empty run_id
         all_values = self.client.get_values(spreadsheet_id, f"{tab_name}!A:A")
-        if not all_values or len(all_values) < 4:
-            next_row = 4  # Row 1=header, 2-3=metadata, data starts at 4
+        _dsr = data_start_row(tab_name)
+        _dri = data_row_index(tab_name)
+        if not all_values or len(all_values) < _dsr:
+            next_row = _dsr
         else:
             # Scan backwards from end to find last non-empty row
-            next_row = 4
+            next_row = _dsr
             for idx, val in enumerate(all_values):
-                if idx >= 3 and val and str(val[0]).strip():  # Skip rows 1-3 (header + metadata)
+                if idx >= _dri and val and str(val[0]).strip():  # Skip reserved rows
                     next_row = idx + 2  # idx is 0-based, want next row after last non-empty
-            if next_row < 4:
-                next_row = 4
+            if next_row < _dsr:
+                next_row = _dsr
         
         # Build batch values
         batch_values = []

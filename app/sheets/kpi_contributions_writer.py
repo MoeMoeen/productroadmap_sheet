@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models.initiative import Initiative
 from app.sheets.client import SheetsClient
+from app.sheets.layout import data_start_row
 from app.utils.header_utils import normalize_header as _normalize_header
 from app.utils.provenance import Provenance, token
 from app.sheets.models import KPI_CONTRIBUTIONS_HEADER_MAP
@@ -132,9 +133,9 @@ def write_kpi_contributions_to_sheet(
             key = entry
         key = str(key).strip()
         if key:
-            row_index_by_key[key] = offset + 4  # Row 1=header, 2-3=metadata, data starts at 4
+            row_index_by_key[key] = offset + data_start_row(tab_name)
 
-    next_append_row = len(existing_keys_raw) + 4  # Next empty row for append (skip header + 2 metadata rows)
+    next_append_row = len(existing_keys_raw) + data_start_row(tab_name)
 
     # Step 4: Load initiatives from DB
     if initiative_keys is not None and initiative_keys:

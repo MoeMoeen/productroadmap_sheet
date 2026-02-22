@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models.initiative import Initiative
 from app.sheets.client import SheetsClient
+from app.sheets.layout import data_start_row, data_row_index
 from app.sheets.models import CENTRAL_EDITABLE_FIELDS
 from app.sheets.models import CENTRAL_BACKLOG_HEADER, CENTRAL_HEADER_TO_FIELD
 from app.utils.provenance import Provenance, token
@@ -140,16 +141,17 @@ def write_backlog_from_db(
     init_col_a1 = _col_index_to_a1(init_col_idx + 1)
     grid_rows, _ = client.get_sheet_grid_size(backlog_spreadsheet_id, backlog_tab_name)
     end_row = grid_rows if grid_rows > 0 else 1
+    _dsr = data_start_row(backlog_tab_name)
     key_col_values = client.get_values(
         spreadsheet_id=backlog_spreadsheet_id,
-        range_=f"{backlog_tab_name}!{init_col_a1}4:{init_col_a1}{end_row}",  # Row 1=header, 2-3=metadata, data starts at 4
+        range_=f"{backlog_tab_name}!{init_col_a1}{_dsr}:{init_col_a1}{end_row}",
         value_render_option="UNFORMATTED_VALUE",
     ) or []
 
     init_key_to_rownum: Dict[str, int] = {}
     blank_run = 0
     BLANK_STOP_THRESHOLD = 50
-    for offset, row_cells in enumerate(key_col_values, start=4):  # Row 1=header, 2-3=metadata, data starts at 4
+    for offset, row_cells in enumerate(key_col_values, start=_dsr):
         cell_val = row_cells[0] if row_cells else None
         if cell_val is None or cell_val == "":
             blank_run += 1
@@ -165,7 +167,7 @@ def write_backlog_from_db(
             continue
         init_key_to_rownum[key] = offset
 
-    next_append_row = max(init_key_to_rownum.values(), default=3) + 1  # Default to row 4 if no data (1=header, 2-3=metadata)
+    next_append_row = max(init_key_to_rownum.values(), default=data_row_index(backlog_tab_name)) + 1
 
     # 3) Build batch updates grouped by column to reduce request count
     owned_headers = [col for col in header if col in owned_sheet_to_canonical]

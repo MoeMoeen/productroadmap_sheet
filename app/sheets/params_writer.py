@@ -15,6 +15,7 @@ import logging
 from datetime import datetime, timezone
 
 from app.sheets.client import SheetsClient
+from app.sheets.layout import data_start_row, data_row_index
 from app.sheets.models import PARAMS_HEADER_MAP
 from app.utils.header_utils import normalize_header
 from app.utils.provenance import Provenance, token
@@ -493,8 +494,10 @@ class ParamsWriter:
         
         ua_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_at")
 
-        # Scan rows starting from row 4 (row 1=header, rows 2-3=metadata)
-        for row_idx, row in enumerate(all_values[3:], start=4):  # Skip header + 2 metadata rows
+        # Scan rows starting from data start per layout config
+        _dri = data_row_index(tab_name)
+        _dsr = data_start_row(tab_name)
+        for row_idx, row in enumerate(all_values[_dri:], start=_dsr):  # Skip header + metadata rows
             notes_val = row[notes_col_idx - 1] if notes_col_idx and notes_col_idx <= len(row) else None
             updated_source_val = row[updated_source_col_idx - 1] if updated_source_col_idx and updated_source_col_idx <= len(row) else None
             is_auto_seeded_val = row[is_auto_seeded_col_idx - 1] if is_auto_seeded_col_idx and is_auto_seeded_col_idx <= len(row) else None
