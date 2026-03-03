@@ -33,7 +33,14 @@ DEFAULT_HEADER_ROW: int = 1      # 1-indexed
 # Example:
 #   "candidates": 5,   # if we ever add an instructions row
 TAB_LAYOUT: Dict[str, int] = {
-    # All tabs currently use the default (4).  Add overrides here as needed.
+    # Optimization Center: reserve row 4 for instructions (data starts row 5)
+    "candidates": 5,
+    "scenario_config": 5,
+    "constraints": 5,
+    "targets": 5,
+    "runs": 5,
+    "results": 5,
+    "gaps_and_alerts": 5,
 }
 
 

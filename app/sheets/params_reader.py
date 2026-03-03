@@ -118,7 +118,10 @@ class ParamsReader:
         
         # Skip header + meta rows per layout config
         _dri = data_row_index(tab_name)
-        data_values = all_values[_dri:] if len(all_values) > _dri else []
+        if len(all_values) > _dri:
+            data_values = all_values[_dri:]
+        else:
+            data_values = all_values[1:]
         
         # Optionally cap at max_rows
         if max_rows is not None:

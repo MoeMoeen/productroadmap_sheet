@@ -1,6 +1,7 @@
-
+# productroadmap_sheet/productroadmap_sheet_project/docs/appsripts/optimization_appscripst.md
 // config.gs
 // Central configuration for the Roadmap AI Apps Script UI.
+// Backend handlers live in [app/services/action_runner.py](app/services/action_runner.py) for `pm.save_optimization`, `pm.populate_candidates`, `pm.optimize_run_selected_candidates`, `pm.optimize_run_all_candidates`, and `pm.explain_selection`. This doc keeps only the Apps Script UI code.
 
 function getRoadmapApiBaseUrl() {
   // Change this to your deployed backend base URL.
@@ -16,7 +17,21 @@ function getRoadmapApiSecret() {
   return props.getProperty("ROADMAP_AI_SECRET") || "";
 }
 
+// menu.gs
 
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu("🧠 Roadmap AI")
+    .addItem("Optimization: Populate Candidates", "uiOptPopulateCandidates")
+    .addItem("Optimization: Run (Selected for Run)", "uiOptRunSelectedCandidates")
+    .addItem("Optimization: Run (All Candidates)", "uiOptRunAllCandidates")
+    .addSeparator()
+    .addItem("Optimization: Explain Selection", "uiExplainSelection")
+    .addItem("Optimization: Save current tab → DB", "uiOptSaveToDb")
+    .addItem("Optimization: Save ALL tabs → DB", "uiOptSaveAllToDb")
+    .addItem("Optimization: Refresh Instructions", "uiOptRefreshInstructions")
+    .addToUi();
+}
 
 // api.gs
 // Low-level HTTP helpers to call the backend Action API.
@@ -228,9 +243,13 @@ function getOptimizationSelectedCandidateKeys_() {
   const ss = SpreadsheetApp.getActive();
   const sheet = ss.getActiveSheet();
 
+  // Allow configurable data start row via Settings!candidates_data_start_row, default 4
+  const settings = getOptimizationSettings_();
+  const dataStartRow = Math.max(2, parseInt(settings.candidates_data_start_row || "5", 10) || 5);
+
   const lastRow = sheet.getLastRow();
   const lastCol = sheet.getLastColumn();
-  if (lastRow < 4 || lastCol < 1) return [];
+  if (lastRow < dataStartRow || lastCol < 1) return [];
 
   const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
 
@@ -241,8 +260,8 @@ function getOptimizationSelectedCandidateKeys_() {
   if (selIdx === -1) throw new Error("Candidates tab missing is_selected_for_run column.");
 
   // Read data rows from row 4+
-  const numRows = lastRow - 3;
-  const values = sheet.getRange(4, 1, numRows, lastCol).getValues();
+  const numRows = lastRow - (dataStartRow - 1);
+  const values = sheet.getRange(dataStartRow, 1, numRows, lastCol).getValues();
 
   const keys = [];
   for (let i = 0; i < values.length; i++) {
@@ -260,56 +279,165 @@ function getOptimizationSelectedCandidateKeys_() {
 }
 
 
-// selection_optimization.gs
+// ui_optimization_save.gs
+// UI handler for Optimization Center: pm.save_optimization
+// Saves current tab edits → DB (no solver, no results write).
+// Tab-aware: Scenario_Config → sync scenarios, Constraints/Targets → sync
+// constraint sets, Candidates → sync PM-editable fields.
+// With save_all option, syncs all three regardless of active tab.
 
-function _findHeaderIndex_(headers, aliases) {
-  const lower = headers.map(h => String(h || "").trim().toLowerCase());
-  for (const a of aliases) {
-    const idx = lower.indexOf(String(a).toLowerCase());
-    if (idx !== -1) return idx;
+/**
+ * UI: Save Optimization Center edits → DB
+ * Action: pm.save_optimization
+ *
+ * Tab-aware dispatch:
+ *   Scenario_Config  → sync scenarios
+ *   Constraints/Targets → sync constraint sets
+ *   Candidates → sync PM-editable fields (eng_tokens, deadline, category, etc.)
+ *   save_all=true → all of the above
+ *
+ * No solver, no results write — pure sheet→DB persistence.
+ */
+function uiOptSaveToDb() {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getActiveSheet();
+  const spreadsheetId = ss.getId();
+  const tabName = sheet.getName();
+
+  // Optional: if on Candidates tab, send selected keys for scoped save
+  const tabLc = tabName.trim().toLowerCase();
+  let initiativeKeys = [];
+  if (tabLc.indexOf("candidate") !== -1) {
+    initiativeKeys = getSelectedInitiativeKeys();
+    if (!initiativeKeys.length) {
+      const ui = SpreadsheetApp.getUi();
+      const resp = ui.alert(
+        "Save ALL candidates?",
+        "No rows selected in Candidates. Save ALL candidates to DB?",
+        ui.ButtonSet.YES_NO
+      );
+      if (resp !== ui.Button.YES) {
+        ss.toast("Save cancelled.", "Roadmap AI", 5);
+        return;
+      }
+    }
   }
-  return -1;
+
+  const payload = {
+    sheet_context: {
+      spreadsheet_id: spreadsheetId,
+      tab: tabName,
+    },
+    scope: initiativeKeys.length > 0
+      ? { initiative_keys: initiativeKeys }
+      : {},
+    options: {},
+    requested_by: {
+      ui: "apps_script",
+      source: "optimization_center",
+    },
+  };
+
+  ss.toast(
+    `Saving ${tabName} → DB...`,
+    "Roadmap AI",
+    5
+  );
+
+  try {
+    const started = postActionRun("pm.save_optimization", payload);
+    ss.toast(`Queued: ${started.run_id}`, "Roadmap AI", 5);
+
+    const done = pollRunUntilDone(started.run_id, 120, 1000);
+    showRunToast_(done, "Save Optimization → DB");
+  } catch (e) {
+    ss.toast(
+      "Failed to save:\n" + (e?.message || e),
+      "Roadmap AI ❌",
+      8
+    );
+  }
 }
 
 /**
- * Reads the active sheet (expected Candidates tab) and returns initiative_keys
- * where is_selected_for_run is TRUE.
+ * UI: Save ALL Optimization Center tabs → DB
+ * Action: pm.save_optimization (with save_all=true)
  *
- * Respects your sheet structure: row 1 headers, rows 2-3 metadata, row 4+ data.
+ * Syncs scenarios + constraint sets + candidates in one call.
  */
-function getOptimizationSelectedCandidateKeys_() {
+function uiOptSaveAllToDb() {
   const ss = SpreadsheetApp.getActive();
   const sheet = ss.getActiveSheet();
+  const spreadsheetId = ss.getId();
 
-  const lastRow = sheet.getLastRow();
-  const lastCol = sheet.getLastColumn();
-  if (lastRow < 4 || lastCol < 1) return [];
+  const payload = {
+    sheet_context: {
+      spreadsheet_id: spreadsheetId,
+      tab: sheet.getName(),
+    },
+    scope: {},
+    options: {
+      save_all: true,
+    },
+    requested_by: {
+      ui: "apps_script",
+      source: "optimization_center",
+    },
+  };
 
-  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  ss.toast("Saving ALL optimization tabs → DB...", "Roadmap AI", 5);
 
-  const keyIdx = _findHeaderIndex_(headers, ["initiative_key", "initiative key"]);
-  const selIdx = _findHeaderIndex_(headers, ["is_selected_for_run", "is selected for run", "selected_for_run"]);
+  try {
+    const started = postActionRun("pm.save_optimization", payload);
+    ss.toast(`Queued: ${started.run_id}`, "Roadmap AI", 5);
 
-  if (keyIdx === -1) throw new Error("Candidates tab missing initiative_key column.");
-  if (selIdx === -1) throw new Error("Candidates tab missing is_selected_for_run column.");
-
-  // Read data rows from row 4+
-  const numRows = lastRow - 3;
-  const values = sheet.getRange(4, 1, numRows, lastCol).getValues();
-
-  const keys = [];
-  for (let i = 0; i < values.length; i++) {
-    const row = values[i];
-    const key = String(row[keyIdx] || "").trim();
-    const flag = row[selIdx];
-
-    // Google Sheets checkboxes often return true/false boolean
-    const isTrue = (flag === true) || (String(flag || "").trim().toLowerCase() === "true");
-
-    if (key && isTrue) keys.push(key);
+    const done = pollRunUntilDone(started.run_id, 180, 1000);
+    showRunToast_(done, "Save All → DB");
+  } catch (e) {
+    ss.toast(
+      "Failed to save:\n" + (e?.message || e),
+      "Roadmap AI ❌",
+      8
+    );
   }
+}
 
-  return Array.from(new Set(keys));
+/**
+ * UI: Refresh instructions rows for Optimization Center tabs
+ * Action: pm.refresh_sheet_instructions
+ */
+function uiOptRefreshInstructions() {
+  const ss = SpreadsheetApp.getActive();
+  const spreadsheetId = ss.getId();
+
+  const payload = {
+    sheet_context: {
+      spreadsheet_id: spreadsheetId,
+    },
+    options: {
+      sheet_type: "optimization_center",
+    },
+    requested_by: {
+      ui: "apps_script",
+      source: "optimization_center",
+    },
+  };
+
+  ss.toast("Refreshing instructions...", "Roadmap AI", 5);
+
+  try {
+    const started = postActionRun("pm.refresh_sheet_instructions", payload);
+    ss.toast(`Queued: ${started.run_id}`, "Roadmap AI", 5);
+
+    const done = pollRunUntilDone(started.run_id, 60, 1000);
+    showRunToast_(done, "Refresh Instructions");
+  } catch (e) {
+    ss.toast(
+      "Failed to refresh instructions:\n" + (e?.message || e),
+      "Roadmap AI ❌",
+      8
+    );
+  }
 }
 
 
@@ -372,9 +500,9 @@ function uiOptRunSelectedCandidates() {
   const sheet = ss.getActiveSheet();
   const spreadsheetId = ss.getId();
 
-  const selectedKeys = getSelectedInitiativeKeys();
+  const selectedKeys = getOptimizationSelectedCandidateKeys_();
   if (!selectedKeys.length) {
-    ss.toast("No initiative_key selected.", "Roadmap AI", 5);
+    ss.toast("No candidates marked is_selected_for_run.", "Roadmap AI", 5);
     return;
   }
 
@@ -402,7 +530,7 @@ function uiOptRunSelectedCandidates() {
   };
 
   ss.toast(
-    `Running optimization (SELECTED)\nCandidates: ${selectedKeys.length}`,
+    `Running optimization (is_selected_for_run)\nCandidates: ${selectedKeys.length}`,
     "Roadmap AI",
     5
   );
@@ -582,6 +710,96 @@ function showRunToast_(run, title) {
 }
 
 
+// explain_output.gs
+// Writes explain selection results to a dedicated sheet for PM review.
+
+function _getOrCreateSheet_(name) {
+  const ss = SpreadsheetApp.getActive();
+  let sh = ss.getSheetByName(name);
+  if (!sh) {
+    sh = ss.insertSheet(name);
+  }
+  return sh;
+}
+
+function _writeExplainOutput_(result, context) {
+  const scenarioName = context?.scenarioName || "";
+  const constraintSetName = context?.constraintSetName || "";
+
+  const status = String(result?.status || "").toLowerCase();
+
+  // Support both shapes: { result_json: { raw, summary } } OR { raw: ... }
+  const raw =
+    (result && result.result_json && result.result_json.raw) ||
+    (result && result.raw) ||
+    {};
+
+  const evalObj = raw.evaluation || {};
+  const rp = raw.repair_plan || {};
+  const violations = Array.isArray(evalObj.violations) ? evalObj.violations : [];
+  const steps = Array.isArray(rp.steps) ? rp.steps : [];
+
+  const sh = _getOrCreateSheet_("Explain_Output");
+  // Clear prior content but preserve formatting/styling
+  sh.clearContents();
+
+  const summaryRows = [
+    ["run_id", String(result?.run_id || "")],
+    ["status", status],
+    ["scenario", scenarioName],
+    ["constraint_set", constraintSetName],
+    ["is_feasible", evalObj.is_feasible === true ? "TRUE" : "FALSE"],
+    ["selected_keys", (evalObj.selected_keys || []).join(", ")],
+    ["violations_count", String(violations.length)],
+    ["repair_steps_count", String(steps.length)],
+  ];
+
+  sh.getRange(1, 1, summaryRows.length, 2).setValues(summaryRows);
+
+  let row = summaryRows.length + 2;
+
+  // If job didn't succeed, stop here (still gives useful header info)
+  if (status !== "success") {
+    sh.getRange(row, 1).setValue("Run did not complete successfully. See ActionRuns for details.");
+    sh.getRange(1, 1, sh.getLastRow(), 2).setWrap(true);
+    sh.autoResizeColumns(1, 2);
+    return;
+  }
+
+  // Violations table
+  sh.getRange(row, 1, 1, 4).setValues([["violations", "code", "message", "severity"]]);
+  row += 1;
+  if (violations.length) {
+    const vRows = violations.map(v => ["", v.code || "", v.message || "", v.severity || ""]);
+    sh.getRange(row, 1, vRows.length, 4).setValues(vRows);
+    row += vRows.length + 1;
+  } else {
+    sh.getRange(row, 1).setValue("(none)");
+    row += 2;
+  }
+
+  // Repair steps table
+  sh.getRange(row, 1, 1, 5).setValues([["repair_steps", "action", "initiative_key", "reason", "impact"]]);
+  row += 1;
+  if (steps.length) {
+    const sRows = steps.map(s => [
+      "",
+      s.action || "",
+      s.initiative_key || "",
+      s.reason || "",
+      s.impact ? JSON.stringify(s.impact) : "",
+    ]);
+    sh.getRange(row, 1, sRows.length, 5).setValues(sRows);
+  } else {
+    sh.getRange(row, 1).setValue("(none)");
+  }
+
+  // UX polish
+  sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).setWrap(true);
+  sh.autoResizeColumns(1, 5);
+}
+
+
 // ui_optimization_explain.gs
 // UI handler for Optimization Center: pm.explain_selection
 // Depends on:
@@ -622,9 +840,12 @@ function uiExplainSelection() {
   if (resp === ui.Button.CANCEL) return;
   const syncCandidatesFirst = (resp === ui.Button.YES);
 
-  // 3) Optional explicit key override from current selection
-  const keys = getSelectedInitiativeKeys();
-  const useExplicitKeys = Array.isArray(keys) && keys.length > 0;
+  // 3) Selection: prefer explicit UI selection; otherwise fall back to checkbox is_selected_for_run
+  const explicitKeys = getSelectedInitiativeKeys();
+  let keys = explicitKeys;
+  if (!Array.isArray(keys) || !keys.length) {
+    keys = getOptimizationSelectedCandidateKeys_();
+  }
 
   // 4) Build payload
   const payload = {
@@ -641,11 +862,12 @@ function uiExplainSelection() {
       constraint_set_name: constraintSetName,
       sync_candidates_first: syncCandidatesFirst,
     },
-    scope: useExplicitKeys
-      ? { type: "selection", initiative_keys: keys }
-      : { type: "selection" }, // backend reads is_selected_for_run from Candidates
     requested_by: { ui: "apps_script" },
   };
+
+  if (keys && keys.length) {
+    payload.scope = { type: "selection", initiative_keys: keys };
+  }
 
   // 5) Start action
   ss.toast(
@@ -672,11 +894,18 @@ function uiExplainSelection() {
   const finalResult = pollRunUntilDone(started.run_id, 120, 1000);
   showRunToast_(finalResult, "🧠 Explain selection");
 
+  // 6b) Write detailed output to Explain_Output tab for PMs
+  try {
+    _writeExplainOutput_(finalResult, { scenarioName, constraintSetName });
+  } catch (e) {
+    ss.toast("Explain output write failed: " + (e && e.message ? e.message : e), "🧠 Explain selection", 8);
+  }
+
   // 7) Optional: show top violation in a dialog for faster UX
   // Tool response shape is usually { status, result_json: { raw, summary }, ... }
   try {
     if (String(finalResult?.status || "").toLowerCase() === "success") {
-      const raw = finalResult?.result_json?.raw || {};
+      const raw = finalResult?.result_json?.raw || finalResult?.raw || {};
       const feasible = !!raw.is_feasible;
       const v0 = raw?.evaluation?.violations?.[0];
 

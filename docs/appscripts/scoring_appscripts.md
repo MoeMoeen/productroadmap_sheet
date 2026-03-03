@@ -16,6 +16,7 @@ function getRoadmapApiSecret() {
   return props.getProperty("ROADMAP_AI_SECRET") || "";
 }
 
+// menu.gs
 
 function onOpen() {
   SpreadsheetApp.getUi()

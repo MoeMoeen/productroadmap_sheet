@@ -10,7 +10,7 @@ import traceback
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -255,7 +255,7 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         summary["skipped"] = skipped
         summary["failed"] = failed
 
-    elif action in {"pm.explain_selection", "pm.explain_why_not"}:
+    elif action == "pm.explain_selection":
         summary["total"] = result.get("input_candidates_count", 0)
         summary["success"] = 1 if result.get("status") == "ok" else 0
         summary["failed"] = 0 if result.get("status") == "ok" else 1
@@ -270,6 +270,16 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         summary["success"] = saved
         summary["skipped"] = skipped
         summary["failed"] = failed
+
+    elif action == "pm.save_optimization":
+        synced_scenarios = result.get("synced_scenarios", 0)
+        synced_constraints = result.get("synced_constraints", 0)
+        synced_candidates = result.get("synced_candidates", 0)
+        total_synced = result.get("total_synced", synced_scenarios + synced_constraints + synced_candidates)
+        errors = result.get("errors", []) or []
+        summary["total"] = total_synced
+        summary["success"] = total_synced
+        summary["failed"] = len(errors)
 
     elif action == "pm.suggest_math_model_llm":
         selected_count = result.get("selected_count", 0)
@@ -2011,47 +2021,6 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
             ],
         }
 
-    # ---------- Branch E: Optimization Center Candidates ----------
-    if "candidates" in tab_lc and "optimization" in tab_lc.replace("_", " "):
-        try:
-            from app.services.optimization.optimization_sync_service import sync_candidates_from_sheet
-            result = sync_candidates_from_sheet(
-                sheets_client=ctx.sheets_client,
-                spreadsheet_id=str(spreadsheet_id),
-                candidates_tab=str(tab),
-                initiative_keys=keys or None,
-                commit_every=commit_every,
-                session=db,
-            )
-            saved = int(result.get("updated", 0))
-            errors = result.get("errors", [])
-        except Exception as e:
-            logger.exception("pm.save_selected.candidates_sync_failed")
-            return {
-                "pm_job": "pm.save_selected",
-                "tab": tab,
-                "selected_count": len(keys),
-                "saved_count": 0,
-                "skipped_no_key": skipped_no_key,
-                "failed_count": len(keys) or 1,
-                "substeps": [
-                    {"step": "save", "status": "failed", "error": str(e)[:50]},
-                ],
-            }
-
-        return {
-            "pm_job": "pm.save_selected",
-            "tab": tab,
-            "selected_count": len(keys) if keys else result.get("row_count", 0),
-            "saved_count": saved,
-            "skipped_no_key": skipped_no_key + result.get("skipped_no_key", 0),
-            "failed_count": len(errors),
-            "errors": errors[:5] if errors else [],  # Include first 5 errors
-            "substeps": [
-                {"step": "save", "status": "ok", "count": saved},
-            ],
-        }
-
     # ---------- Branch A: Scoring_Inputs (default) ----------
     try:
         saved = run_flow3_sync_inputs_to_initiatives(
@@ -2116,6 +2085,203 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
     }
 
     # (No fallback needed; all branches return above)
+
+
+# ---------------------------------------------------------------------------
+# pm.save_optimization — Sheet → DB sync for Optimization Center tabs
+# ---------------------------------------------------------------------------
+
+def _action_pm_save_optimization(db: Session, ctx: ActionContext) -> Dict[str, Any]:
+    """PM Job: Save Optimization Center sheet edits → DB (no solver).
+
+    Tab-aware:
+      - Scenario_Config  → sync_scenarios_from_sheet()
+      - Constraints / Targets → sync_constraint_sets_from_sheets() (reads both tabs)
+      - Candidates → sync_candidates_from_sheet() (PM-editable fields only)
+      - Any tab with options.save_all=true → sync all three above
+
+    No solver execution, no results write — pure persistence.
+
+    Payload:
+      - sheet_context: {spreadsheet_id, tab}
+      - options: {save_all?: bool}
+      - scope: {initiative_keys?: list[str]}  (only used for Candidates branch)
+    """
+    from app.services.optimization.optimization_sync_service import (
+        sync_scenarios_from_sheet,
+        sync_constraint_sets_from_sheets,
+        sync_candidates_from_sheet,
+    )
+
+    sheet_ctx = ctx.payload.get("sheet_context") or {}
+    options = ctx.payload.get("options") or {}
+    scope = ctx.payload.get("scope") or {}
+
+    save_all = bool(options.get("save_all", False))
+
+    # Resolve spreadsheet_id / tab names from config
+    if not settings.OPTIMIZATION_CENTER:
+        return {
+            "pm_job": "pm.save_optimization",
+            "status": "failed",
+            "error": "Optimization Center sheet not configured",
+            "substeps": [{"step": "config_check", "status": "failed", "reason": "no_config"}],
+        }
+
+    oc = settings.OPTIMIZATION_CENTER
+    spreadsheet_id = sheet_ctx.get("spreadsheet_id") or oc.spreadsheet_id
+    active_tab = sheet_ctx.get("tab") or ""
+    tab_lc = active_tab.strip().lower().replace("_", " ")
+
+    # Resolve tab names from config
+    scenario_config_tab = oc.scenario_config_tab or "Scenario_Config"
+    constraints_tab = oc.constraints_tab or "Constraints"
+    targets_tab = oc.targets_tab or "Targets"
+    candidates_tab = oc.candidates_tab or "Candidates"
+
+    # Build sheets client
+    sheets_client = ctx.sheets_client
+    if sheets_client is None:
+        raise ValueError("Sheets client is required for pm.save_optimization")
+
+    substeps: List[Dict[str, Any]] = []
+    synced_scenarios_count = 0
+    synced_constraints_count = 0
+    synced_candidates_count = 0
+    errors: List[str] = []
+
+    # Determine which syncs to run based on active tab (or save_all)
+    do_scenarios = save_all
+    do_constraints = save_all
+    do_candidates = save_all
+
+    if not save_all:
+        if "scenario" in tab_lc:
+            do_scenarios = True
+        elif "constraint" in tab_lc or "target" in tab_lc:
+            do_constraints = True
+        elif "candidate" in tab_lc:
+            do_candidates = True
+        else:
+            # Unknown tab — default to save_all for safety
+            do_scenarios = True
+            do_constraints = True
+            do_candidates = True
+
+    # --- Scenarios ---
+    if do_scenarios:
+        try:
+            synced_list, scenario_errors = sync_scenarios_from_sheet(
+                sheets_client=sheets_client,
+                spreadsheet_id=str(spreadsheet_id),
+                scenario_config_tab=scenario_config_tab,
+                session=db,
+            )
+            synced_scenarios_count = len(synced_list)
+            if scenario_errors:
+                errors.extend([str(e) for e in scenario_errors[:5]])
+            substeps.append({
+                "step": "sync_scenarios",
+                "status": "ok",
+                "count": synced_scenarios_count,
+            })
+            logger.info(
+                "pm.save_optimization.scenarios_synced",
+                extra={"count": synced_scenarios_count},
+            )
+        except Exception as e:
+            logger.exception("pm.save_optimization.scenarios_failed")
+            substeps.append({
+                "step": "sync_scenarios",
+                "status": "failed",
+                "error": str(e)[:100],
+            })
+            errors.append(f"scenarios: {str(e)[:80]}")
+
+    # --- Constraint Sets (reads both Constraints + Targets tabs) ---
+    if do_constraints:
+        try:
+            synced_list, constraint_msgs = sync_constraint_sets_from_sheets(
+                sheets_client=sheets_client,
+                spreadsheet_id=str(spreadsheet_id),
+                constraints_tab=constraints_tab,
+                targets_tab=targets_tab,
+                session=db,
+            )
+            synced_constraints_count = len(synced_list)
+            if constraint_msgs:
+                errors.extend([str(m) for m in constraint_msgs[:5]])
+            substeps.append({
+                "step": "sync_constraints",
+                "status": "ok",
+                "count": synced_constraints_count,
+            })
+            logger.info(
+                "pm.save_optimization.constraints_synced",
+                extra={"count": synced_constraints_count},
+            )
+        except Exception as e:
+            logger.exception("pm.save_optimization.constraints_failed")
+            substeps.append({
+                "step": "sync_constraints",
+                "status": "failed",
+                "error": str(e)[:100],
+            })
+            errors.append(f"constraints: {str(e)[:80]}")
+
+    # --- Candidates (PM-editable fields → Initiative DB) ---
+    if do_candidates:
+        try:
+            initiative_keys = scope.get("initiative_keys") or None
+            if isinstance(initiative_keys, list):
+                initiative_keys = [k for k in initiative_keys if isinstance(k, str) and k.strip()]
+                initiative_keys = list(dict.fromkeys(initiative_keys)) or None
+
+            result = sync_candidates_from_sheet(
+                sheets_client=sheets_client,
+                spreadsheet_id=str(spreadsheet_id),
+                candidates_tab=candidates_tab,
+                initiative_keys=initiative_keys,
+                session=db,
+            )
+            synced_candidates_count = int(result.get("updated", 0))
+            cand_errors = result.get("errors", [])
+            if cand_errors:
+                errors.extend([str(e) for e in cand_errors[:5]])
+            substeps.append({
+                "step": "sync_candidates",
+                "status": "ok",
+                "count": synced_candidates_count,
+                "row_count": result.get("row_count", 0),
+            })
+            logger.info(
+                "pm.save_optimization.candidates_synced",
+                extra={"count": synced_candidates_count},
+            )
+        except Exception as e:
+            logger.exception("pm.save_optimization.candidates_failed")
+            substeps.append({
+                "step": "sync_candidates",
+                "status": "failed",
+                "error": str(e)[:100],
+            })
+            errors.append(f"candidates: {str(e)[:80]}")
+
+    any_failed = any(s.get("status") == "failed" for s in substeps)
+    total_synced = synced_scenarios_count + synced_constraints_count + synced_candidates_count
+
+    return {
+        "pm_job": "pm.save_optimization",
+        "status": "partial" if any_failed else "ok",
+        "tab": active_tab,
+        "save_all": save_all,
+        "synced_scenarios": synced_scenarios_count,
+        "synced_constraints": synced_constraints_count,
+        "synced_candidates": synced_candidates_count,
+        "total_synced": total_synced,
+        "errors": errors[:10] if errors else [],
+        "substeps": substeps,
+    }
 
 
 def _action_pm_populate_candidates(db: Session, ctx: ActionContext) -> Dict[str, Any]:
@@ -2258,6 +2424,7 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
         sync_candidates_from_sheet,
     )
     
+    sheet_ctx = ctx.payload.get("sheet_context") or {}
     options = ctx.payload.get("options") or {}
     
     # Extract parameters
@@ -2291,18 +2458,24 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
             "error": "Optimization Center sheet not configured",
             "substeps": [{"step": "config_check", "status": "failed", "reason": "no_config"}],
         }
+
+    sheets_client = ctx.sheets_client
+    if sheets_client is None:
+        return {
+            "pm_job": "pm.optimize_run_selected_candidates",
+            "optimization_status": "failed",
+            "error": "Sheets client not provided",
+            "substeps": [{"step": "config_check", "status": "failed", "reason": "no_sheets_client"}],
+        }
     
     try:
-        service = get_sheets_service()
-        sheets_client = SheetsClient(service)
-        
         logger.info("pm.optimize_run_selected_candidates.auto_sync_start")
         
         # 1. Sync scenarios first (constraints depend on scenarios existing)
-        scenario_config_tab = settings.OPTIMIZATION_CENTER.scenario_config_tab or "Scenario_Config"
+        scenario_config_tab = sheet_ctx.get("scenario_config_tab") or settings.OPTIMIZATION_CENTER.scenario_config_tab or "Scenario_Config"
         synced_scenarios, scenario_errors = sync_scenarios_from_sheet(
             sheets_client=sheets_client,
-            spreadsheet_id=settings.OPTIMIZATION_CENTER.spreadsheet_id,
+            spreadsheet_id=sheet_ctx.get("spreadsheet_id") or settings.OPTIMIZATION_CENTER.spreadsheet_id,
             scenario_config_tab=scenario_config_tab,
             session=db,
         )
@@ -2319,11 +2492,11 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
         )
         
         # 2. Sync constraint sets (now that scenarios exist)
-        constraints_tab = settings.OPTIMIZATION_CENTER.constraints_tab or "Constraints"
-        targets_tab = settings.OPTIMIZATION_CENTER.targets_tab or "Targets"
+        constraints_tab = sheet_ctx.get("constraints_tab") or settings.OPTIMIZATION_CENTER.constraints_tab or "Constraints"
+        targets_tab = sheet_ctx.get("targets_tab") or settings.OPTIMIZATION_CENTER.targets_tab or "Targets"
         synced_constraints, constraint_messages = sync_constraint_sets_from_sheets(
             sheets_client=sheets_client,
-            spreadsheet_id=settings.OPTIMIZATION_CENTER.spreadsheet_id,
+            spreadsheet_id=sheet_ctx.get("spreadsheet_id") or settings.OPTIMIZATION_CENTER.spreadsheet_id,
             constraints_tab=constraints_tab,
             targets_tab=targets_tab,
             session=db,
@@ -2335,10 +2508,10 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
         )
 
         # 3. Sync candidates (PM-editable fields) from sheet to DB
-        candidates_tab = settings.OPTIMIZATION_CENTER.candidates_tab or "Candidates"
+        candidates_tab = sheet_ctx.get("candidates_tab") or settings.OPTIMIZATION_CENTER.candidates_tab or "Candidates"
         sync_candidates_from_sheet(
             sheets_client=sheets_client,
-            spreadsheet_id=settings.OPTIMIZATION_CENTER.spreadsheet_id,
+            spreadsheet_id=sheet_ctx.get("spreadsheet_id") or settings.OPTIMIZATION_CENTER.spreadsheet_id,
             candidates_tab=candidates_tab,
             session=db,
         )
@@ -2373,14 +2546,12 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
             }
         
         try:
-            service = get_sheets_service()
-            sheets_client = SheetsClient(service)
             reader = CandidatesReader(sheets_client)
             
             # Read candidates tab - returns List[Tuple[row_num, OptCandidateRow]]
             candidates_with_rows = reader.get_rows(
-                spreadsheet_id=settings.OPTIMIZATION_CENTER.spreadsheet_id,
-                tab_name=settings.OPTIMIZATION_CENTER.candidates_tab,
+                spreadsheet_id=sheet_ctx.get("spreadsheet_id") or settings.OPTIMIZATION_CENTER.spreadsheet_id,
+                tab_name=sheet_ctx.get("candidates_tab") or settings.OPTIMIZATION_CENTER.candidates_tab,
             )
             
             # Extract just the OptCandidateRow objects
@@ -2489,6 +2660,7 @@ def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> D
         sync_candidates_from_sheet,
     )
     
+    sheet_ctx = ctx.payload.get("sheet_context") or {}
     options = ctx.payload.get("options") or {}
     
     # Extract parameters
@@ -2516,18 +2688,23 @@ def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> D
     
     synced_scenarios = []
     synced_constraints = []
+    sheets_client = ctx.sheets_client
+    if sheets_client is None:
+        return {
+            "pm_job": "pm.optimize_run_all_candidates",
+            "optimization_status": "failed",
+            "error": "Sheets client not provided",
+            "substeps": [{"step": "config_check", "status": "failed", "reason": "no_sheets_client"}],
+        }
     
     try:
-        service = get_sheets_service()
-        sheets_client = SheetsClient(service)
-        
         logger.info("pm.optimize_run_all_candidates.auto_sync_start")
         
         # 1. Sync scenarios first (constraints depend on scenarios existing)
-        scenario_config_tab = settings.OPTIMIZATION_CENTER.scenario_config_tab or "Scenario_Config"
+        scenario_config_tab = sheet_ctx.get("scenario_config_tab") or settings.OPTIMIZATION_CENTER.scenario_config_tab or "Scenario_Config"
         synced_scenarios, scenario_errors = sync_scenarios_from_sheet(
             sheets_client=sheets_client,
-            spreadsheet_id=settings.OPTIMIZATION_CENTER.spreadsheet_id,
+            spreadsheet_id=sheet_ctx.get("spreadsheet_id") or settings.OPTIMIZATION_CENTER.spreadsheet_id,
             scenario_config_tab=scenario_config_tab,
             session=db,
         )
@@ -2544,11 +2721,11 @@ def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> D
         )
         
         # 2. Sync constraint sets (now that scenarios exist)
-        constraints_tab = settings.OPTIMIZATION_CENTER.constraints_tab or "Constraints"
-        targets_tab = settings.OPTIMIZATION_CENTER.targets_tab or "Targets"
+        constraints_tab = sheet_ctx.get("constraints_tab") or settings.OPTIMIZATION_CENTER.constraints_tab or "Constraints"
+        targets_tab = sheet_ctx.get("targets_tab") or settings.OPTIMIZATION_CENTER.targets_tab or "Targets"
         synced_constraints, constraint_messages = sync_constraint_sets_from_sheets(
             sheets_client=sheets_client,
-            spreadsheet_id=settings.OPTIMIZATION_CENTER.spreadsheet_id,
+            spreadsheet_id=sheet_ctx.get("spreadsheet_id") or settings.OPTIMIZATION_CENTER.spreadsheet_id,
             constraints_tab=constraints_tab,
             targets_tab=targets_tab,
             session=db,
@@ -2560,10 +2737,10 @@ def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> D
         )
 
         # 3. Sync candidates (PM-editable fields) from sheet to DB
-        candidates_tab = settings.OPTIMIZATION_CENTER.candidates_tab or "Candidates"
+        candidates_tab = sheet_ctx.get("candidates_tab") or settings.OPTIMIZATION_CENTER.candidates_tab or "Candidates"
         sync_candidates_from_sheet(
             sheets_client=sheets_client,
-            spreadsheet_id=settings.OPTIMIZATION_CENTER.spreadsheet_id,
+            spreadsheet_id=sheet_ctx.get("spreadsheet_id") or settings.OPTIMIZATION_CENTER.spreadsheet_id,
             candidates_tab=candidates_tab,
             session=db,
         )
@@ -2855,6 +3032,103 @@ def _action_pm_explain_selection(db: Session, ctx: ActionContext) -> Dict[str, A
         }
 
 
+def _action_pm_refresh_tab_instructions(db: Session, ctx: ActionContext) -> Dict[str, Any]:
+    """PM Job: Render instruction row for a specific tab (system-owned copy)."""
+    from app.sheets.instructions_registry import get_tab_instructions
+    from app.sheets.instructions_writer import write_tab_instructions_row
+
+    sheet_ctx = ctx.payload.get("sheet_context") or {}
+    options = ctx.payload.get("options") or {}
+    if not isinstance(sheet_ctx, dict):
+        sheet_ctx = {}
+    if not isinstance(options, dict):
+        options = {}
+
+    sheet_type = str(options.get("sheet_type") or "").strip().lower()
+    spreadsheet_id = sheet_ctx.get("spreadsheet_id")
+    tab = sheet_ctx.get("tab")
+
+    if not sheet_type:
+        return {"pm_job": "pm.refresh_tab_instructions", "status": "failed", "error": "options.sheet_type is required"}
+    if not spreadsheet_id or not tab:
+        return {"pm_job": "pm.refresh_tab_instructions", "status": "failed", "error": "sheet_context.spreadsheet_id and tab are required"}
+    if ctx.sheets_client is None:
+        return {"pm_job": "pm.refresh_tab_instructions", "status": "failed", "error": "Sheets client not provided"}
+
+    ins = get_tab_instructions(sheet_type, tab)
+    if not ins:
+        return {
+            "pm_job": "pm.refresh_tab_instructions",
+            "status": "skipped",
+            "reason": f"No instructions registered for sheet_type={sheet_type}, tab={tab}",
+        }
+
+    write_tab_instructions_row(
+        client=ctx.sheets_client,
+        spreadsheet_id=str(spreadsheet_id),
+        tab_name=ins.tab_name,
+        instructions=ins,
+        instruction_row=4,
+    )
+
+    return {"pm_job": "pm.refresh_tab_instructions", "status": "ok", "sheet_type": sheet_type, "tab": tab}
+
+
+def _action_pm_refresh_sheet_instructions(db: Session, ctx: ActionContext) -> Dict[str, Any]:
+    """PM Job: Render instruction rows for all tabs of a given sheet_type."""
+    from app.sheets.instructions_registry import INSTRUCTIONS_REGISTRY
+    from app.sheets.instructions_writer import write_tab_instructions_row
+
+    sheet_ctx = ctx.payload.get("sheet_context") or {}
+    options = ctx.payload.get("options") or {}
+    if not isinstance(sheet_ctx, dict):
+        sheet_ctx = {}
+    if not isinstance(options, dict):
+        options = {}
+
+    sheet_type = str(options.get("sheet_type") or "").strip().lower()
+    only_tabs = options.get("tabs") or None
+    only_tabs_lc = {str(t).strip().lower() for t in only_tabs} if isinstance(only_tabs, list) else None
+
+    spreadsheet_id = sheet_ctx.get("spreadsheet_id")
+    if not sheet_type:
+        return {"pm_job": "pm.refresh_sheet_instructions", "status": "failed", "error": "options.sheet_type is required"}
+    if not spreadsheet_id:
+        return {"pm_job": "pm.refresh_sheet_instructions", "status": "failed", "error": "sheet_context.spreadsheet_id is required"}
+    if ctx.sheets_client is None:
+        return {"pm_job": "pm.refresh_sheet_instructions", "status": "failed", "error": "Sheets client not provided"}
+
+    written = 0
+    errors: List[str] = []
+
+    for (stype, tab_lc), ins in INSTRUCTIONS_REGISTRY.items():
+        if stype != sheet_type:
+            continue
+        if only_tabs_lc is not None and tab_lc not in only_tabs_lc:
+            continue
+
+        try:
+            write_tab_instructions_row(
+                client=ctx.sheets_client,
+                spreadsheet_id=str(spreadsheet_id),
+                tab_name=ins.tab_name,
+                instructions=ins,
+                instruction_row=4,
+            )
+            written += 1
+        except Exception as e:
+            errors.append(f"{ins.tab_name}: {str(e)[:120]}")
+
+    status = "partial" if errors else "ok"
+    return {
+        "pm_job": "pm.refresh_sheet_instructions",
+        "status": status,
+        "sheet_type": sheet_type,
+        "written": written,
+        "errors": errors[:10],
+    }
+
+
 ## ---------- Action Registry ----------
 
 _ACTION_REGISTRY: Dict[str, ActionFn] = {
@@ -2892,4 +3166,7 @@ _ACTION_REGISTRY: Dict[str, ActionFn] = {
     "pm.optimize_run_selected_candidates": _action_pm_optimize_run_selected_candidates,
     "pm.optimize_run_all_candidates": _action_pm_optimize_run_all_candidates,
     "pm.explain_selection": _action_pm_explain_selection,
+    "pm.save_optimization": _action_pm_save_optimization,
+    "pm.refresh_tab_instructions": _action_pm_refresh_tab_instructions,
+    "pm.refresh_sheet_instructions": _action_pm_refresh_sheet_instructions,
 }

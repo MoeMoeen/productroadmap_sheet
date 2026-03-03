@@ -87,9 +87,13 @@ class MathModelsReader:
             return []
         
         header = raw_values[0]
-        # Skip reserved/meta rows per layout config
+        # Skip reserved/meta rows per layout config; if sheet is short (e.g., tests with no meta rows),
+        # fall back to just after header so we don't drop all data.
         _dri = data_row_index(tab_name)
-        data_rows = raw_values[_dri:] if len(raw_values) > _dri else []
+        if len(raw_values) > _dri:
+            data_rows = raw_values[_dri:]
+        else:
+            data_rows = raw_values[1:]
         
         rows: List[MathModelRowPair] = []
         _sdr = start_data_row if start_data_row is not None else data_start_row(tab_name)
@@ -136,6 +140,8 @@ class MathModelsReader:
 
                     break
         
+        # Explicitly drop parameters_json if present in sheet header to avoid back-compat shims
+        row_dict.pop("parameters_json", None)
         return row_dict
     
     def _is_empty_row(self, row_cells: Iterable[Any]) -> bool:

@@ -224,6 +224,7 @@ class MathModelsWriter:
                 })
                 updated_rows.add(row_number)
 
+
             # Mark as suggested by LLM if any suggestion was provided
             if suggested_by_llm_col_idx and (formula_sugg or notes_sugg or metric_chain_sugg):
                 col_a1 = _col_index_to_a1(suggested_by_llm_col_idx)

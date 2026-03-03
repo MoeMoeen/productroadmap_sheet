@@ -70,6 +70,8 @@ def _find_next_append_row(
     append lands on the correct row.
     """
     all_values = client.get_values(spreadsheet_id, f"{tab_name}!A:A")
+    if isinstance(all_values, dict):
+        all_values = all_values.get("values", []) or []
     _dsr = data_start_row(tab_name)
     _dri = data_row_index(tab_name)  # 0-indexed start of data
     if not all_values or len(all_values) <= _dri:

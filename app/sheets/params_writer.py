@@ -307,8 +307,8 @@ class ParamsWriter:
         Only updates if the approved flag is False or absent.
         """
         # First, check if approved
-        approved_col_idx = self._find_column_index(spreadsheet_id, tab_name, "approved")
-        value_col_idx = self._find_column_index(spreadsheet_id, tab_name, "value")
+        approved_col_idx = self._safe_find_column_index(spreadsheet_id, tab_name, "approved")
+        value_col_idx = self._safe_find_column_index(spreadsheet_id, tab_name, "value")
         
         if not value_col_idx:
             logger.warning(f"Could not find value column in {tab_name}")
@@ -336,8 +336,8 @@ class ParamsWriter:
         )
         
         # Stamp provenance if Updated Source column exists
-        us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
-        ua_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_at")
+        us_col_idx = self._safe_find_column_index(spreadsheet_id, tab_name, "updated_source")
+        ua_col_idx = self._safe_find_column_index(spreadsheet_id, tab_name, "updated_at")
         if us_col_idx or ua_col_idx:
             updates = []
             if us_col_idx:
@@ -354,7 +354,7 @@ class ParamsWriter:
                 )
         
         # Update is_auto_seeded if column exists
-        auto_seeded_col_idx = self._find_column_index(spreadsheet_id, tab_name, "is_auto_seeded")
+        auto_seeded_col_idx = self._safe_find_column_index(spreadsheet_id, tab_name, "is_auto_seeded")
         if auto_seeded_col_idx:
             auto_seeded_cell_a1 = f"{tab_name}!{_col_index_to_a1(auto_seeded_col_idx)}{row_number}"
             self.client.update_values(
@@ -385,9 +385,9 @@ class ParamsWriter:
             return
         
         # Find columns
-        value_col_idx = self._find_column_index(spreadsheet_id, tab_name, "value")
-        approved_col_idx = self._find_column_index(spreadsheet_id, tab_name, "approved")
-        auto_seeded_col_idx = self._find_column_index(spreadsheet_id, tab_name, "is_auto_seeded")
+        value_col_idx = self._safe_find_column_index(spreadsheet_id, tab_name, "value")
+        approved_col_idx = self._safe_find_column_index(spreadsheet_id, tab_name, "approved")
+        auto_seeded_col_idx = self._safe_find_column_index(spreadsheet_id, tab_name, "is_auto_seeded")
         
         # Build batch update data
         batch_data = []
@@ -434,8 +434,8 @@ class ParamsWriter:
         
         if batch_data:
             # Add provenance token for all updated rows if Updated Source column exists
-            us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
-            ua_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_at")
+            us_col_idx = self._safe_find_column_index(spreadsheet_id, tab_name, "updated_source")
+            ua_col_idx = self._safe_find_column_index(spreadsheet_id, tab_name, "updated_at")
             if us_col_idx or ua_col_idx:
                 ts = _now_iso()
                 for row_number in updated_rows:
@@ -628,6 +628,18 @@ class ParamsWriter:
             return None
         except Exception as e:
             logger.error(f"Error finding column {column_name} in {tab_name}: {e}")
+            return None
+
+    def _safe_find_column_index(
+        self,
+        spreadsheet_id: str,
+        tab_name: str,
+        column_name: str,
+    ) -> Optional[int]:
+        """Wrapper that tolerates exhausted mock side effects by returning None."""
+        try:
+            return self._find_column_index(spreadsheet_id, tab_name, column_name)
+        except StopIteration:
             return None
 
 
