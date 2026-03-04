@@ -15,7 +15,7 @@ logger = logging.getLogger("app.sheets.instructions_registry")
 
 
 def _normalize_tab_key(name: str) -> str:
-    return name.strip().lower().replace(" ", "_")
+    return name.strip().lower().replace(" ", "_").replace("-", "_")
 
 
 @dataclass(frozen=True)

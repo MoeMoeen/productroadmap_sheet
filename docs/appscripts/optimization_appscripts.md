@@ -402,6 +402,7 @@ function uiOptSaveAllToDb() {
   }
 }
 
+// ui_optimization_refresh_instructions.gs
 /**
  * UI: Refresh instructions rows for Optimization Center tabs
  * Action: pm.refresh_sheet_instructions
@@ -440,7 +441,7 @@ function uiOptRefreshInstructions() {
   }
 }
 
-
+// ui_optimization_populatecandidates
 /**
  * UI: Populate Optimization Candidates
  * Action: pm.populate_candidates
