@@ -30,6 +30,16 @@ def _build_instruction_text(t: TabInstructions) -> str:
     return "\n".join(parts).strip()
 
 
+def _col_to_a1(col_idx_1_based: int) -> str:
+    """Convert 1-based column index to A1 column letters."""
+    letters = []
+    n = max(1, col_idx_1_based)
+    while n:
+        n, rem = divmod(n - 1, 26)
+        letters.append(chr(ord("A") + rem))
+    return "".join(reversed(letters))
+
+
 def write_tab_instructions_row(
     *,
     client: SheetsClient,
@@ -54,22 +64,29 @@ def write_tab_instructions_row(
     props = client.get_sheet_properties(spreadsheet_id, tab_name)
     sheet_id = None
     grid_cols = None
+    frozen_cols = 0
 
     if isinstance(props, dict):
         # Shape A: { properties: { sheetId, gridProperties } }
         if isinstance(props.get("properties"), dict):
             sheet_id = props["properties"].get("sheetId")
-            grid_cols = (props["properties"].get("gridProperties") or {}).get("columnCount")
+            grid_props = props["properties"].get("gridProperties") or {}
+            grid_cols = grid_props.get("columnCount")
+            frozen_cols = grid_props.get("frozenColumnCount") or 0
         # Shape B: { sheetId, gridProperties }
         if sheet_id is None and props.get("sheetId") is not None:
             sheet_id = props.get("sheetId")
-            grid_cols = (props.get("gridProperties") or {}).get("columnCount")
+            grid_props = props.get("gridProperties") or {}
+            grid_cols = grid_props.get("columnCount")
+            frozen_cols = grid_props.get("frozenColumnCount") or 0
         # Shape C: { sheets: [ { properties: { title, sheetId, gridProperties } } ] }
         if sheet_id is None and isinstance(props.get("sheets"), list):
             for sh in props.get("sheets", []):
                 if sh.get("properties", {}).get("title") == tab_name:
                     sheet_id = sh["properties"].get("sheetId")
-                    grid_cols = (sh["properties"].get("gridProperties") or {}).get("columnCount")
+                    grid_props = sh["properties"].get("gridProperties") or {}
+                    grid_cols = grid_props.get("columnCount")
+                    frozen_cols = grid_props.get("frozenColumnCount") or 0
                     break
 
     if sheet_id is None:
@@ -80,15 +97,24 @@ def write_tab_instructions_row(
         grid_cols = max(1, len(header[0]) if header and header[0] else 1)
 
     text = _build_instruction_text(instructions)
+
+    # If the sheet has frozen columns, avoid merging across the frozen boundary.
+    start_col_idx = int(frozen_cols) if frozen_cols and frozen_cols > 0 else 0
+    end_col_idx = grid_cols  # exclusive
+    if end_col_idx is None:
+        end_col_idx = start_col_idx + 1
+    if end_col_idx <= start_col_idx:
+        end_col_idx = start_col_idx + 1
+
+    # Write value starting at the first non-frozen column (or A if none frozen)
+    start_col_a1 = _col_to_a1(start_col_idx + 1)
     client.update_values(
         spreadsheet_id=spreadsheet_id,
-        range_=f"{tab_name}!A{instruction_row}",
+        range_=f"{tab_name}!{start_col_a1}{instruction_row}",
         values=[[text]],
         value_input_option="RAW",
     )
 
-    start_col_idx = 0
-    end_col_idx = grid_cols  # exclusive
     r0 = instruction_row - 1  # 0-based inclusive
     r1 = instruction_row      # 0-based exclusive
 

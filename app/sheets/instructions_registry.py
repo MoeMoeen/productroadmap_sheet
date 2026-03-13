@@ -114,6 +114,61 @@ INSTRUCTIONS_REGISTRY: Dict[Tuple[SheetType, TabName], TabInstructions] = {
         ),
         actions=("pm.explain_selection",),
     ),
+
+    # Product Ops
+    ("product_ops", "scoring_inputs"): TabInstructions(
+        tab_name="Scoring_Inputs",
+        title="Scoring_Inputs",
+        lines=(
+            "Authoritative backlog inputs for scoring.",
+            "Update fields (framework, tokens, effort, benefits) before scoring.",
+            "Use Save to persist edits, then Score or Switch Framework as needed.",
+        ),
+        actions=("pm.save_selected", "pm.score_selected", "pm.switch_framework"),
+    ),
+    ("product_ops", "mathmodels"): TabInstructions(
+        tab_name="MathModels",
+        title="MathModels",
+        lines=(
+            "Define per-initiative math model inputs (weights, priors, llm hints).",
+            "Save after edits to persist to DB.",
+        ),
+        actions=("pm.save_selected",),
+    ),
+    ("product_ops", "params"): TabInstructions(
+        tab_name="Params",
+        title="Params",
+        lines=(
+            "Parameter rows for math models (per initiative).",
+            "Edit values, then Save to sync to DB.",
+        ),
+        actions=("pm.save_selected",),
+    ),
+    ("product_ops", "metrics_config"): TabInstructions(
+        tab_name="Metrics_Config",
+        title="Metrics_Config",
+        lines=(
+            "Configure org metrics, weights, and chains.",
+            "Save after edits to persist to DB.",
+        ),
+        actions=("pm.save_selected",),
+    ),
+    ("product_ops", "kpi_contributions"): TabInstructions(
+        tab_name="KPI_Contributions",
+        title="KPI_Contributions",
+        lines=(
+            "Per-initiative KPI contribution rows (inputs for scoring).",
+            "Edit contributions and Save to persist to DB.",
+        ),
+        actions=("pm.save_selected",),
+    ),
+    ("product_ops", "config"): TabInstructions(
+        tab_name="Config",
+        title="Config",
+        lines=(
+            "Sheet-level configuration and metadata.",
+        ),
+    ),
 }
 
 

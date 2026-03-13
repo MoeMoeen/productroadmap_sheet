@@ -30,6 +30,7 @@ function onOpen() {
     .addItem("Optimization: Save current tab → DB", "uiOptSaveToDb")
     .addItem("Optimization: Save ALL tabs → DB", "uiOptSaveAllToDb")
     .addItem("Optimization: Refresh Instructions", "uiOptRefreshInstructions")
+    .addItem("Optimization: Refresh THIS tab's instructions", "uiOptRefreshTabInstructions")
     .addToUi();
 }
 
@@ -435,6 +436,46 @@ function uiOptRefreshInstructions() {
   } catch (e) {
     ss.toast(
       "Failed to refresh instructions:\n" + (e?.message || e),
+      "Roadmap AI ❌",
+      8
+    );
+  }
+}
+
+/**
+ * UI: Refresh instructions row for the active tab only
+ * Action: pm.refresh_tab_instructions
+ */
+function uiOptRefreshTabInstructions() {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getActiveSheet();
+  const spreadsheetId = ss.getId();
+
+  const payload = {
+    sheet_context: {
+      spreadsheet_id: spreadsheetId,
+      tab: sheet.getName(),
+    },
+    options: {
+      sheet_type: "optimization_center",
+    },
+    requested_by: {
+      ui: "apps_script",
+      source: "optimization_center",
+    },
+  };
+
+  ss.toast(`Refreshing instructions for ${sheet.getName()}...`, "Roadmap AI", 5);
+
+  try {
+    const started = postActionRun("pm.refresh_tab_instructions", payload);
+    ss.toast(`Queued: ${started.run_id}`, "Roadmap AI", 5);
+
+    const done = pollRunUntilDone(started.run_id, 60, 1000);
+    showRunToast_(done, "Refresh Tab Instructions");
+  } catch (e) {
+    ss.toast(
+      "Failed to refresh tab instructions:\n" + (e?.message || e),
       "Roadmap AI ❌",
       8
     );

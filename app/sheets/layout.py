@@ -41,6 +41,14 @@ TAB_LAYOUT: Dict[str, int] = {
     "runs": 5,
     "results": 5,
     "gaps_and_alerts": 5,
+
+    # Product Ops: reserve row 4 for instructions (data starts row 5)
+    "scoring_inputs": 5,
+    "mathmodels": 5,
+    "params": 5,
+    "metrics_config": 5,
+    "kpi_contributions": 5,
+    "config": 5,
 }
 
 
