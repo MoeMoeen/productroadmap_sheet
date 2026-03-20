@@ -171,9 +171,19 @@ All flows (0–4) are now **triggerable from Google Sheets** via a custom menu:
   | `flow4.sync_mathmodels` | `MathModelSyncService.sync_sheet_to_db()` |
   | `flow4.sync_params` | `ParamsSyncService.sync_sheet_to_db()` |
   | `flow0.intake_sync` | `run_sync_all_intake_sheets()` |
+  | `pm.backlog_sync` | `run_all_backlog_sync()` |
+  | `pm.score_selected` | `ScoringService.compute_all_frameworks()` + `write_kpi_contributions_to_sheet()` |
+  | `pm.switch_framework` | `_action_pm_switch_framework()` |
+  | `pm.save_selected` | `_action_pm_save_selected()` |
+  | `pm.suggest_math_model_llm` | `_action_pm_suggest_math_model()` |
+  | `pm.seed_math_params` | `_action_pm_seed_math_params()` |
   | `pm.optimize_run_selected_candidates` | `run_flow5_optimization()` (selected_only) |
   | `pm.optimize_run_all_candidates` | `run_flow5_optimization()` (all_candidates) |
   | `pm.populate_candidates` | `populate_candidates_from_db()` |
+  | `pm.save_optimization` | `_action_pm_save_optimization()` |
+  | `pm.explain_selection` | `_action_pm_explain_selection()` |
+  | `pm.refresh_tab_instructions` | `_action_pm_refresh_tab_instructions()` |
+  | `pm.refresh_sheet_instructions` | `_action_pm_refresh_sheet_instructions()` |
 
 #### **Status Surface (Control / RunLog Tab)**
 
@@ -669,9 +679,9 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
      - ActionRun Ledger: DB-backed execution tracking with full audit trail (run_id, action, status, payload_json, result_json, error_text, started_at, finished_at, requested_by)
      - Worker Process: Continuously polls DB for queued ActionRun rows; executes single job per ActionRun; atomic result capture
      - Two-process architecture: FastAPI web process (enqueues) + async worker process (executes) communicating via DB
-     - Action Registry: Flow actions (Flow 0-5 including optimization) + 8 PM Jobs (backlog_sync, score_selected, switch_framework, save_selected, suggest_math_model_llm, seed_math_params, optimize_run_selected_candidates, optimize_run_all_candidates)
+     - Action Registry: Flow actions (Flow 0-5 including optimization) + 13 PM Jobs (backlog_sync, score_selected, switch_framework, save_selected, suggest_math_model_llm, seed_math_params, optimize_run_selected_candidates, optimize_run_all_candidates, populate_candidates, save_optimization, explain_selection, refresh_tab_instructions, refresh_sheet_instructions)
 
-   * **PM Jobs (V2 – All 8 Implemented End-to-End)**:
+   * **PM Jobs (V2 – All 13 Implemented End-to-End)**:
      
      **Core Jobs (V1)**:
      - `pm.backlog_sync` – Sync all intake sheets to Central Backlog (no selection). Runs Flow 1 full sync pipeline.
@@ -844,7 +854,7 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
    * **Documentation**:
      - [PHASE_4.5_CHECKPOINT.md](docs/phase_4.5_sheetnative_execution/PHASE_4.5_CHECKPOINT.md) – Complete checkpoint with end-to-end flows and validation
      - [phase_4.5_pm_jobs.md](docs/phase_4.5_sheetnative_execution/phase_4.5_pm_jobs.md) – Detailed PM job specification (V1 + V2 math model jobs)
-     - [phase_4.5_pm_cheatsheet.md](docs/phase_4.5_sheetnative_execution/phase_4.5_pm_cheatsheet.md) – Quick reference guide for all 6 jobs + status codes + best practices
+     - [phase_4.5_pm_cheatsheet.md](docs/phase_4.5_sheetnative_execution/phase_4.5_pm_cheatsheet.md) – Quick reference guide for all 13 PM jobs + status codes + best practices
      - [phase_4.5_worker_api_processes.md](docs/phase_4.5_sheetnative_execution/phase_4.5_worker_api_processes.md) – Two-process architecture explanation + polling semantics
 
 ### **📋 PLANNED (Future):**
@@ -1517,7 +1527,14 @@ Same `run_scoring_job()` as in flow 2, but:
 
 **Architecture**: KPI contributions are **derived from math model scores**, not manually entered upfront.
 
-1. **System Computes Contributions** (after scoring):
+**Trigger**: KPI contributions are computed when PM runs `pm.score_selected` on **Scoring_Inputs tab** with **MATH_MODEL framework**.
+
+1. **System Computes Contributions** (triggered by `pm.score_selected` with MATH_MODEL):
+   - PM runs "Score Selected" from menu on Scoring_Inputs tab
+   - `ScoringService.score_initiative()` computes each math model's `computed_score`
+   - `update_initiative_contributions()` aggregates scores by `target_kpi_key` into `kpi_contribution_computed_json`
+   - After scoring completes, `write_kpi_contributions_to_sheet()` writes DB values → KPI_Contributions sheet automatically
+   - **Note**: Only MATH_MODEL framework triggers KPI contribution computation — RICE/WSJF do not
    - Each math model has `target_kpi_key` (e.g., "revenue", "user_retention")
    - Each model has `computed_score` (e.g., 85.5)
    - Adapter aggregates: `{"revenue": 85.5, "user_retention": 72.3}`

@@ -875,6 +875,30 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
             )
             # Non-fatal: continue with status write
 
+    # 3.6) Write computed_score back to MathModels tab (if exists)
+    mathmodels_written = 0
+    if cfg and hasattr(cfg, "mathmodels_tab"):
+        mm_tab = cfg.mathmodels_tab
+        try:
+            from app.sheets.math_models_writer import write_computed_scores_to_mathmodels_sheet
+            mathmodels_written = write_computed_scores_to_mathmodels_sheet(
+                db=db,
+                client=ctx.sheets_client,
+                spreadsheet_id=str(spreadsheet_id),
+                tab_name=str(mm_tab),
+                initiative_keys=keys,
+            )
+            logger.info(
+                "pm.score_selected.mathmodels_scores_written",
+                extra={"count": mathmodels_written, "tab": mm_tab},
+            )
+        except Exception as e:
+            logger.warning(
+                "pm.score_selected.write_mathmodels_scores_failed",
+                extra={"error": str(e)[:200], "tab": mm_tab},
+            )
+            # Non-fatal: continue with status write
+
     # All steps succeeded; mark all keys as OK
     for k in keys:
         status_by_key[k] = "OK"
@@ -898,6 +922,7 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
         "computed": computed,
         "written": written,
         "kpi_contributions_written": kpi_contributions_written,
+        "mathmodels_written": mathmodels_written,
         "skipped_no_key": skipped_no_key,
         "failed_count": 0,
         "substeps": [
@@ -905,6 +930,7 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
             {"step": "flow3.compute_selected", "status": "ok", "count": computed},
             {"step": "flow3.write_scores", "status": "ok", "count": written},
             {"step": "flow3.write_kpi_contributions", "status": "ok", "count": kpi_contributions_written},
+            {"step": "flow3.write_mathmodels_computed_scores", "status": "ok", "count": mathmodels_written},
             {"step": "status_write", "status": "ok"},
         ],
     }

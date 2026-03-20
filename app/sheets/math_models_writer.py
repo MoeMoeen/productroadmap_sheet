@@ -8,7 +8,10 @@ Never overwrites user-approved cells.
 
 from __future__ import annotations
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 import logging
 from datetime import datetime, timezone
 
@@ -345,6 +348,86 @@ class MathModelsWriter:
             return {}
 
 
+    def write_computed_scores_batch(
+        self,
+        spreadsheet_id: str,
+        tab_name: str,
+        scores: List[Dict[str, Any]],
+    ) -> int:
+        """Batch write computed_score values to MathModels tab.
+        
+        Each score dict should have:
+        {
+            "row_number": int,
+            "computed_score": float | None,
+        }
+        
+        Returns number of cells updated.
+        """
+        if not scores:
+            return 0
+        
+        # Find computed_score column index
+        computed_col_idx = self._find_column_index(spreadsheet_id, tab_name, "computed_score")
+        if not computed_col_idx:
+            logger.warning(f"Could not find computed_score column in {tab_name}")
+            return 0
+        
+        # Build batch update data
+        batch_data = []
+        updated_rows = set()
+        
+        for score_entry in scores:
+            row_number = score_entry.get("row_number")
+            computed_score = score_entry.get("computed_score")
+            
+            if not isinstance(row_number, int):
+                logger.warning("mathmodels.write_score.skip_bad_row_number", extra={"row_number": row_number})
+                continue
+            
+            # Write computed_score (even if None, to clear stale values)
+            col_a1 = _col_index_to_a1(computed_col_idx)
+            cell_a1 = f"{tab_name}!{col_a1}{row_number}"
+            
+            # Format score value (round to reasonable precision or empty if None)
+            cell_value = round(computed_score, 4) if computed_score is not None else ""
+            
+            batch_data.append({
+                "range": cell_a1,
+                "values": [[cell_value]],
+            })
+            updated_rows.add(row_number)
+        
+        if batch_data:
+            # Add provenance stamps
+            us_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_source")
+            ua_col_idx = self._find_column_index(spreadsheet_id, tab_name, "updated_at")
+            
+            if us_col_idx or ua_col_idx:
+                ts = _now_iso()
+                for row_number in updated_rows:
+                    if us_col_idx:
+                        us_a1 = f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}"
+                        batch_data.append({
+                            "range": us_a1,
+                            "values": [[token(Provenance.FLOW3_MATHMODELS_WRITE_COMPUTED_SCORES)]],
+                        })
+                    if ua_col_idx:
+                        ua_a1 = f"{tab_name}!{_col_index_to_a1(ua_col_idx)}{row_number}"
+                        batch_data.append({
+                            "range": ua_a1,
+                            "values": [[ts]],
+                        })
+            
+            self.client.batch_update_values(
+                spreadsheet_id=spreadsheet_id,
+                data=batch_data,
+                value_input_option="RAW",
+            )
+        
+        return len(updated_rows)
+
+
 def _col_index_to_a1(idx: int) -> str:
     """Convert 1-based column index to A1 letter(s)."""
     if idx <= 0:
@@ -354,3 +437,95 @@ def _col_index_to_a1(idx: int) -> str:
         idx, rem = divmod(idx - 1, 26)
         result = chr(65 + rem) + result
     return result
+
+
+def write_computed_scores_to_mathmodels_sheet(
+    db: "Session",
+    client: SheetsClient,
+    spreadsheet_id: str,
+    tab_name: str = "MathModels",
+    *,
+    initiative_keys: Optional[List[str]] = None,
+) -> int:
+    """Write computed_score from DB back to MathModels sheet.
+    
+    This is a DB → Sheet writeback for computed_score after scoring.
+    Matches sheet rows to DB records by (initiative_key, model_name).
+    
+    Args:
+        db: Database session
+        client: SheetsClient instance
+        spreadsheet_id: Product Ops spreadsheet ID
+        tab_name: Sheet tab name (default: "MathModels")
+        initiative_keys: Optional list of initiative keys to write (None = all)
+    
+    Returns:
+        Number of rows with computed_score written
+    """
+    from app.db.models.initiative import Initiative
+    from app.db.models.scoring import InitiativeMathModel
+    from app.sheets.math_models_reader import MathModelsReader
+    
+    # Step 1: Read sheet rows to get row_number + (initiative_key, model_name) mapping
+    reader = MathModelsReader(client)
+    sheet_rows = reader.get_rows_for_sheet(spreadsheet_id, tab_name)
+    
+    if not sheet_rows:
+        logger.debug("mathmodels_writer.write_scores.no_sheet_rows", extra={"tab": tab_name})
+        return 0
+    
+    # Build lookup: (initiative_key, model_name) -> row_number
+    row_lookup: Dict[Tuple[str, str], int] = {}
+    for row_number, row in sheet_rows:
+        key = row.initiative_key
+        name = row.model_name or ""
+        if key:
+            row_lookup[(key, name)] = row_number
+    
+    # Step 2: Query DB for math models with computed_score
+    query = db.query(InitiativeMathModel).join(Initiative)
+    if initiative_keys:
+        query = query.filter(Initiative.initiative_key.in_(initiative_keys))
+    
+    db_models = query.all()
+    
+    if not db_models:
+        logger.debug("mathmodels_writer.write_scores.no_db_models")
+        return 0
+    
+    # Step 3: Build list of scores to write
+    scores_to_write: List[Dict[str, Any]] = []
+    for model in db_models:
+        ini_key = model.initiative.initiative_key if model.initiative else None
+        model_name = str(model.model_name or "")
+        
+        if not ini_key:
+            continue
+        
+        row_number = row_lookup.get((str(ini_key), model_name))
+        if row_number is None:
+            logger.debug(
+                "mathmodels_writer.write_scores.no_matching_row",
+                extra={"initiative_key": ini_key, "model_name": model_name},
+            )
+            continue
+        
+        scores_to_write.append({
+            "row_number": row_number,
+            "computed_score": model.computed_score,
+        })
+    
+    if not scores_to_write:
+        logger.debug("mathmodels_writer.write_scores.no_scores_to_write")
+        return 0
+    
+    # Step 4: Write to sheet
+    writer = MathModelsWriter(client)
+    written = writer.write_computed_scores_batch(spreadsheet_id, tab_name, scores_to_write)
+    
+    logger.info(
+        "mathmodels_writer.write_scores.done",
+        extra={"written": written, "total_models": len(db_models)},
+    )
+    
+    return written
