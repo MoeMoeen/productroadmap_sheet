@@ -33,6 +33,9 @@ DEFAULT_HEADER_ROW: int = 1      # 1-indexed
 # Example:
 #   "candidates": 5,   # if we ever add an instructions row
 TAB_LAYOUT: Dict[str, int] = {
+    # Central Backlog: reserve row 4 for instructions (data starts row 5)
+    "backlog": 5,
+
     # Optimization Center: reserve row 4 for instructions (data starts row 5)
     "candidates": 5,
     "scenario_config": 5,
