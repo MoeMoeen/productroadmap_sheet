@@ -17,6 +17,12 @@ def _build_instruction_text(t: TabInstructions) -> str:
     parts.append(f"\U0001F9ED {t.title} — What this tab is for")
     parts.extend([f"• {line}" for line in (t.lines or [])])
 
+    if t.steps:
+        parts.append("")
+        parts.append("📋 Step-by-Step Walkthrough")
+        for i, step in enumerate(t.steps, start=1):
+            parts.append(f"{i}. {step}")
+
     if t.warnings:
         parts.append("")
         parts.append("⚠️ Notes")
