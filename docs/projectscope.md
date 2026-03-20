@@ -685,39 +685,45 @@ Given your goal (internal tool + you know Python), this is totally fine as a v1/
      
      **Core Jobs (V1)**:
      - `pm.backlog_sync` – Sync all intake sheets to Central Backlog (no selection). Runs Flow 1 full sync pipeline.
-       - UI: Central Backlog sheet → Roadmap AI menu → "See Latest Intake"
+       - UI: Central Backlog sheet → Roadmap AI menu → "Sync intake → backlog"
        - Behavior: Intake sync → DB update → backlog regeneration → per-row Status writes
+       - **Direction**: DB → Sheet (overwrites all CENTRAL_HEADER_TO_FIELD columns)
+       - **Sheet Writes**: Initiative Key, Title, scores, Immediate KPI Key, Updated At/Source, all PM-editable fields
+       - **Note**: Use `pm.save_selected` to sync PM edits from Central Backlog back to DB before running this
        - Summary: updated_count, cells_updated
      
      - `pm.score_selected` – Score selected initiatives across all frameworks (RICE, WSJF, Math Model). Selection-based; skips blank keys.
-       - UI: ProductOps Scoring_Inputs sheet → Roadmap AI menu → "Score Selected"
+       - UI: ProductOps Scoring_Inputs sheet → Roadmap AI menu → "Score selected initiatives"
        - Behavior: Sync inputs → compute_all_frameworks → write scores → per-row Status
+       - **Sheet Writes**: Scoring_Inputs (score columns), MathModels (computed_score), KPI_Contributions (kpi_contribution_computed_json)
        - Summary: selected_count, saved_count, failed_count, skipped_no_key
      
      - `pm.switch_framework` – Change active scoring framework (local-only, sheet-specific). No recompute; copies already-computed per-framework scores to active fields.
-       - UI: ProductOps Scoring_Inputs sheet → Roadmap AI menu → "Switch Framework"
+       - UI: ProductOps Scoring_Inputs sheet → Roadmap AI menu → "Switch scoring framework"
        - Behavior: Tab-aware (Scoring_Inputs or Central Backlog); activate scores → write active fields → per-row Status
+       - **Sheet Writes**: Active score columns (value_score, effort_score, overall_score)
        - Summary: selected_count, saved_count, failed_count, skipped_no_key
        - Key detail: No cross-sheet propagation; changes only current sheet
      
      - `pm.save_selected` – Persist tab edits to DB (tab-aware branching). Selection-based; skips blank keys.
-       - UI: ProductOps sheets → Roadmap AI menu → "Save Selected" (detects tab context)
+       - UI: ProductOps sheets → Roadmap AI menu → "Save selected rows" (detects tab context)
        - Tab-aware branches:
          - **Scoring_Inputs**: Syncs scoring inputs via Flow3
          - **MathModels**: Syncs math models via MathModelSyncService
          - **Params**: Syncs parameters via ParamsSyncService
-         - **Central Backlog**: Updates initiatives via Flow1
+         - **Central Backlog**: Syncs CENTRAL_EDITABLE_FIELDS to DB via BacklogService.update_many()
+           - **Sheet → DB fields**: Title, Hypothesis, Problem Statement, Department, Country, Product Area, Lifecycle Status, Customer Segment, Initiative Type, Active Scoring Framework, Use Math Model, Dependencies, LLM Summary, Strategic Priority Coefficient, Is Optimization Candidate, Candidate Period Key
        - Summary: selected_count, saved_count, failed_count, skipped_no_key
      
      **Math Model Jobs (V2 – NEW)**:
      - `pm.suggest_math_model_llm` – LLM suggests draft formula + notes for selected rows. Writes only to LLM columns (llm_suggested_formula_text, llm_notes, suggested_by_llm).
-       - UI: ProductOps MathModels sheet → Roadmap AI menu → "Suggest Math Model"
+       - UI: ProductOps MathModels sheet → Roadmap AI menu → "Suggest math model (LLM)"
        - Behavior: Calls LLM for rows with empty formula_text; guards on insufficient context (no problem_statement/impact_description/metric and no model_prompt_to_llm)
        - Summary: selected_count, suggested_count, skipped_existing_formula, skipped_insufficient_context, failed_count
        - Key detail: Never overwrites user columns (formula_text, assumptions_text, approved_by_user)
      
      - `pm.seed_math_params` – Validates approved formulas, extracts variable names, seeds Params rows with metadata (values empty). Sheet-first; DB persistence via pm.save_selected.
-       - UI: ProductOps MathModels sheet → Roadmap AI menu → "Seed Math Params"
+       - UI: ProductOps MathModels sheet → Roadmap AI menu → "Seed math params"
        - Behavior: For rows with formula_text and approved_by_user=TRUE, parse formula → extract identifiers → seed new Params rows
        - Summary: selected_count, seeded_count, skipped_not_approved, skipped_no_formula, failed_count
        - Usage flow: Approve formula → Seed Params → Fill values on Params tab → pm.save_selected (Params) → pm.score_selected
@@ -1530,7 +1536,7 @@ Same `run_scoring_job()` as in flow 2, but:
 **Trigger**: KPI contributions are computed when PM runs `pm.score_selected` on **Scoring_Inputs tab** with **MATH_MODEL framework**.
 
 1. **System Computes Contributions** (triggered by `pm.score_selected` with MATH_MODEL):
-   - PM runs "Score Selected" from menu on Scoring_Inputs tab
+   - PM runs "Score selected initiatives" from menu on Scoring_Inputs tab
    - `ScoringService.score_initiative()` computes each math model's `computed_score`
    - `update_initiative_contributions()` aggregates scores by `target_kpi_key` into `kpi_contribution_computed_json`
    - After scoring completes, `write_kpi_contributions_to_sheet()` writes DB values → KPI_Contributions sheet automatically
@@ -1723,7 +1729,7 @@ Sheet ID: unique Google Sheets document identifier (in URL).
 Tab name: worksheet title inside that document (e.g. “UK_Intake”, “Central_Backlog”, “Params”). Backend uses (sheet_id, tab_name) to trace original row locations.
 
 ## Live Sheets Registry
-*Last synced: 2026-03-15 06:44 UTC*
+*Last synced: 2026-03-20 16:36 UTC*
 
 This section is auto-generated by `scripts/sync_sheets_registry.py`.
 First 3 rows per tab: Row 1 = main header, Rows 2-3 = metadata/comments.
@@ -1786,7 +1792,7 @@ First 3 rows per tab: Row 1 = main header, Rows 2-3 = metadata/comments.
 - **Spreadsheet ID**: `1dd5ux4iapJtHWNb1E0gK7wQF644csy30M40dhs_XGH8`
 
 ##### Tab: `Backlog` (Primary)
-  - **Total Columns**: 31
+  - **Total Columns**: 32
 
   - **Column A**: `Initiative Key`
     - Row 1 (Header): `Initiative Key`
@@ -1798,150 +1804,155 @@ First 3 rows per tab: Row 1 = main header, Rows 2-3 = metadata/comments.
     - Row 2 (Meta1): `Initiative.title`
     - Row 3 (Meta2): `Intake sheet → DB → Backlog Sync - PM can edit`
 
-  - **Column C**: `Department`
+  - **Column C**: `Description`
+    - Row 1 (Header): `Description`
+    - Row 2 (Meta1): `NONE`
+    - Row 3 (Meta2): `PM input: Sheet-only notes`
+
+  - **Column D**: `Department`
     - Row 1 (Header): `Department`
     - Row 2 (Meta1): `Initiative.department`
     - Row 3 (Meta2): `Intake sheet → DB → Backlog Sync - PM can edit`
 
-  - **Column D**: `Requesting Team`
+  - **Column E**: `Requesting Team`
     - Row 1 (Header): `Requesting Team`
     - Row 2 (Meta1): `Initiative.requesting_team`
     - Row 3 (Meta2): `Intake sheet → DB → Backlog Sync - PM can edit`
 
-  - **Column E**: `Requester Name`
+  - **Column F**: `Requester Name`
     - Row 1 (Header): `Requester Name`
     - Row 2 (Meta1): `Initiative.requester_name`
     - Row 3 (Meta2): `Intake sheet → DB → Backlog Sync - PM can edit`
 
-  - **Column F**: `Requester Email`
+  - **Column G**: `Requester Email`
     - Row 1 (Header): `Requester Email`
     - Row 2 (Meta1): `Initiative.requester_email`
     - Row 3 (Meta2): `Intake → DB → Backlog sync`
 
-  - **Column G**: `Country`
+  - **Column H**: `Country`
     - Row 1 (Header): `Country`
     - Row 2 (Meta1): `Initiative.country`
     - Row 3 (Meta2): `Intake sheet → DB → Backlog Sync - PM can edit`
 
-  - **Column H**: `Product Area`
+  - **Column I**: `Product Area`
     - Row 1 (Header): `Product Area`
     - Row 2 (Meta1): `Initiative.product_area`
     - Row 3 (Meta2): `PM input → DB`
 
-  - **Column I**: `Lifecycle Status`
+  - **Column J**: `Lifecycle Status`
     - Row 1 (Header): `Lifecycle Status`
     - Row 2 (Meta1): `Initiative.lifecycle_status`
     - Row 3 (Meta2): `PM input → DB`
 
-  - **Column J**: `Customer Segment`
+  - **Column K**: `Customer Segment`
     - Row 1 (Header): `Customer Segment`
     - Row 2 (Meta1): `Initiative.customer_segment`
     - Row 3 (Meta2): `PM input → DB`
 
-  - **Column K**: `Initiative Type`
+  - **Column L**: `Initiative Type`
     - Row 1 (Header): `Initiative Type`
     - Row 2 (Meta1): `Initiative.initiative_type`
     - Row 3 (Meta2): `PM input → DB`
 
-  - **Column L**: `Hypothesis`
+  - **Column M**: `Hypothesis`
     - Row 1 (Header): `Hypothesis`
     - Row 2 (Meta1): `Initiative.hypothesis`
     - Row 3 (Meta2): `PM input → DB`
 
-  - **Column M**: `Problem Statement`
+  - **Column N**: `Problem Statement`
     - Row 1 (Header): `Problem Statement`
     - Row 2 (Meta1): `Initiative.problem_statement`
     - Row 3 (Meta2): `PM input → DB`
 
-  - **Column N**: `Value Score`
+  - **Column O**: `Value Score`
     - Row 1 (Header): `Value Score`
     - Row 2 (Meta1): `Initiative.value_score`
     - Row 3 (Meta2): `Backend computes ← DB (scores)`
 
-  - **Column O**: `Effort Score`
+  - **Column P**: `Effort Score`
     - Row 1 (Header): `Effort Score`
     - Row 2 (Meta1): `Initiative.effort_score`
     - Row 3 (Meta2): `Backend computes ← DB`
 
-  - **Column P**: `Overall Score`
+  - **Column Q**: `Overall Score`
     - Row 1 (Header): `Overall Score`
     - Row 2 (Meta1): `Initiative.overall_score`
     - Row 3 (Meta2): `Backend computes ← DB`
 
-  - **Column Q**: `Active Scoring Framework`
+  - **Column R**: `Active Scoring Framework`
     - Row 1 (Header): `Active Scoring Framework`
     - Row 2 (Meta1): `Initiative.active_scoring_framework`
     - Row 3 (Meta2): `PM choice → DB`
 
-  - **Column R**: `Use Math Model`
+  - **Column S**: `Use Math Model`
     - Row 1 (Header): `Use Math Model`
     - Row 2 (Meta1): `Initiative.use_math_model`
     - Row 3 (Meta2): `PM choice → DB`
 
-  - **Column S**: `Dependencies Initiatives`
+  - **Column T**: `Dependencies Initiatives`
     - Row 1 (Header): `Dependencies Initiatives`
     - Row 2 (Meta1): `Initiative.dependencies_initiatives`
     - Row 3 (Meta2): `PM input → DB`
 
-  - **Column T**: `Dependencies Others`
+  - **Column U**: `Dependencies Others`
     - Row 1 (Header): `Dependencies Others`
     - Row 2 (Meta1): `Initiative.dependencies_others`
     - Row 3 (Meta2): `PM input → DB`
 
-  - **Column U**: `LLM Summary`
+  - **Column V**: `LLM Summary`
     - Row 1 (Header): `LLM Summary`
     - Row 2 (Meta1): `Initiative.llm_summary`
     - Row 3 (Meta2): `LLM text (editable) → DB`
 
-  - **Column V**: `Strategic Priority Coefficient`
+  - **Column W**: `Strategic Priority Coefficient`
     - Row 1 (Header): `Strategic Priority Coefficient`
     - Row 2 (Meta1): `Initiative.strategic_priority_coefficient`
     - Row 3 (Meta2): `PM input → DB (or default=1.0)`
 
-  - **Column W**: `Updated At`
+  - **Column X**: `Updated At`
     - Row 1 (Header): `Updated At`
     - Row 2 (Meta1): `Initiative.updated_at`
     - Row 3 (Meta2): `Backend writes → Sheet (read-only)`
 
-  - **Column X**: `Updated Source`
+  - **Column Y**: `Updated Source`
     - Row 1 (Header): `Updated Source`
     - Row 2 (Meta1): `Initiative.updated_source`
     - Row 3 (Meta2): `Backend writes → Sheet (read-only)`
 
-  - **Column Y**: `Immediate KPI Key`
+  - **Column Z**: `Immediate KPI Key`
     - Row 1 (Header): `Immediate KPI Key`
     - Row 2 (Meta1): `Initiative.immediate_kpi_key`
     - Row 3 (Meta2): `ENTRY: ProductOps/MathModels; FLOW: ProductOps→DB→Backlog (read-only).`
 
-  - **Column Z**: `Metric Chain JSON`
+  - **Column AA**: `Metric Chain JSON`
     - Row 1 (Header): `Metric Chain JSON`
     - Row 2 (Meta1): `Initiative.metric_chain_json`
     - Row 3 (Meta2): `ENTRY: ProductOps/MathModels; FLOW: ProductOps→DB→Backlog (read-only).`
 
-  - **Column AA**: `engineering_tokens`
+  - **Column AB**: `engineering_tokens`
     - Row 1 (Header): `engineering_tokens`
     - Row 2 (Meta1): `Initiative.engineering_tokens`
     - Row 3 (Meta2): `Copied from optimization_cetner/candidates tab to Central Backlog optionally too via formula
 Entry surgace is optimization_cetner/candidates`
 
-  - **Column AB**: `deadline_date`
+  - **Column AC**: `deadline_date`
     - Row 1 (Header): `deadline_date`
     - Row 2 (Meta1): `Initiative.deadline_date`
     - Row 3 (Meta2): `Copied from optimization_cetner/candidates tab to Central Backlog optionally too via formula
 Entry surgace is optimization_cetner/candidates`
 
-  - **Column AC**: `is_mandatory`
+  - **Column AD**: `is_mandatory`
     - Row 1 (Header): `is_mandatory`
     - Row 2 (Meta1): ``
     - Row 3 (Meta2): `Copied from optimization_cetner/candidates tab to Central Backlog optionally too via formula
 Entry surgace is optimization_cetner/candidates`
 
-  - **Column AD**: `Is Optimization Candidate`
+  - **Column AE**: `Is Optimization Candidate`
     - Row 1 (Header): `Is Optimization Candidate`
     - Row 2 (Meta1): `Initiative.is_optimization_candidate`
     - Row 3 (Meta2): `PM input → DB`
 
-  - **Column AE**: `Candidate Period Key`
+  - **Column AF**: `Candidate Period Key`
     - Row 1 (Header): `Candidate Period Key`
     - Row 2 (Meta1): `Initiative.candidate_period_key`
     - Row 3 (Meta2): `PM input → DB`
@@ -2108,8 +2119,8 @@ Entry surgace is optimization_cetner/candidates`
 
   - **Column B**: `target KPI key`
     - Row 1 (Header): `target KPI key`
-    - Row 2 (Meta1): ``
-    - Row 3 (Meta2): ``
+    - Row 2 (Meta1): `InitiativeMathModel.target_kpi_key`
+    - Row 3 (Meta2): `PM input → DB (MathModelSync). Required for KPI contribution aggregation.`
 
   - **Column C**: `model_name`
     - Row 1 (Header): `model_name`
@@ -2123,8 +2134,8 @@ Entry surgace is optimization_cetner/candidates`
 
   - **Column E**: `is_primary`
     - Row 1 (Header): `is_primary`
-    - Row 2 (Meta1): ``
-    - Row 3 (Meta2): ``
+    - Row 2 (Meta1): `InitiativeMathModel.is_primary`
+    - Row 3 (Meta2): `PM input → DB (MathModelSync). Only 1 primary allowed per initiative - system enforces uniqueness.`
 
   - **Column F**: `metric_chain_text`
     - Row 1 (Header): `metric_chain_text`
@@ -2138,8 +2149,9 @@ Entry surgace is optimization_cetner/candidates`
 
   - **Column H**: `computed_score`
     - Row 1 (Header): `computed_score`
-    - Row 2 (Meta1): ``
-    - Row 3 (Meta2): ``
+    - Row 2 (Meta1): `InitiativeMathModel.computed_score`
+    - Row 3 (Meta2): `Backend writes → Sheet (after 'Score Selected'). Per-model score computed from formula_text + params.
+`
 
   - **Column I**: `llm_suggested_metric_chain_text`
     - Row 1 (Header): `llm_suggested_metric_chain_text`
@@ -2346,7 +2358,7 @@ Entry surgace is optimization_cetner/candidates`
   - **Column B**: `kpi_contribution_json`
     - Row 1 (Header): `kpi_contribution_json`
     - Row 2 (Meta1): `Initiative.kpi_contribution_json`
-    - Row 3 (Meta2): `PM input edits here; FLOW: ProductOps/KPI_Contributions → DB; validate keys & units vs Metrics_Config`
+    - Row 3 (Meta2): `PM input edits here or can copy from kpi contribution computed json and edit here; FLOW: ProductOps/KPI_Contributions → DB; validate keys & units vs Metrics_Config`
 
   - **Column C**: `kpi_contribution_computed_json`
     - Row 1 (Header): `kpi_contribution_computed_json`
@@ -2981,7 +2993,7 @@ entry surface is ProductOps/KPI_contributions`
 
 
 ## Codebase Registry
-*Auto-generated: 2026-03-15 06:44 UTC*
+*Auto-generated: 2026-03-20 16:35 UTC*
 
 This section is auto-generated by `scripts/generate_codebase_registry.py`.
 Comprehensive map of `app/` directory structure, modules, classes, and functions.
@@ -4515,11 +4527,14 @@ app/
   - `write_suggestions_batch(self, spreadsheet_id: str, tab_name: str, suggestions: List[Dict[(str, Any)]])`
   - `_find_column_index(self, spreadsheet_id: str, tab_name: str, column_name: str)`
   - `_get_approved_status_for_rows(self, spreadsheet_id: str, tab_name: str, row_numbers: List[int], approved_col_idx: int)`
+  - `write_computed_scores_batch(self, spreadsheet_id: str, tab_name: str, scores: List[Dict[(str, Any)]])`
 
 **Functions**:
 - **Function `_now_iso() -> str`**
 - **Function `_col_index_to_a1(idx: int) -> str`**
   - *Doc*: Convert 1-based column index to A1 letter(s).
+- **Function `write_computed_scores_to_mathmodels_sheet(db: 'Session', client: SheetsClient, spreadsheet_id: str, tab_name: str) -> int`**
+  - *Doc*: Write computed_score from DB back to MathModels sheet.
 
 ##### Module: `metrics_config_reader.py`
 *Path*: `app/sheets/metrics_config_reader.py`

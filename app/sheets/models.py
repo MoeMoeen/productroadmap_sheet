@@ -417,25 +417,33 @@ SCORE_FIELD_TO_HEADERS: Dict[str, List[str]] = {
 }
 
 # Central Backlog headers and field mapping used by backlog writer
+# These columns are BIDIRECTIONAL:
+# - DB → Sheet: pm.backlog_sync writes ALL columns from DB to sheet
+# - Sheet → DB: pm.save_selected syncs only CENTRAL_EDITABLE_FIELDS from sheet to DB
+#
+# Column ownership:
+# - BACKEND-WRITTEN (read-only in sheet): scores (Value/Effort/Overall), Updated At, Updated Source, Initiative Key
+# - PM-EDITABLE (bidirectional): CENTRAL_EDITABLE_FIELDS below (Title, Hypothesis, Problem Statement, etc.)
+# - PMs can also add additional formula columns freely — backend matches by header name, not position.
 CENTRAL_BACKLOG_HEADER: List[str] = [
+    # Core identification
     "Initiative Key",
     "Title",
+    # Team & requester info
+    "Department",
     "Requesting Team",
     "Requester Name",
     "Requester Email",
+    # Location & categorization
     "Country",
     "Product Area",
-    "Department",
     "Lifecycle Status",
     "Customer Segment",
     "Initiative Type",
+    # Context
     "Hypothesis",
     "Problem Statement",
-    "Immediate KPI Key",
-    "Metric Chain JSON",
-    "Is Optimization Candidate",
-    "Candidate Period Key",
-    # Scoring outputs
+    # Scoring outputs (backend-computed)
     "Value Score",
     "Effort Score",
     "Overall Score",
@@ -445,15 +453,31 @@ CENTRAL_BACKLOG_HEADER: List[str] = [
     "Dependencies Initiatives",
     "Dependencies Others",
     "LLM Summary",
-    # Metadata
+    # Priority & metadata
+    "Strategic Priority Coefficient",
     "Updated At",
     "Updated Source",
+    # KPI field from ProductOps/MathModels (backend writes from Initiative.immediate_kpi_key)
+    "Immediate KPI Key",
+    # Optimization candidacy
+    "Is Optimization Candidate",
+    "Candidate Period Key",
 ]
 
-# Mapping from Central Backlog header names to model field names
+# Mapping from Central Backlog header names to Initiative model field names.
+# ONLY include fields that:
+# 1. Exist on Initiative DB model
+# 2. The backend should read/write (not formula-populated columns)
+#
+# NOT included (PM-managed formula columns on sheet):
+# - "Metric Chain JSON" → moved to InitiativeMathModel, not on Initiative
+# - "engineering_tokens" → entry surface is Optimization Center (formula in Central Backlog)
+# - "deadline_date" → entry surface is Optimization Center (formula in Central Backlog)
+# - "is_mandatory" → constraint field, removed from Initiative model
 CENTRAL_HEADER_TO_FIELD: Dict[str, str] = {
     "Initiative Key": "initiative_key",
     "Title": "title",
+    "Department": "department",
     "Requesting Team": "requesting_team",
     "Requester Name": "requester_name",
     "Requester Email": "requester_email",
@@ -464,10 +488,6 @@ CENTRAL_HEADER_TO_FIELD: Dict[str, str] = {
     "Initiative Type": "initiative_type",
     "Hypothesis": "hypothesis",
     "Problem Statement": "problem_statement",
-    "Immediate KPI Key": "immediate_kpi_key",
-    "Metric Chain JSON": "metric_chain_json",
-    "Is Optimization Candidate": "is_optimization_candidate",
-    "Candidate Period Key": "candidate_period_key",
     "Value Score": "value_score",
     "Effort Score": "effort_score",
     "Overall Score": "overall_score",
@@ -476,8 +496,12 @@ CENTRAL_HEADER_TO_FIELD: Dict[str, str] = {
     "Dependencies Initiatives": "dependencies_initiatives",
     "Dependencies Others": "dependencies_others",
     "LLM Summary": "llm_summary",
+    "Strategic Priority Coefficient": "strategic_priority_coefficient",
     "Updated At": "updated_at",
     "Updated Source": "updated_source",
+    "Immediate KPI Key": "immediate_kpi_key",
+    "Is Optimization Candidate": "is_optimization_candidate",
+    "Candidate Period Key": "candidate_period_key",
 }
 
 __all__ = [
@@ -798,24 +822,30 @@ class OptGapAlertRow(BaseModel):
     updated_at: Optional[str] = None
 
 
-# Central Backlog PM-editable columns mapping (used by protected ranges logic)
-# Keys are exact header names in CENTRAL_BACKLOG_HEADER that are editable by users.
+# Central Backlog PM-editable columns (synced Sheet → DB by pm.save_selected)
+# These fields flow BIDIRECTIONALLY:
+# - PM edits in sheet → synced to DB via pm.save_selected (BacklogService.update_many)
+# - DB values → written to sheet via pm.backlog_sync (write_backlog_from_db)
+# Note: is_mandatory, engineering_tokens, deadline_date are read-only here (entry surface is Optimization Center)
 CENTRAL_EDITABLE_FIELDS: List[str] = [
     "Title",
+    "Department",
     "Requesting Team",
     "Requester Name",
     "Requester Email",
     "Country",
     "Product Area",
-    "Department",
     "Lifecycle Status",
     "Customer Segment",
     "Initiative Type",
     "Hypothesis",
     "Problem Statement",
+    "Active Scoring Framework",  # PM choice
+    "Use Math Model",  # PM toggle
     "Dependencies Initiatives",
     "Dependencies Others",
     "LLM Summary",
+    "Strategic Priority Coefficient",  # CPO/PM priority multiplier
     "Is Optimization Candidate",
     "Candidate Period Key",
 ]

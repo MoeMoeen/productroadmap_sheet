@@ -82,10 +82,10 @@ score_approved_by_user: bool
    - **PM Flow**:
      1. Edit RICE/WSJF params in columns M-T
      2. Select rows (by clicking initiative_key cells)
-     3. Roadmap AI menu → "Score Selected"
+     3. Roadmap AI menu → "Score selected initiatives"
      4. System computes RICE + WSJF + MATH_MODEL (if use_math_model=TRUE)
      5. Writes per-framework scores back to columns U-Z (RICE), X-Z (WSJF), I-K (MATH)
-     6. Optionally: Switch active framework via "Switch Framework" action
+     6. Optionally: Switch active framework via "Switch scoring framework" action
 
 2. **MathModels Tab** (formula definition + approval):
    - **PM Actions Available**:
@@ -96,11 +96,11 @@ score_approved_by_user: bool
      1. Add rows for each initiative (multiple models per initiative)
      2. Set `target_kpi_key` (which KPI this model impacts)
      3. Document `metric_chain_text` (impact pathway)
-     4. Optional: Roadmap AI menu → "Suggest Math Model" (LLM fills llm_suggested_formula_text)
+     4. Optional: Roadmap AI menu → "Suggest math model (LLM)" (LLM fills llm_suggested_formula_text)
      5. Review suggestion → copy to `formula_text` OR write custom formula
      6. Set `approved_by_user = TRUE`
-     7. Roadmap AI menu → "Seed Math Params" (creates Params rows)
-     8. Roadmap AI menu → "Save Selected" (persists to DB)
+     7. Roadmap AI menu → "Seed math params" (creates Params rows)
+     8. Roadmap AI menu → "Save selected rows" (persists to DB)
 
 3. **Params Tab** (parameter values):
    - **PM Actions Available**:
@@ -109,8 +109,8 @@ score_approved_by_user: bool
      1. Navigate to auto-seeded rows (framework="MATH_MODEL")
      2. Fill `value` column with estimates
      3. Set `approved = TRUE`
-     4. Roadmap AI menu → "Save Selected"
-     5. **Then switch to Scoring_Inputs tab** → run "Score Selected"
+     4. Roadmap AI menu → "Save selected rows"
+     5. **Then switch to Scoring_Inputs tab** → run "Score selected initiatives"
 
 4. **Metrics_Config Tab** (KPI registry):
    - **PM Actions**: `pm.save_selected` (syncs KPI definitions)
@@ -128,7 +128,7 @@ score_approved_by_user: bool
 ```
 ProductOps/Scoring_Inputs:
 1. PM edits rice_reach, rice_impact, rice_confidence, rice_effort (columns M-P)
-2. PM selects rows → Roadmap AI → "Score Selected"
+2. PM selects rows → Roadmap AI → "Score selected initiatives"
 3. Backend:
    - ScoringService.score_initiative_all_frameworks():
      - Compute RICE → rice_value_score, rice_effort_score, rice_overall_score
@@ -155,7 +155,7 @@ ProductOps/MathModels:
    - is_primary = TRUE (if representative model)
 
 Phase 2: Generate Formulas (Optional LLM)
-2. PM selects rows → Roadmap AI → "Suggest Math Model"
+2. PM selects rows → Roadmap AI → "Suggest math model (LLM)"
 3. Backend:
    - LLMClient.suggest_math_model():
      - Builds prompt with problem_statement + metric_chain + target KPI
@@ -166,10 +166,10 @@ Phase 3: Approve Formulas
 4. PM reviews llm_suggested_formula_text
 5. Copies to formula_text OR writes custom
 6. Sets approved_by_user = TRUE
-7. Roadmap AI → "Save Selected"
+7. Roadmap AI → "Save selected rows"
 
 Phase 4: Seed & Fill Parameters
-8. PM stays on MathModels → Roadmap AI → "Seed Math Params"
+8. PM stays on MathModels → Roadmap AI → "Seed math params"
 9. Backend:
    - ParamSeedingJob:
      - Parses formula_text → extracts variable names
@@ -179,11 +179,11 @@ Phase 4: Seed & Fill Parameters
 11. Filters by initiative_key + framework="MATH_MODEL"
 12. Fills value column
 13. Sets approved = TRUE
-14. Roadmap AI → "Save Selected"
+14. Roadmap AI → "Save selected rows"
 
 Phase 5: Compute Scores & KPI Contributions
 15. PM switches to Scoring_Inputs tab
-16. Selects rows → Roadmap AI → "Score Selected"
+16. Selects rows → Roadmap AI → "Score selected initiatives"
 17. Backend:
     - ScoringService.score_initiative_all_frameworks():
       - For MATH_MODEL framework:
@@ -219,7 +219,7 @@ ProductOps/KPI_Contributions:
    - kpi_contribution_source (computed | pm_override)
 2. PM edits kpi_contribution_json:
    - Example: {"revenue": 120.5, "user_retention": 85.0}
-3. Roadmap AI → "Save Selected"
+3. Roadmap AI → "Save selected rows"
 4. Backend:
    - KPIContributionsSyncService:
      - Sets kpi_contribution_source = "pm_override"
@@ -286,27 +286,27 @@ ProductOps/KPI_Contributions:
    - Optionally: Suggest formulas (LLM)
    - Approve formulas
    - Save
-3. **Seed Params** (MathModels tab) → "Seed Math Params" action
+3. **Seed Params** (MathModels tab) → "Seed math params" action
 4. **Fill Params** (Params tab) → Edit values → Approve → Save
-5. **Score** (Scoring_Inputs tab) → Select rows → "Score Selected"
+5. **Score** (Scoring_Inputs tab) → Select rows → "Score selected initiatives"
 6. **Verify** (KPI_Contributions tab) → Check kpi_contribution_computed_json
 7. **Override** (Optional, KPI_Contributions tab) → Edit kpi_contribution_json → Save
 
 **For RICE/WSJF Scoring (Simple Flow):**
 
 1. **Edit Params** (Scoring_Inputs tab, columns M-T)
-2. **Score** (same tab) → Select rows → "Score Selected"
-3. **Switch Framework** (Optional) → Select rows → "Switch Framework" action
+2. **Score** (same tab) → Select rows → "Score selected initiatives"
+3. **Switch Framework** (Optional) → Select rows → "Switch scoring framework" action
 
 
 ## Complete PM Action Flow: `pm.score_selected`
 
-**Entry Point:** Product Ops Scoring_Inputs tab → Roadmap AI menu → "Score Selected" action
+**Entry Point:** Product Ops Scoring_Inputs tab → Roadmap AI menu → "Score selected initiatives" action
 
 ### **Complete Call Chain:**
 
 ```
-1. USER ACTION: PM selects rows in Scoring_Inputs tab, clicks "Score Selected"
+1. USER ACTION: PM selects rows in Scoring_Inputs tab, clicks "Score selected initiatives"
    ↓
 2. _action_pm_score_selected(db, ctx)
    [app/services/action_runner.py:680-860]
@@ -565,7 +565,7 @@ if cfg and hasattr(cfg, "kpi_contributions_tab"):
 ### **Complete Updated Flow: `pm.score_selected`**
 
 ```
-PM: Scoring_Inputs tab → Roadmap AI menu → "Score Selected"
+PM: Scoring_Inputs tab → Roadmap AI menu → "Score selected initiatives"
   ↓
 _action_pm_score_selected(keys)
   ↓ Step 1: Sync inputs
@@ -670,7 +670,7 @@ if contrib is None:  # PM cleared the field
 **How PM Uses It:**
 1. Open KPI_Contributions tab
 2. **Clear the `kpi_contribution_json` cell** (delete contents)
-3. Run "Save Selected"
+3. Run "Save selected rows"
 4. System detects empty + pm_override → **unlocks it**
 5. Next `pm.score_selected` will write system values back
 
@@ -856,7 +856,7 @@ def populate_candidates_from_db(...):
 ```
 PM edits Candidates tab (engineering_tokens, category, etc.)
   ↓
-PM runs: Roadmap AI → "Save Selected"
+PM runs: Roadmap AI → "Save selected rows"
   ↓
 sync_candidates_from_sheet() persists edits to DB
 ```
