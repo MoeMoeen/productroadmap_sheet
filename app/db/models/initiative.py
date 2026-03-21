@@ -50,7 +50,7 @@ class Initiative(Base):
     initiative_type = Column(String(100), nullable=True)
     strategic_priority_coefficient = Column(Float, nullable=False, default=1.0)
 
-    # D. KPI alignment and metric chain
+    # D. KPI
     immediate_kpi_key = Column(String(100), nullable=True)
     kpi_contribution_json = Column(JSON, nullable=True)  # Active (PM can override)
     kpi_contribution_computed_json = Column(JSON, nullable=True)  # System-computed (always updated)

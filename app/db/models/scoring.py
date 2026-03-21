@@ -21,8 +21,8 @@ class InitiativeMathModel(Base):
     framework = Column(String(50), nullable=False, default="MATH_MODEL", index=True)
     model_name = Column(String(150), nullable=True)
     formula_text = Column(Text, nullable=False)
-    metric_chain_text = Column(Text, nullable=True)
-    metric_chain_json = Column(JSON, nullable=True)  # Parsed version of metric_chain_text
+    metric_chain_text = Column(Text, nullable=True) # e.g. "immediate_kpi -> north_star_kpi -> north_star_kpi_parent"
+    metric_chain_json = Column(JSON, nullable=True)  # Parsed version of metric_chain_text. E.g. [{"kpi_key": "immediate_kpi", "kpi_level": "immediate"}, {"kpi_key": "north_star_kpi", "kpi_level": "north_star"}, {"kpi_key": "north_star_kpi_parent", "kpi_level": "north_star"}]
     parameters_json = Column(JSON, nullable=True)  # e.g. {"traffic": {...}, "uplift": {...}}
     assumptions_text = Column(Text, nullable=True)
     model_description_free_text = Column(Text, nullable=True)

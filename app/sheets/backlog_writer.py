@@ -49,14 +49,22 @@ def _initiative_field_value(field: str, initiative: Initiative, now_ts: datetime
     if field == "updated_source":
         return token(Provenance.FLOW1_BACKLOGSHEET_WRITE)
 
+    # Special case: metric_chain_json lives on InitiativeMathModel, not Initiative
+    # Fetch from primary math model (is_primary=True)
+    if field == "metric_chain_json":
+        primary_models = [m for m in initiative.math_models if m.is_primary]
+        if primary_models:
+            value = primary_models[0].metric_chain_json
+            if value is not None:
+                try:
+                    return json.dumps(value)
+                except Exception:
+                    return str(value)
+        return ""
+
     value = getattr(initiative, field, None)
     if field == "dependencies_initiatives":
         return _list_join(value)
-    if field == "metric_chain_json" and value is not None:
-        try:
-            return json.dumps(value)
-        except Exception:
-            return str(value)
     if isinstance(value, list):
         return _list_join(value)
     return value

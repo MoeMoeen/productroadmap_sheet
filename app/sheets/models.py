@@ -459,6 +459,8 @@ CENTRAL_BACKLOG_HEADER: List[str] = [
     "Updated Source",
     # KPI field from ProductOps/MathModels (backend writes from Initiative.immediate_kpi_key)
     "Immediate KPI Key",
+    # Metric Chain JSON (backend fetches from primary InitiativeMathModel.metric_chain_json)
+    "Metric Chain JSON (Primary)",
     # Optimization candidacy
     "Is Optimization Candidate",
     "Candidate Period Key",
@@ -466,14 +468,16 @@ CENTRAL_BACKLOG_HEADER: List[str] = [
 
 # Mapping from Central Backlog header names to Initiative model field names.
 # ONLY include fields that:
-# 1. Exist on Initiative DB model
+# 1. Exist on Initiative DB model (or require special aggregation)
 # 2. The backend should read/write (not formula-populated columns)
 #
 # NOT included (PM-managed formula columns on sheet):
-# - "Metric Chain JSON" → moved to InitiativeMathModel, not on Initiative
 # - "engineering_tokens" → entry surface is Optimization Center (formula in Central Backlog)
 # - "deadline_date" → entry surface is Optimization Center (formula in Central Backlog)
 # - "is_mandatory" → constraint field, removed from Initiative model
+#
+# SPECIAL CASE:
+# - "Metric Chain JSON" → fetched from primary InitiativeMathModel, not directly on Initiative
 CENTRAL_HEADER_TO_FIELD: Dict[str, str] = {
     "Initiative Key": "initiative_key",
     "Title": "title",
@@ -500,6 +504,7 @@ CENTRAL_HEADER_TO_FIELD: Dict[str, str] = {
     "Updated At": "updated_at",
     "Updated Source": "updated_source",
     "Immediate KPI Key": "immediate_kpi_key",
+    "Metric Chain JSON (Primary)": "metric_chain_json",
     "Is Optimization Candidate": "is_optimization_candidate",
     "Candidate Period Key": "candidate_period_key",
 }
