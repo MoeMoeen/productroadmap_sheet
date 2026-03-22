@@ -258,6 +258,7 @@ def compile_constraint_sets(
                 dimension_key=str(parsed_target.dimension_key),
                 kpi_key=parsed_target.kpi_key,
                 floor_or_goal=cast(str, parsed_target.floor_or_goal),
+                baseline_value=parsed_target.baseline_value,  # Optional: if provided, target_value is absolute
                 target_value=cast(float, parsed_target.target_value),
                 notes=parsed_target.notes,
             )

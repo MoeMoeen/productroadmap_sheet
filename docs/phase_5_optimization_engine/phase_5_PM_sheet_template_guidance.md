@@ -199,11 +199,27 @@ Define **KPI targets**, used for:
 * `dimension` (e.g., `country`, `product`, `all` for global)
 * `dimension_key` (e.g., `UK`, `Payments`, empty for `all`)
 * `kpi_key` (must exist in ProductOps → Metrics_Config)
+* `baseline_value` (optional: current KPI value — if provided, target_value is absolute)
 * `floor_or_goal` (`floor` | `goal`)
 * `target_value` (numeric, in native KPI units)
 * `notes`
 
-**Multi-dimensional targets supported:** You can set country-level targets, product-level targets, cross-sectional targets (country+product), or global targets (dimension="all"). Targets compile to nested JSON: `{dimension: {dimension_key: {kpi_key: {type, value, notes?}}}}`.
+**Baseline support:** When `baseline_value` is provided:
+- `target_value` is interpreted as an **absolute** KPI target (e.g., "Q2 revenue = £100k")
+- Solver computes effective floor = `target_value - baseline_value` (the incremental gap)
+- Normalization uses the gap for weighted_kpis mode
+
+When `baseline_value` is empty:
+- `target_value` is interpreted as **incremental** (e.g., "need +£50k revenue from initiatives")
+- Backward compatible with existing setups
+
+**Example:**
+| kpi_key | baseline_value | target_value | floor_or_goal | Interpretation |
+|---------|----------------|--------------|---------------|----------------|
+| revenue | 50000 | 100000 | floor | Absolute target: current=50k, goal=100k, gap=50k |
+| diners | | 10000 | floor | Incremental: need +10k diners from selected initiatives |
+
+**Multi-dimensional targets supported:** You can set country-level targets, product-level targets, cross-sectional targets (country+product), or global targets (dimension="all"). Targets compile to nested JSON: `{dimension: {dimension_key: {kpi_key: {type, value, baseline?, notes?}}}}`.
 
 ### PM-only helper columns
 
@@ -215,6 +231,7 @@ Define **KPI targets**, used for:
 
 * KPI keys must be **North Star or Strategic KPIs only**.
 * Target values are entered in **native KPI units**.
+* Use `baseline_value` when your organization sets absolute KPI targets (e.g., "achieve £100k revenue") rather than incremental contribution targets.
 
 ---
 

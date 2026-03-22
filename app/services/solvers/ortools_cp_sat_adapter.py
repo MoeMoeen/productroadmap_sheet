@@ -101,36 +101,70 @@ def _get_candidate_dim_value_for_targets(c: "Candidate", dimension: str) -> Opti
 def _resolve_kpi_scale_from_targets_any(
     targets: Dict[str, Any],
     kpi_key: str,
-) -> tuple[float, str, int]:
+) -> tuple[float, str, int, bool]:
     """
     Resolve normalization scale for a KPI from targets with fallback aggregation.
     
     Resolution order (Phase 5 production):
-    1. Prefer targets['all']['all'][kpi_key]['value'] (global scale)
-    2. Else aggregate across all dimensions: max(valid target values)
+    1. Prefer targets['all']['all'][kpi_key] (global scale)
+    2. Else aggregate across all dimensions: max(valid scale values)
     3. Else fallback to 1.0
     
+    Gap-based normalization policy:
+    - If baseline is provided and gap > 0: scale = gap (the incremental delta to close)
+    - If baseline is provided and gap <= 0: already satisfied, flag for special handling
+    - If no baseline: scale = target_value (treat target as incremental)
+    
     Returns:
-        (scale, source, count) where:
-        - scale: float > 0 (normalization denominator)
-        - source: "all/all" | "max_of_targets" | "fallback_1"
+        (scale, source, count, already_satisfied) where:
+        - scale: float > 0 (normalization denominator), or 0 if already_satisfied
+        - source: "all/all" | "all/all_gap" | "all/all_satisfied" | "max_of_targets" | "max_of_gaps" | "fallback_1"
         - count: number of target values found across dimensions
+        - already_satisfied: True if baseline >= target (gap <= 0)
     """
+    def _compute_scale(spec: Dict[str, Any]) -> tuple[float, str]:
+        """Compute scale from spec, returning (scale, mode).
+        
+        Modes: 'incremental', 'gap_based', 'already_satisfied', 'invalid'
+        """
+        val = spec.get("value", None)
+        baseline = spec.get("baseline", None)
+        if val is None:
+            return (0.0, "invalid")
+        try:
+            target_f = float(val)
+            if baseline is not None:
+                baseline_f = float(baseline)
+                gap = target_f - baseline_f
+                if gap <= 0:
+                    # POLICY: baseline >= target means already satisfied
+                    # Return 0 scale with 'already_satisfied' mode
+                    return (0.0, "already_satisfied")
+                return (gap, "gap_based")
+            # No baseline: treat target as incremental
+            if target_f > 0:
+                return (target_f, "incremental")
+        except Exception:
+            pass
+        return (0.0, "invalid")
+    
     # Step 1: Try global all/all target (preferred)
     try:
         all_dim = targets.get("all") or {}
         all_key = all_dim.get("all") or {}
         spec = all_key.get(kpi_key) or {}
-        val = spec.get("value", None)
-        if val is not None:
-            v = float(val)
-            if v > 0:
-                return (v, "all/all", 1)
+        scale, mode = _compute_scale(spec)
+        if mode == "already_satisfied":
+            return (0.0, "all/all_satisfied", 1, True)
+        if scale > 0:
+            source = "all/all_gap" if mode == "gap_based" else "all/all"
+            return (scale, source, 1, False)
     except Exception:
         pass
     
     # Step 2: Aggregate across all dimensional targets (max for stability)
-    valid_values: list[float] = []
+    valid_scales: list[tuple[float, str]] = []
+    any_satisfied = False
     
     for dim, dim_map in targets.items():
         if not isinstance(dim_map, dict):
@@ -144,23 +178,25 @@ def _resolve_kpi_scale_from_targets_any(
             spec = kpi_map.get(kpi_key)
             if not isinstance(spec, dict):
                 continue
-            val = spec.get("value", None)
-            if val is None:
-                continue
-            try:
-                v = float(val)
-                if v > 0:  # Reject zero/negative scales
-                    valid_values.append(v)
-            except Exception:
-                continue
+            scale, mode = _compute_scale(spec)
+            if mode == "already_satisfied":
+                any_satisfied = True
+            elif scale > 0:
+                valid_scales.append((scale, mode))
     
-    if valid_values:
+    if valid_scales:
         # Use max to avoid over-weighting from small denominators
-        scale = max(valid_values)
-        return (scale, "max_of_targets", len(valid_values))
+        max_scale = max(s[0] for s in valid_scales)
+        any_gap = any(s[1] == "gap_based" for s in valid_scales)
+        source = "max_of_gaps" if any_gap else "max_of_targets"
+        return (max_scale, source, len(valid_scales), False)
+    
+    # If all targets for this KPI are already satisfied
+    if any_satisfied:
+        return (0.0, "all_satisfied", 0, True)
     
     # Step 3: Fallback to 1.0
-    return (1.0, "fallback_1", 0)
+    return (1.0, "fallback_1", 0, False)
 
 
 class OrtoolsCpSatSolverAdapter:
@@ -189,6 +225,43 @@ class OrtoolsCpSatSolverAdapter:
         Step 6.5: Capacity floors (per-dimension minimum token allocations)
         Step 7: Target floors (sum(contrib_i * x_i) >= floor for each KPI floor target)
         Step 8: Objective function (north_star, weighted_kpis, or lexicographic)
+
+        Objective Mode Policies (Phase 5 production):
+        =============================================
+        
+        NORTH_STAR (maximize raw delta):
+        - Policy: Maximize total contribution to single KPI
+        - Formula: max(sum(contrib_i * x_i))
+        - Normalization: None (raw contribution values)
+        - Baseline effect on objective: None (contributions are incremental deltas)
+        - Baseline effect on feasibility: Baselines can still affect feasibility
+          indirectly through target-floor constraints (Step 7) on the same KPI
+        - Use case: When you have a clear single KPI to maximize
+        
+        WEIGHTED_KPIS (maximize normalized gap-closure):
+        - Policy: Maximize weighted sum of normalized contributions across KPIs
+        - Formula: max(sum_k(w_k * sum_i(contrib_i,k / scale_k) * x_i))
+        - Normalization: scale_k derived from targets with gap-based policy
+        - Gap-based normalization (when baseline provided):
+          - scale_k = target_k - baseline_k (the gap to close)
+          - Contributes: fraction of remaining gap closed by initiative
+        - Incremental normalization (no baseline):
+          - scale_k = target_k (treat target as incremental delta)
+          - Fallback: scale_k = 1.0 if no target found
+        - Already-satisfied handling:
+          - If baseline_k >= target_k: KPI excluded from objective
+          - Rationale: No gap to close, contributions don't help
+        - Use case: Multi-KPI optimization with business targets
+        
+        Target Floor Policy (Step 7):
+        =============================
+        - Purpose: Minimum KPI contribution thresholds (hard constraints)
+        - Gap-based floor (when baseline provided):
+          - effective_floor = max(target - baseline, 0)
+          - If baseline >= target: constraint skipped (already satisfied)
+        - Incremental floor (no baseline):
+          - effective_floor = target_value
+        - Malformed baseline: returns model_invalid (no silent fallback)
 
         Returns:
             OptimizationSolution with status and which initiatives were selected.
@@ -617,8 +690,10 @@ class OrtoolsCpSatSolverAdapter:
         target_floors_skipped = 0
         target_floors_invalid = 0
         target_floors_empty_slice = 0
+        target_floors_already_satisfied = 0  # baseline >= target cases
+        target_floor_details: List[Dict[str, Any]] = []  # For diagnostics
 
-        # targets shape: {dimension: {dimension_key: {kpi_key: {type,value,notes?}}}}
+        # targets shape: {dimension: {dimension_key: {kpi_key: {type,value,baseline?,notes?}}}}
         for dim, dim_map in targets.items():
             dim_s = str(dim).strip().lower()
             if not isinstance(dim_map, dict):
@@ -647,12 +722,89 @@ class OrtoolsCpSatSolverAdapter:
                         continue
 
                     try:
-                        floor_val = float(raw_val)
+                        target_val = float(raw_val)
                     except Exception:
                         target_floors_invalid += 1
                         continue
 
+                    # Compute effective floor with explicit gap policy
+                    # Policy: effective_gap = max(target - baseline, 0)
+                    # - If baseline not provided: target is already incremental
+                    # - If baseline provided and gap > 0: use gap as floor
+                    # - If baseline provided and gap <= 0: already satisfied, skip constraint
+                    # - If baseline malformed: return model_invalid (no silent fallback)
+                    baseline_val = spec.get("baseline", None)
+                    floor_mode = "incremental"  # for diagnostics
+                    
+                    if baseline_val is not None:
+                        try:
+                            baseline_f = float(baseline_val)
+                        except Exception:
+                            # PRODUCTION POLICY: malformed baseline is an error, not silent fallback
+                            logger.error(
+                                "Target floor has malformed baseline_value (cannot parse as float)",
+                                extra={
+                                    "dimension": dim_s,
+                                    "dimension_key": dim_key_s,
+                                    "kpi_key": str(kpi_key),
+                                    "baseline_value": baseline_val,
+                                    "target_value": target_val,
+                                },
+                            )
+                            return OptimizationSolution(
+                                status="model_invalid",
+                                diagnostics={
+                                    "error": "target_floor_malformed_baseline",
+                                    "dimension": dim_s,
+                                    "dimension_key": dim_key_s,
+                                    "kpi_key": str(kpi_key),
+                                    "baseline_value": str(baseline_val),
+                                    "message": "baseline_value must be a valid number",
+                                },
+                            )
+                        
+                        gap = target_val - baseline_f
+                        if gap <= 0:
+                            # POLICY: baseline already meets/exceeds target → constraint already satisfied
+                            target_floors_already_satisfied += 1
+                            target_floor_details.append({
+                                "dimension": dim_s,
+                                "dimension_key": dim_key_s,
+                                "kpi_key": str(kpi_key),
+                                "mode": "already_satisfied",
+                                "baseline": baseline_f,
+                                "target": target_val,
+                                "gap": gap,
+                            })
+                            logger.info(
+                                "Target floor already satisfied (baseline >= target), skipping constraint",
+                                extra={
+                                    "dimension": dim_s,
+                                    "dimension_key": dim_key_s,
+                                    "kpi_key": str(kpi_key),
+                                    "baseline": baseline_f,
+                                    "target": target_val,
+                                    "gap": gap,
+                                },
+                            )
+                            continue  # Skip this constraint entirely
+                        
+                        floor_val = gap
+                        floor_mode = "gap_based"
+                    else:
+                        floor_val = target_val  # No baseline → target is already incremental
+                        floor_mode = "incremental"
+
                     target_floors_total += 1
+                    target_floor_details.append({
+                        "dimension": dim_s,
+                        "dimension_key": dim_key_s,
+                        "kpi_key": str(kpi_key),
+                        "mode": floor_mode,
+                        "baseline": baseline_val,
+                        "target": target_val,
+                        "effective_floor": floor_val,
+                    })
 
                     # Build linear expression for this slice and KPI
                     terms = []
@@ -729,8 +881,14 @@ class OrtoolsCpSatSolverAdapter:
                 "floors_total": target_floors_total,
                 "floors_applied": target_floors_applied,
                 "floors_skipped_trivial": target_floors_skipped,
+                "floors_already_satisfied": target_floors_already_satisfied,
                 "floors_invalid": target_floors_invalid,
                 "floors_empty_slice": target_floors_empty_slice,
+                "floor_modes": {
+                    "incremental": sum(1 for d in target_floor_details if d.get("mode") == "incremental"),
+                    "gap_based": sum(1 for d in target_floor_details if d.get("mode") == "gap_based"),
+                    "already_satisfied": target_floors_already_satisfied,
+                },
                 "kpi_scale": KPI_SCALE,
             },
         )
@@ -819,6 +977,7 @@ class OrtoolsCpSatSolverAdapter:
             scale_source_map: Dict[str, str] = {}
             scale_targets_count: Dict[str, int] = {}
             filtered_weights: Dict[str, float] = {}  # Track filtered weights for weights_sum
+            already_satisfied_kpis: list[str] = []  # KPIs where baseline >= target
             
             for kpi_key, w in weights.items():
                 try:
@@ -828,9 +987,21 @@ class OrtoolsCpSatSolverAdapter:
                 if w_f <= 0:
                     continue
                 
-                filtered_weights[str(kpi_key)] = w_f
+                scale, source, count, already_satisfied = _resolve_kpi_scale_from_targets_any(targets, str(kpi_key))
                 
-                scale, source, count = _resolve_kpi_scale_from_targets_any(targets, str(kpi_key))
+                if already_satisfied:
+                    # POLICY: KPI is already satisfied (baseline >= target)
+                    # Exclude from weighted objective - contributions don't help close a gap
+                    already_satisfied_kpis.append(str(kpi_key))
+                    scale_source_map[str(kpi_key)] = source
+                    kpi_scale_map[str(kpi_key)] = 0.0  # Mark as excluded
+                    logger.info(
+                        "KPI excluded from weighted objective (already satisfied: baseline >= target)",
+                        extra={"kpi_key": str(kpi_key), "source": source}
+                    )
+                    continue  # Don't add to filtered_weights
+                
+                filtered_weights[str(kpi_key)] = w_f
                 kpi_scale_map[str(kpi_key)] = scale
                 scale_source_map[str(kpi_key)] = source
                 scale_targets_count[str(kpi_key)] = count
@@ -888,13 +1059,36 @@ class OrtoolsCpSatSolverAdapter:
             weights_sum = sum(filtered_weights.values())
             nonzero_coeff_candidates = len(problem.candidates) - zero_coeff_count
             
+            # Compute normalization mode breakdown for diagnostics
+            norm_modes = {
+                "incremental": sum(1 for s in scale_source_map.values() if s in ("all/all", "max_of_targets")),
+                "gap_based": sum(1 for s in scale_source_map.values() if s in ("all/all_gap", "max_of_gaps")),
+                "already_satisfied": len(already_satisfied_kpis),
+                "fallback": len(missing_scales),
+            }
+            
+            # Check for degenerate objective (all KPIs already satisfied)
+            objective_degenerate = len(filtered_weights) == 0 and len(already_satisfied_kpis) > 0
+            if objective_degenerate:
+                logger.warning(
+                    "Weighted objective degenerated to feasibility-only: all KPIs already satisfied",
+                    extra={
+                        "requested_kpis": list(weights.keys()),
+                        "already_satisfied_kpis": already_satisfied_kpis,
+                    }
+                )
+            
             logger.info(
                 "Step 8.2 objective: maximize weighted_kpis",
                 extra={
                     "weights_count": len(weights),
                     "weights_sum": weights_sum,
                     "kpi_keys": list(weights.keys()),
+                    "effective_kpis": list(filtered_weights.keys()),
+                    "already_satisfied_kpis": already_satisfied_kpis,
+                    "objective_degenerate_to_feasibility_only": objective_degenerate,
                     "missing_scales": missing_scales[:10],
+                    "normalization_modes": norm_modes,
                     "zero_coeff_candidates": zero_coeff_count,
                     "nonzero_coeff_candidates": nonzero_coeff_candidates,
                     "total_candidates": len(problem.candidates),
@@ -905,9 +1099,13 @@ class OrtoolsCpSatSolverAdapter:
             objective_diag.update({
                 "weights": weights,
                 "weights_sum": weights_sum,
+                "effective_kpis": list(filtered_weights.keys()),
+                "already_satisfied_kpis": already_satisfied_kpis,
+                "objective_degenerate_to_feasibility_only": objective_degenerate,
                 "kpi_scale_map": kpi_scale_map,
                 "scale_source_map": scale_source_map,
                 "scale_targets_count": scale_targets_count,
+                "normalization_modes": norm_modes,
                 "missing_target_scales": missing_scales,
                 "zero_coeff_candidates": zero_coeff_count,
                 "nonzero_coeff_candidates": nonzero_coeff_candidates,

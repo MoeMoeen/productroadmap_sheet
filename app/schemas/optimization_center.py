@@ -362,6 +362,7 @@ class TargetRowSchema(BaseModel):
     dimension: "TargetDimension" = "country"
     dimension_key: str
     kpi_key: str
+    baseline_value: Optional[float] = None  # Current/starting KPI value (if provided, target_value is absolute)
     target_value: Optional[float] = None
     floor_or_goal: Optional[str] = None
     notes: Optional[str] = None
@@ -389,6 +390,21 @@ class TargetRowSchema(BaseModel):
             return "all"
         return str(v).strip().lower()
 
+    @field_validator("baseline_value", mode="before")
+    @classmethod
+    def baseline_to_float(cls, v):
+        """Parse baseline_value - must be numeric if provided.
+        
+        Note: Negative baselines are allowed for KPIs that can be negative
+        (e.g., profit/loss, NPS, net cash flow, contribution margins).
+        """
+        if v is None or v == "":
+            return None
+        try:
+            return float(v)
+        except Exception as e:  # noqa: BLE001
+            raise ValueError(f"baseline_value must be a valid number, got: {v}") from e
+
     @model_validator(mode="after")
     def require_value_and_goal(self):
         if self.target_value is None:
@@ -401,6 +417,12 @@ class TargetRowSchema(BaseModel):
             self.dimension_key = "all"
         return self
 
+    # NOTE: baseline >= target is allowed at schema level.
+    # The solver treats this as "already satisfied" and:
+    # - Skips target floor constraints (gap <= 0 means no floor needed)
+    # - Excludes KPI from weighted objective (no gap to close)
+    # This is more flexible than rejecting at validation time.
+
     @field_validator("target_value", mode="before")
     @classmethod
     def to_float(cls, v):
@@ -411,14 +433,9 @@ class TargetRowSchema(BaseModel):
         except Exception as e:  # noqa: BLE001
             raise ValueError(f"invalid number: {v}") from e
 
-    @field_validator("target_value")
-    @classmethod
-    def non_negative(cls, v):
-        if v is None:
-            return None
-        if v < 0:
-            raise ValueError("target_value must be >= 0")
-        return v
+    # NOTE: Negative target_value is allowed for signed KPIs
+    # (e.g., profit/loss targets, NPS goals, contribution margins).
+    # Example: baseline=-50000 (loss), target=100000 (profit goal) → gap=150000
 
     @field_validator("floor_or_goal")
     @classmethod
@@ -476,6 +493,7 @@ class TargetConstraint(BaseModel):
     dimension_key: str
     kpi_key: str
     floor_or_goal: str
+    baseline_value: Optional[float] = None  # If provided, target_value is absolute; effective floor = target - baseline
     target_value: float
     notes: Optional[str] = None
 

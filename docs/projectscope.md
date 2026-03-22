@@ -277,7 +277,7 @@ Phase 5 foundational work has begun:
   - Removed Initiative-level constraint columns: `is_mandatory`, `mandate_reason`, `bundle_key`, `prerequisite_keys`, `exclusion_keys`, `synergy_group_keys`
   - Migration r20260119_drop_init_constr applied (breaking change - no backward compatibility)
   - Editable fields on Candidates shrunk to: `engineering_tokens`, `deadline_date`, `notes`, `is_selected_for_run`
-* **Multi-Dimensional Targets**: Nested 3-level structure `{dimension: {dimension_key: {kpi_key: {type, value, notes?}}}}` supporting country, product, cross-sectional, and global targets
+* **Multi-Dimensional Targets**: Nested 3-level structure `{dimension: {dimension_key: {kpi_key: {type, value, baseline?, notes?}}}}` supporting country, product, cross-sectional, and global targets. Baseline support enables absolute targets: when `baseline` is provided, `value` is absolute and solver computes effective floor = value - baseline.
 * **Sheet Readers/Writers**: Optimization Center tabs (Scenario_Config, Constraints, Targets) with header alias support and composite key scoping
 * **Constraint Compiler**: Pure compilation service (validates, normalizes, buckets, deduplicates sheet rows into JSON constraint set)
 * **Documentation**: Complete JSON shapes, PM guidance, glossary, implementation roadmap, status check-in
@@ -4053,7 +4053,7 @@ app/
   - *Doc*: Read Scenario_Config tab and upsert OptimizationScenario rows.
 - **Function `_capacity_to_json(items: Sequence[CapacityFloor | CapacityCap], value_attr: str) -> Dict[(str, Dict[(str, float)])]`**
 - **Function `_targets_to_json(targets: List[TargetConstraint]) -> Dict[(str, Dict[(str, Dict[(str, Any)])])]`**
-  - *Doc*: Convert targets to JSON structure: {dimension: {dimension_key: {kpi_key: {type, value, notes?}}}}
+  - *Doc*: Convert targets to JSON structure: {dimension: {dimension_key: {kpi_key: {type, value, baseline?, notes?}}}}. When baseline is provided, target is absolute and solver computes effective_floor = value - baseline.
 - **Function `sync_constraint_sets_from_sheets(sheets_client: SheetsClient, spreadsheet_id: str, constraints_tab: str, targets_tab: str, session: Optional[Session]) -> Tuple[(List[OptimizationConstraintSet], List[ValidationMessage])]`**
   - *Doc*: Read constraints/targets tabs, compile, and upsert OptimizationConstraintSet rows.
 - **Function `sync_candidates_from_sheet(sheets_client: SheetsClient, spreadsheet_id: str, candidates_tab: str, initiative_keys: Optional[List[str]], commit_every: int, session: Optional[Session]) -> Dict[(str, Any)]`**

@@ -172,18 +172,27 @@ def _capacity_to_json(items: Sequence[CapacityFloor | CapacityCap], value_attr: 
 
 
 def _targets_to_json(targets: List[TargetConstraint]) -> Dict[str, Dict[str, Dict[str, Any]]]:
-    """Convert targets to JSON structure: {dimension: {dimension_key: {kpi_key: {type, value, notes?}}}}"""
+    """Convert targets to JSON structure: {dimension: {dimension_key: {kpi_key: {type, value, baseline?, notes?}}}}
+    
+    When baseline is provided:
+    - target_value is interpreted as absolute target
+    - Solver computes effective_floor = target_value - baseline
+    - Normalization uses gap (target_value - baseline) instead of target_value
+    """
     data: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for tgt in targets:
         dimension = str(tgt.dimension)
         dimension_key = str(tgt.dimension_key)
         kpi = str(tgt.kpi_key)
-        data.setdefault(dimension, {}).setdefault(dimension_key, {})[kpi] = {
+        entry: Dict[str, Any] = {
             "type": tgt.floor_or_goal,
             "value": tgt.target_value
         }
+        if tgt.baseline_value is not None:
+            entry["baseline"] = tgt.baseline_value
         if tgt.notes:
-            data[dimension][dimension_key][kpi]["notes"] = tgt.notes
+            entry["notes"] = tgt.notes
+        data.setdefault(dimension, {}).setdefault(dimension_key, {})[kpi] = entry
     return data
 
 

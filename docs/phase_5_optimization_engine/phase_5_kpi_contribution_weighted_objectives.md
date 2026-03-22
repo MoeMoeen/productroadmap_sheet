@@ -349,3 +349,137 @@ initiative impact (c_i,k)  ×  scenario preference (w_k)
 
 ---
 
+## 🔟 Baseline Normalization & Gap-Based Objectives (Phase 5.1)
+
+### The Problem: Absolute vs Incremental Targets
+
+KPI contributions in `kpi_contribution_json` are **incremental** (delta impact).
+
+But business targets in the Targets tab are often **absolute** (final state to reach):
+
+* "Reach GMV = £10M" vs "Add £500K GMV"
+* "Retention = 85%" vs "Improve retention by +2pp"
+
+Without baseline context, the optimizer can't distinguish these cases.
+
+---
+
+### Solution: Baseline Values on Targets
+
+The **Targets** tab now supports an optional `Baseline Value` column.
+
+```
+| Dimension | Dimension Key | KPI Key | Target Type | Value | Baseline Value |
+|-----------|---------------|---------|-------------|-------|----------------|
+| all       | all           | gmv     | >=          | 10000000 | 9500000     |
+| all       | all           | retention_30d | >= | 0.85 | 0.82 |
+```
+
+**Gap calculation:**
+```
+effective_gap = target_value - baseline_value
+```
+
+For GMV: £10M - £9.5M = £500K gap to close
+
+---
+
+### Objective Mode Policies (Production)
+
+#### NORTH_STAR Mode
+
+* **Policy:** Maximize raw contribution to single KPI
+* **Formula:** `max(sum(contrib_i * x_i))`
+* **Normalization:** None (raw values)
+* **Baseline effect on objective:** None (contributions are incremental deltas)
+* **Baseline effect on feasibility:** Baselines can still affect feasibility
+  indirectly through target-floor constraints (Step 7) on the same KPI
+
+#### WEIGHTED_KPIS Mode
+
+* **Policy:** Maximize weighted sum of **normalized** contributions
+* **Formula:** `max(sum_k(w_k * sum_i(contrib_i,k / scale_k) * x_i))`
+* **Normalization:** `scale_k` derived from targets with gap-based policy
+
+**Normalization scale resolution (in order):**
+
+1. **Gap-based** (when baseline provided): `scale_k = target - baseline`
+2. **Incremental** (no baseline): `scale_k = target_value`
+3. **Fallback**: `scale_k = 1.0` (warning logged)
+
+**Already-satisfied handling:**
+
+If `baseline >= target` for a KPI:
+* The KPI is **excluded from the weighted objective**
+* Rationale: No gap to close, contributions don't help
+
+---
+
+### Target Floors (Step 7 constraints)
+
+Target floors enforce minimum KPI thresholds as hard constraints.
+
+**Gap-based floor (when baseline provided):**
+```
+effective_floor = max(target - baseline, 0)
+```
+
+**Policy decisions:**
+* If `baseline >= target`: Floor constraint skipped (already satisfied)
+* If baseline is malformed: `model_invalid` returned (no silent fallback)
+
+---
+
+### Diagnostics
+
+The solver logs detailed normalization mode breakdown:
+
+```json
+{
+  "normalization_modes": {
+    "incremental": 2,
+    "gap_based": 3,
+    "already_satisfied": 1,
+    "fallback": 0
+  },
+  "already_satisfied_kpis": ["kpi_x"],
+  "effective_kpis": ["kpi_a", "kpi_b", "kpi_c", "kpi_d", "kpi_e"],
+  "objective_degenerate_to_feasibility_only": false
+}
+```
+
+This provides visibility into how each KPI is treated in the objective function.
+
+**Degenerate objective warning:** If all weighted KPIs are already satisfied,
+`objective_degenerate_to_feasibility_only: true` is logged and the optimization
+effectively becomes a feasibility check (any valid portfolio is equally good).
+
+---
+
+### Best Practices
+
+1. **Use baselines when targets are absolute business goals**
+   - "Reach £10M GMV" → set baseline to current GMV
+
+2. **Omit baselines when targets are incremental**
+   - "Add £500K GMV" → no baseline needed
+
+3. **Negative baselines are allowed for signed KPIs**
+   - Profit/loss margins, NPS, net cash flow can have negative baselines
+   - Example: `baseline = -50000` (loss), `target = 100000` (profit goal)
+
+4. **Negative targets are also allowed**
+   - For signed KPIs with negative goals (e.g., "reduce loss to -10K")
+   - Gap = target - baseline works correctly regardless of sign
+
+5. **baseline > target is allowed (already satisfied)**
+   - Schema accepts this; solver treats as "already satisfied"
+   - Target floors are skipped (no constraint needed)
+   - KPI excluded from weighted objective (no gap to close)
+
+6. **Watch for degenerate objectives**
+   - If `objective_degenerate_to_feasibility_only: true`, all KPIs are satisfied
+   - Consider whether targets are set appropriately (too easy?)
+
+---
+

@@ -170,6 +170,7 @@ OPT_TARGETS_HEADER_MAP: Dict[str, List[str]] = {
     "dimension": ["dimension", "Dimension"],
     "dimension_key": ["dimension_key", "Dimension Key", "country", "Country", "market", "Market"],
     "kpi_key": ["kpi_key", "KPI Key"],
+    "baseline_value": ["baseline_value", "Baseline Value", "baseline", "Baseline", "current_value", "Current Value"],
     "target_value": ["target_value", "Target Value"],
     "floor_or_goal": ["floor_or_goal", "Floor Or Goal", "floor_goal"],
     "notes": ["notes", "Notes"],
