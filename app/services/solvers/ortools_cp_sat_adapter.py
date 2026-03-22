@@ -727,6 +727,9 @@ class OrtoolsCpSatSolverAdapter:
                         target_floors_invalid += 1
                         continue
 
+                    # Count this as a valid floor row (before any gap-based filtering)
+                    target_floors_total += 1
+
                     # Compute effective floor with explicit gap policy
                     # Policy: effective_gap = max(target - baseline, 0)
                     # - If baseline not provided: target is already incremental
@@ -795,7 +798,6 @@ class OrtoolsCpSatSolverAdapter:
                         floor_val = target_val  # No baseline → target is already incremental
                         floor_mode = "incremental"
 
-                    target_floors_total += 1
                     target_floor_details.append({
                         "dimension": dim_s,
                         "dimension_key": dim_key_s,
