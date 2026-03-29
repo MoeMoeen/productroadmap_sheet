@@ -441,10 +441,107 @@ def _col_index_to_a1(idx: int) -> str:
     return result
 
 
+def append_initiative_keys_to_scoring_inputs(
+    client: SheetsClient,
+    spreadsheet_id: str,
+    tab_name: str,
+    initiative_keys: List[str],
+) -> int:
+    """Append initiative keys to the end of Scoring_Inputs tab.
+    
+    This helper appends new initiative keys to the sheet, placing them after
+    the last non-empty row. Only writes the initiative_key column.
+    
+    Uses robust row detection:
+    - Reads full initiative_key column data
+    - Finds last non-empty cell (handles gaps/deleted rows)
+    - Appends after that position
+    
+    Args:
+        client: SheetsClient instance
+        spreadsheet_id: Product Ops spreadsheet ID
+        tab_name: Sheet tab name (should be Scoring_Inputs)
+        initiative_keys: List of initiative keys to append (already normalized/deduplicated)
+        
+    Returns:
+        Number of keys actually written
+        
+    Raises:
+        RuntimeError: if sheet has no header or no initiative_key column
+    """
+    if not initiative_keys:
+        return 0
+    
+    # Read header to find initiative_key column
+    header_values = client.get_values(spreadsheet_id, f"{tab_name}!1:1")
+    if not header_values or not header_values[0]:
+        raise RuntimeError(f"Sheet '{tab_name}' has no header row")
+    
+    headers = header_values[0]
+    norm_headers = [_normalize_header(h) for h in headers]
+    
+    # Find initiative_key column
+    key_col_idx = None
+    for idx, nh in enumerate(norm_headers):
+        if nh == "initiative_key":
+            key_col_idx = idx
+            break
+    
+    if key_col_idx is None:
+        raise RuntimeError(f"Sheet '{tab_name}' has no 'Initiative Key' column")
+    
+    # Read the entire initiative_key column to find the last non-empty row
+    # This is more robust than using blank-run logic which can fail on sparse sheets
+    _dsr = data_start_row(tab_name)
+    key_col_a1 = _col_index_to_a1(key_col_idx + 1)
+    
+    # Get full column data (Sheets API returns only up to last non-empty cell in range)
+    key_values = client.get_values(spreadsheet_id, f"{tab_name}!{key_col_a1}{_dsr}:{key_col_a1}") or []
+    
+    # Find the actual last row with data by scanning backwards
+    # This handles sparse sheets with gaps
+    last_data_row = _dsr - 1  # Default: no data rows yet
+    for offset, row_cells in enumerate(key_values):
+        cell_val = row_cells[0] if row_cells else None
+        if cell_val is not None and str(cell_val).strip():
+            last_data_row = _dsr + offset  # This row has data
+    
+    # Append after the last data row
+    next_row = last_data_row + 1
+    
+    logger.info(
+        "productops_writer.append.start",
+        extra={"tab": tab_name, "count": len(initiative_keys), "start_row": next_row}
+    )
+    
+    # Build batch updates
+    updates = []
+    for idx, key in enumerate(initiative_keys):
+        row_num = next_row + idx
+        cell_range = f"{tab_name}!{key_col_a1}{row_num}"
+        updates.append({
+            "range": cell_range,
+            "values": [[key]]
+        })
+    
+    # Write in batches
+    for i in range(0, len(updates), _BATCH_UPDATE_CHUNK_SIZE):
+        chunk = updates[i:i + _BATCH_UPDATE_CHUNK_SIZE]
+        client.batch_update_values(spreadsheet_id, chunk)
+    
+    logger.info(
+        "productops_writer.append.done",
+        extra={"tab": tab_name, "written": len(initiative_keys)}
+    )
+    
+    return len(initiative_keys)
+
+
 __all__ = [
     "write_scores_to_productops_sheet",
     "write_status_to_productops_sheet",
     "write_status_to_sheet",
+    "append_initiative_keys_to_scoring_inputs",
     "PRODUCTOPS_SCORE_OUTPUT_COLUMNS",
     "SCORE_FIELD_TO_HEADERS",
 ]

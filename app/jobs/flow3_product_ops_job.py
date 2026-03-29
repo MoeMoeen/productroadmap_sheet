@@ -215,6 +215,7 @@ def run_flow3_sync_inputs_to_initiatives(
 def run_flow3_write_scores_to_sheet(
     db: Session,
     *,
+    client: Optional[SheetsClient] = None,
     spreadsheet_id: Optional[str] = None,
     tab_name: Optional[str] = None,
     initiative_keys: Optional[List[str]] = None,
@@ -239,8 +240,11 @@ def run_flow3_write_scores_to_sheet(
 
     Args:
         db: Database session
+        client: Optional SheetsClient (if None, creates a new one)
         spreadsheet_id: Override Product Ops spreadsheet ID
         tab_name: Override Scoring_Inputs tab name
+        initiative_keys: Optional filter for specific initiatives
+        warnings_by_key: Optional warnings to include in status column
 
     Returns:
         Number of initiatives with scores written to sheet
@@ -250,8 +254,10 @@ def run_flow3_write_scores_to_sheet(
     if not sheet_id:
         raise ValueError("PRODUCT_OPS is not configured and no spreadsheet_id override was provided.")
 
-    service = get_sheets_service()
-    client = SheetsClient(service)
+    # Use provided client or create new one (backwards compatible)
+    if client is None:
+        service = get_sheets_service()
+        client = SheetsClient(service)
 
     try:
         count = write_scores_to_productops_sheet(
@@ -267,3 +273,165 @@ def run_flow3_write_scores_to_sheet(
     except Exception:
         logger.exception("flow3.write_scores.failed")
         raise
+
+
+def run_flow3_populate_initiatives(
+    db: Session,
+    *,
+    client: SheetsClient,
+    spreadsheet_id: str,
+    tab_name: str,
+) -> Dict[str, int]:
+    """Populate Scoring_Inputs tab with optimization candidate initiatives from DB.
+    
+    Production-grade implementation that:
+    1. Uses ScoringInputsReader abstraction (handles header parsing, sparse sheets)
+    2. Normalizes initiative keys for robust matching (INIT-4 == INIT-0004)
+    3. Uses dedicated writer helper for appending
+    4. Accepts sheets_client from caller (no redundant client creation)
+    
+    This enables the PM workflow:
+    1. Mark initiatives as optimization candidates in Central Backlog
+    2. Run "Populate Initiatives" action to bring them into Scoring_Inputs
+    3. Edit framework parameters (rice_reach, wsjf_business_value, etc.) as needed
+    4. Run "Score Selected" to compute and write back scores
+    
+    Args:
+        db: Database session
+        client: SheetsClient instance (passed from action context)
+        spreadsheet_id: Product Ops spreadsheet ID
+        tab_name: Scoring_Inputs tab name (must match configured tab)
+        
+    Returns:
+        Dict with counts: {total_candidates, existing_in_sheet, newly_added}
+        
+    Raises:
+        RuntimeError: On sheet read/write failures
+    """
+    from app.services.optimization.optimization_compiler import normalize_initiative_key
+    from app.sheets.productops_writer import append_initiative_keys_to_scoring_inputs
+    
+    # Step 1: Query optimization candidates from DB
+    candidates = db.query(Initiative).filter(
+        Initiative.is_optimization_candidate.is_(True)
+    ).order_by(Initiative.initiative_key).all()
+    
+    total_candidates = len(candidates)
+    
+    logger.info("flow3.populate.candidates_found", extra={"count": total_candidates})
+    
+    if not candidates:
+        return {"total_candidates": 0, "existing_in_sheet": 0, "newly_added": 0, "db_collisions": 0, "sheet_collisions": 0}
+    
+    # Normalize DB keys for robust matching
+    # This handles variants like INIT-4, INIT-0004, init_4, etc.
+    candidate_keys_raw: list[str] = [str(ini.initiative_key) for ini in candidates]
+    candidate_keys_raw = [k for k in candidate_keys_raw if k]  # Filter empty strings
+    
+    # Duplicate detection: warn if multiple DB keys collapse to the same normalized key
+    candidate_keys_normalized: dict[str, str] = {}
+    db_collisions = 0
+    for raw_key in candidate_keys_raw:
+        norm_key = normalize_initiative_key(raw_key)
+        if norm_key in candidate_keys_normalized:
+            existing_raw = candidate_keys_normalized[norm_key]
+            db_collisions += 1
+            logger.warning(
+                "flow3.populate.db_duplicate_collision",
+                extra={
+                    "normalized_key": norm_key,
+                    "existing_raw": existing_raw,
+                    "new_raw": raw_key,
+                    "kept": existing_raw,  # first-wins
+                }
+            )
+        else:
+            candidate_keys_normalized[norm_key] = raw_key
+    
+    # Step 2: Read existing keys from Scoring_Inputs using the reader abstraction
+    # ScoringInputsReader already handles:
+    # - Header parsing with aliases
+    # - Sparse sheet handling (skips empty rows gracefully)
+    # - Proper column detection
+    reader = ScoringInputsReader(client=client, spreadsheet_id=spreadsheet_id, tab_name=tab_name)
+    existing_rows = reader.read()
+    
+    # Normalize existing keys for comparison (with duplicate detection)
+    existing_keys_normalized: dict[str, str] = {}
+    sheet_collisions = 0
+    for row in existing_rows:
+        if not row.initiative_key:
+            continue
+        norm_key = normalize_initiative_key(row.initiative_key)
+        if norm_key in existing_keys_normalized:
+            existing_raw = existing_keys_normalized[norm_key]
+            sheet_collisions += 1
+            logger.warning(
+                "flow3.populate.sheet_duplicate_collision",
+                extra={
+                    "normalized_key": norm_key,
+                    "existing_raw": existing_raw,
+                    "new_raw": row.initiative_key,
+                    "kept": existing_raw,  # first-wins
+                }
+            )
+        else:
+            existing_keys_normalized[norm_key] = row.initiative_key
+    
+    logger.info("flow3.populate.existing_keys", extra={"count": len(existing_keys_normalized)})
+    
+    # Step 3: Find new keys to add (compare normalized forms)
+    new_normalized_keys = set(candidate_keys_normalized.keys()) - set(existing_keys_normalized.keys())
+    
+    if not new_normalized_keys:
+        logger.info("flow3.populate.no_new_keys")
+        # Count matches using normalized comparison
+        matches = len(set(candidate_keys_normalized.keys()) & set(existing_keys_normalized.keys()))
+        return {
+            "total_candidates": total_candidates,
+            "existing_in_sheet": matches,
+            "newly_added": 0,
+            "db_collisions": db_collisions,
+            "sheet_collisions": sheet_collisions,
+        }
+    
+    # Map back to original (canonical) keys for writing
+    # Use the DB's canonical form (from candidate_keys_normalized mapping)
+    new_keys_to_write = sorted([
+        candidate_keys_normalized[nk] 
+        for nk in new_normalized_keys 
+        if nk in candidate_keys_normalized
+    ])
+    
+    # Step 4: Append new keys using the writer helper
+    # This handles:
+    # - Finding the correct append position (robust to gaps)
+    # - Batch writing for efficiency
+    written = append_initiative_keys_to_scoring_inputs(
+        client=client,
+        spreadsheet_id=spreadsheet_id,
+        tab_name=tab_name,
+        initiative_keys=new_keys_to_write,
+    )
+    
+    # Count matches for the response
+    matches = len(set(candidate_keys_normalized.keys()) & set(existing_keys_normalized.keys()))
+    
+    logger.info(
+        "flow3.populate.done",
+        extra={
+            "total_candidates": total_candidates,
+            "existing": matches,
+            "newly_added": written,
+            "db_collisions": db_collisions,
+            "sheet_collisions": sheet_collisions,
+        }
+    )
+    
+    return {
+        "total_candidates": total_candidates,
+        "existing_in_sheet": matches,
+        "newly_added": written,
+        "db_collisions": db_collisions,
+        "sheet_collisions": sheet_collisions,
+    }

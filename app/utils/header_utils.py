@@ -1,6 +1,19 @@
+# productroadmap_sheet_project/app/utils/header_utils.py
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional
+
+
+def normalize_tab_name(name: str) -> str:
+    """Normalize tab name for robust comparison.
+    
+    Handles case, spaces, underscores, hyphens:
+    - "Scoring_Inputs" → "scoring_inputs"
+    - "scoring inputs" → "scoring_inputs"
+    - "scoring-inputs" → "scoring_inputs"
+    - "  Scoring_Inputs  " → "scoring_inputs"
+    """
+    return name.strip().lower().replace(" ", "_").replace("-", "_")
 
 
 def normalize_header(name: str) -> str:
@@ -64,4 +77,4 @@ def get_value_by_header_alias(
     return None
 
 
-__all__ = ["normalize_header", "resolve_indices", "get_value_by_header_alias"]
+__all__ = ["normalize_tab_name", "normalize_header", "resolve_indices", "get_value_by_header_alias"]

@@ -422,6 +422,91 @@ function uiSaveSelected() {
   }
 }
 
+
+// ui_populate_initiatives.gs
+// UI handler for PM Job: pm.populate_initiatives
+// Tab: Scoring_Inputs
+
+/**
+ * PM Job: Populate Scoring_Inputs with optimization candidate initiatives from DB
+ * Tab: Scoring_Inputs
+ * Action: pm.populate_initiatives
+ *
+ * Workflow:
+ * 1) PM marks initiatives as optimization candidates in Central Backlog
+ * 2) PM goes to Scoring_Inputs tab and runs "Populate Initiatives"
+ * 3) Backend queries DB for is_optimization_candidate=True initiatives
+ * 4) Backend appends new initiative keys to Scoring_Inputs (doesn't overwrite existing)
+ * 5) PM can then edit framework parameters and run "Score Selected"
+ *
+ * This action doesn't require a selection - it operates on all optimization candidates.
+ */
+function uiPopulateInitiatives() {
+  const ss = SpreadsheetApp.getActive();
+  const sheet = ss.getActiveSheet();
+  const tabName = sheet.getName();
+  const spreadsheetId = ss.getId();
+
+  // Confirm with user
+  const ui = SpreadsheetApp.getUi();
+  const resp = ui.alert(
+    "Populate Initiatives",
+    "This will add all optimization candidate initiatives from the database to this sheet.\n\n" +
+      "Only new initiatives will be added - existing ones won't be duplicated.\n\n" +
+      "Continue?",
+    ui.ButtonSet.YES_NO
+  );
+  
+  if (resp !== ui.Button.YES) return;
+
+  ss.toast("Fetching optimization candidates from database...", "Roadmap AI", -1);
+
+  const payload = {
+    sheet_context: {
+      spreadsheet_id: spreadsheetId,
+      tab: tabName,
+    },
+    scope: {},  // No scope needed - operates on all is_optimization_candidate=True
+    options: {},
+    requested_by: {
+      ui: "apps_script",
+    },
+  };
+
+  try {
+    const started = postActionRun("pm.populate_initiatives", payload);
+    ss.toast(`Queued: ${started.run_id}`, "Roadmap AI", 5);
+    
+    const done = pollRunUntilDone(started.run_id, 60, 1000);
+    
+    // Show detailed result
+    if (String(done?.status || "").toLowerCase() === "success") {
+      const result = done.result || {};
+      const total = result.total_candidates || 0;
+      const existing = result.existing_in_sheet || 0;
+      const added = result.newly_added || 0;
+      
+      ss.toast(
+        `✅ Population complete!\n\n` +
+        `Total candidates: ${total}\n` +
+        `Already in sheet: ${existing}\n` +
+        `Newly added: ${added}`,
+        "Roadmap AI",
+        8
+      );
+    } else {
+      showRunToast_(done, "Populate Initiatives");
+    }
+  } catch (e) {
+    ss.toast(
+      "Failed to populate initiatives:\n" + (e && e.message ? e.message : e),
+      "Roadmap AI ❌",
+      8
+    );
+  }
+}
+
+
 /**
  * ui_mathmodels.gs
  * UI handlers for MathModels tab:

@@ -23,7 +23,7 @@ from app.services.product_ops.scoring_service import ScoringService
 from app.jobs.backlog_sync_job import run_all_backlog_sync
 from app.jobs.backlog_update_job import run_backlog_update
 from app.jobs.flow1_full_sync_job import run_flow1_full_sync
-from app.jobs.flow3_product_ops_job import run_flow3_write_scores_to_sheet, run_flow3_sync_inputs_to_initiatives
+from app.jobs.flow3_product_ops_job import run_flow3_write_scores_to_sheet, run_flow3_sync_inputs_to_initiatives, run_flow3_populate_initiatives
 from app.jobs.flow2_scoring_activation_job import run_scoring_batch
 from app.jobs.sync_intake_job import run_sync_all_intake_sheets
 
@@ -304,6 +304,16 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         summary["success"] = ok_count
         summary["skipped"] = skipped_no_key + skipped_count
         summary["failed"] = failed_count
+
+    elif action == "pm.populate_initiatives":
+        # Total = all optimization candidates in DB
+        # Success = newly added to sheet
+        # Skipped = already existed in sheet
+        # Failed = failed_count (if any)
+        summary["total"] = result.get("total_candidates", 0)
+        summary["success"] = result.get("newly_added", 0)
+        summary["skipped"] = result.get("existing_in_sheet", 0)
+        summary["failed"] = result.get("failed_count", 0)
     
     # PM optimization jobs (Flow 5)
     elif action == "pm.optimize_run_selected_candidates":
@@ -480,7 +490,7 @@ def _action_flow3_write_scores(db: Session, ctx: ActionContext) -> Dict[str, Any
     if not spreadsheet_id:
         raise ValueError("sheet_context.spreadsheet_id missing and PRODUCT_OPS not configured")
 
-    updated = run_flow3_write_scores_to_sheet(db, spreadsheet_id=spreadsheet_id, tab_name=tab)
+    updated = run_flow3_write_scores_to_sheet(db, client=ctx.sheets_client, spreadsheet_id=spreadsheet_id, tab_name=tab)
     return {"updated_initiatives": updated}
 
 
@@ -754,7 +764,7 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
         logger.exception("pm.score_selected.sync_inputs_failed")
         for k in keys:
             status_by_key[k] = "FAILED: sync failed"
-        # Best-effort status write before returning
+        # Best-effort status write before propagating failure
         try:
             from app.sheets.productops_writer import write_status_to_sheet
             write_status_to_sheet(
@@ -765,18 +775,7 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
             )
         except Exception:
             logger.warning("pm.score_selected.status_write_failed_on_sync_error")
-        return {
-            "pm_job": "pm.score_selected",
-            "selected_count": len(keys),
-            "updated_inputs": 0,
-            "computed": 0,
-            "written": 0,
-            "skipped_no_key": skipped_no_key,
-            "failed_count": len(keys),
-            "substeps": [
-                {"step": "flow3.sync_inputs", "status": "failed", "error": str(e)[:50]},
-            ],
-        }
+        raise RuntimeError(f"pm.score_selected sync_inputs failed: {str(e)[:100]}") from e
 
     # 2) Compute all frameworks for selected keys
     svc = ScoringService(db)
@@ -786,7 +785,7 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
         logger.exception("pm.score_selected.compute_failed")
         for k in keys:
             status_by_key[k] = "FAILED: compute failed"
-        # Best-effort status write before returning
+        # Best-effort status write before propagating failure
         try:
             from app.sheets.productops_writer import write_status_to_sheet
             write_status_to_sheet(
@@ -797,24 +796,13 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
             )
         except Exception:
             logger.warning("pm.score_selected.status_write_failed_on_compute_error")
-        return {
-            "pm_job": "pm.score_selected",
-            "selected_count": len(keys),
-            "updated_inputs": updated_inputs,
-            "computed": 0,
-            "written": 0,
-            "skipped_no_key": skipped_no_key,
-            "failed_count": len(keys),
-            "substeps": [
-                {"step": "flow3.sync_inputs", "status": "ok", "count": updated_inputs},
-                {"step": "flow3.compute_selected", "status": "failed", "error": str(e)[:50]},
-            ],
-        }
+        raise RuntimeError(f"pm.score_selected compute failed: {str(e)[:100]}") from e
 
     # 3) Write scores back to sheet for selected keys
     try:
         written = run_flow3_write_scores_to_sheet(
             db=db,
+            client=ctx.sheets_client,
             spreadsheet_id=str(spreadsheet_id),
             tab_name=str(tab),
             initiative_keys=keys,
@@ -824,7 +812,7 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
         logger.exception("pm.score_selected.write_scores_failed")
         for k in keys:
             status_by_key[k] = "FAILED: write failed"
-        # Best-effort status write before returning
+        # Best-effort status write before propagating failure
         try:
             from app.sheets.productops_writer import write_status_to_sheet
             write_status_to_sheet(
@@ -835,21 +823,7 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
             )
         except Exception:
             logger.warning("pm.score_selected.status_write_failed_on_write_error")
-        return {
-            "pm_job": "pm.score_selected",
-            "selected_count": len(keys),
-            "updated_inputs": updated_inputs,
-            "computed": computed,
-            "written": 0,
-            "kpi_contributions_written": 0,
-            "skipped_no_key": skipped_no_key,
-            "failed_count": len(keys),
-            "substeps": [
-                {"step": "flow3.sync_inputs", "status": "ok", "count": updated_inputs},
-                {"step": "flow3.compute_selected", "status": "ok", "count": computed},
-                {"step": "flow3.write_scores", "status": "failed", "error": str(e)[:50]},
-            ],
-        }
+        raise RuntimeError(f"pm.score_selected write_scores failed: {str(e)[:100]}") from e
 
     # 3.5) Write KPI contributions back to KPI_Contributions tab (if exists)
     kpi_contributions_written = 0
@@ -1091,22 +1065,13 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
         for k in keys:
             if status_by_key[k] is None:
                 status_by_key[k] = f"FAILED: {str(e)[:50]}"
-        # Best-effort status write
+        # Best-effort status write before propagating failure
         try:
             from app.sheets.productops_writer import write_status_to_sheet
             write_status_to_sheet(ctx.sheets_client, str(spreadsheet_id), mathmodels_tab, {k: v for k, v in status_by_key.items() if v is not None})
         except Exception:
             logger.warning("pm.suggest_math_model_llm.status_write_failed_on_error")
-        return {
-            "pm_job": "pm.suggest_math_model_llm",
-            "selected_count": len(keys),
-            "suggested_models": 0,
-            "skipped_no_key": skipped_no_key,
-            "ok_count": 0,
-            "skipped_count": 0,
-            "failed_count": len(keys),
-            "substeps": [{"step": "model_suggestion", "status": "failed", "error": str(e)[:50]}],
-        }
+        raise RuntimeError(f"pm.suggest_math_model_llm failed: {str(e)[:100]}") from e
 
     # Write status to MathModels tab
     try:
@@ -1326,21 +1291,13 @@ def _action_pm_seed_math_params(db: Session, ctx: ActionContext) -> Dict[str, An
         for k in keys:
             if status_by_key[k] is None:
                 status_by_key[k] = f"FAILED: {str(e)[:50]}"
-        # Best-effort status write
+        # Best-effort status write before propagating failure
         try:
             from app.sheets.productops_writer import write_status_to_sheet
             write_status_to_sheet(ctx.sheets_client, str(spreadsheet_id), mathmodels_tab, {k: v for k, v in status_by_key.items() if v is not None})
         except Exception:
             logger.warning("pm.seed_math_params.status_write_failed_on_error")
-        return {
-            "pm_job": "pm.seed_math_params",
-            "selected_count": len(keys),
-            "models_processed": 0,
-            "params_seeded": 0,
-            "skipped_no_key": skipped_no_key,
-            "failed_count": len(keys),
-            "substeps": [{"step": "param_seeding", "status": "failed", "error": str(e)[:50]}],
-        }
+        raise RuntimeError(f"pm.seed_math_params failed: {str(e)[:100]}") from e
 
     # Write status to MathModels tab
     try:
@@ -1447,18 +1404,7 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
             logger.exception("pm.switch_framework.backlog_update_failed")
             for k in keys:
                 status_by_key[k] = "FAILED: backlog update failed"
-            return {
-                "pm_job": "pm.switch_framework",
-                "tab": tab,
-                "selected_count": len(keys),
-                "activated": 0,
-                "written": 0,
-                "skipped_no_key": skipped_no_key,
-                "failed_count": len(keys),
-                "substeps": [
-                    {"step": "sync_or_backlog_update", "status": "failed", "error": str(e)[:50]},
-                ],
-            }
+            raise RuntimeError(f"pm.switch_framework backlog_update failed: {str(e)[:100]}") from e
 
         # Step B2: Activate for selected initiatives
         svc = ScoringService(db)
@@ -1468,19 +1414,7 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
             logger.exception("pm.switch_framework.activate_failed")
             for k in keys:
                 status_by_key[k] = "FAILED: activate failed"
-            return {
-                "pm_job": "pm.switch_framework",
-                "tab": tab,
-                "selected_count": len(keys),
-                "activated": 0,
-                "written": 0,
-                "skipped_no_key": skipped_no_key,
-                "failed_count": len(keys),
-                "substeps": [
-                    {"step": "sync_or_backlog_update", "status": "ok"},
-                    {"step": "activate_framework", "status": "failed", "error": str(e)[:50]},
-                ],
-            }
+            raise RuntimeError(f"pm.switch_framework activate failed: {str(e)[:100]}") from e
 
         # Step B3: Sync Central_Backlog view from DB (full sync v1)
         try:
@@ -1489,20 +1423,7 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
             logger.exception("pm.switch_framework.backlog_sync_failed")
             for k in keys:
                 status_by_key[k] = "FAILED: backlog sync failed"
-            return {
-                "pm_job": "pm.switch_framework",
-                "tab": tab,
-                "selected_count": len(keys),
-                "activated": activated,
-                "written": 0,
-                "skipped_no_key": skipped_no_key,
-                "failed_count": len(keys),
-                "substeps": [
-                    {"step": "sync_or_backlog_update", "status": "ok"},
-                    {"step": "activate_framework", "status": "ok", "count": activated},
-                    {"step": "write_or_sync_view", "status": "failed", "error": str(e)[:50]},
-                ],
-            }
+            raise RuntimeError(f"pm.switch_framework backlog_sync failed: {str(e)[:100]}") from e
 
         # All steps succeeded
         for k in keys:
@@ -1546,7 +1467,7 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
             logger.exception("pm.switch_framework.sync_inputs_failed")
             for k in keys:
                 status_by_key[k] = "FAILED: sync failed"
-            # Best-effort status write before returning
+            # Best-effort status write before propagating failure
             try:
                 from app.sheets.productops_writer import write_status_to_sheet
                 write_status_to_sheet(
@@ -1557,18 +1478,7 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
                 )
             except Exception:
                 logger.warning("pm.switch_framework.status_write_failed_on_sync_error")
-            return {
-                "pm_job": "pm.switch_framework",
-                "tab": tab,
-                "selected_count": len(keys),
-                "activated": 0,
-                "written": 0,
-                "skipped_no_key": skipped_no_key,
-                "failed_count": len(keys),
-                "substeps": [
-                    {"step": "sync_or_backlog_update", "status": "failed", "error": str(e)[:50]},
-                ],
-            }
+            raise RuntimeError(f"pm.switch_framework sync_inputs failed: {str(e)[:100]}") from e
 
         # Step A2: Activate for selected initiatives
         svc = ScoringService(db)
@@ -1578,7 +1488,7 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
             logger.exception("pm.switch_framework.activate_failed")
             for k in keys:
                 status_by_key[k] = "FAILED: activate failed"
-            # Best-effort status write before returning
+            # Best-effort status write before propagating failure
             try:
                 from app.sheets.productops_writer import write_status_to_sheet
                 write_status_to_sheet(
@@ -1589,19 +1499,7 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
                 )
             except Exception:
                 logger.warning("pm.switch_framework.status_write_failed_on_activate_error")
-            return {
-                "pm_job": "pm.switch_framework",
-                "tab": tab,
-                "selected_count": len(keys),
-                "activated": 0,
-                "written": 0,
-                "skipped_no_key": skipped_no_key,
-                "failed_count": len(keys),
-                "substeps": [
-                    {"step": "sync_or_backlog_update", "status": "ok", "count": updated_inputs},
-                    {"step": "activate_framework", "status": "failed", "error": str(e)[:50]},
-                ],
-            }
+            raise RuntimeError(f"pm.switch_framework activate failed: {str(e)[:100]}") from e
 
         # Step A3: Write updated scores back to Scoring_Inputs
         try:
@@ -1610,12 +1508,13 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
                 spreadsheet_id=str(spreadsheet_id),
                 tab_name=str(tab),
                 initiative_keys=keys,
+                client=ctx.sheets_client,
             )
         except Exception as e:
             logger.exception("pm.switch_framework.write_scores_failed")
             for k in keys:
                 status_by_key[k] = "FAILED: write failed"
-            # Best-effort status write before returning
+            # Best-effort status write before propagating failure
             try:
                 from app.sheets.productops_writer import write_status_to_sheet
                 write_status_to_sheet(
@@ -1626,20 +1525,7 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
                 )
             except Exception:
                 logger.warning("pm.switch_framework.status_write_failed_on_write_error")
-            return {
-                "pm_job": "pm.switch_framework",
-                "tab": tab,
-                "selected_count": len(keys),
-                "activated": activated,
-                "written": 0,
-                "skipped_no_key": skipped_no_key,
-                "failed_count": len(keys),
-                "substeps": [
-                    {"step": "sync_or_backlog_update", "status": "ok", "count": updated_inputs},
-                    {"step": "activate_framework", "status": "ok", "count": activated},
-                    {"step": "write_or_sync_view", "status": "failed", "error": str(e)[:50]},
-                ],
-            }
+            raise RuntimeError(f"pm.switch_framework write_scores failed: {str(e)[:100]}") from e
 
         # All steps succeeded
         for k in keys:
@@ -1762,17 +1648,7 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
             row_count = int(result.get("row_count", 0))
         except Exception as e:
             logger.exception("pm.save_selected.metrics_config_sync_failed")
-            return {
-                "pm_job": "pm.save_selected",
-                "tab": tab,
-                "selected_count": len(metrics_kpi_keys),
-                "saved_count": 0,
-                "skipped_no_key": skipped_no_key,
-                "failed_count": len(metrics_kpi_keys) or 1,
-                "substeps": [
-                    {"step": "save", "status": "failed", "error": str(e)[:50]},
-                ],
-            }
+            raise RuntimeError(f"pm.save_selected metrics_config_sync failed: {str(e)[:100]}") from e
 
         return {
             "pm_job": "pm.save_selected",
@@ -1828,17 +1704,7 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
             logger.exception("pm.save_selected.kpi_contributions_sync_failed")
             for k in keys:
                 status_by_key[k] = "FAILED: save failed"
-            return {
-                "pm_job": "pm.save_selected",
-                "tab": tab,
-                "selected_count": len(keys) if keys else row_count_processed,
-                "saved_count": 0,
-                "skipped_no_key": skipped_no_key,
-                "failed_count": len(keys) or row_count_processed or 1,
-                "substeps": [
-                    {"step": "save", "status": "failed", "error": str(e)[:50]},
-                ],
-            }
+            raise RuntimeError(f"pm.save_selected kpi_contributions_sync failed: {str(e)[:100]}") from e
 
         return {
             "pm_job": "pm.save_selected",
@@ -1880,17 +1746,7 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
                 )
             except Exception:
                 logger.warning("pm.save_selected.status_write_failed_on_mathmodels_error")
-            return {
-                "pm_job": "pm.save_selected",
-                "tab": tab,
-                "selected_count": len(keys),
-                "saved_count": 0,
-                "skipped_no_key": skipped_no_key,
-                "failed_count": len(keys),
-                "substeps": [
-                    {"step": "save", "status": "failed", "error": str(e)[:50]},
-                ],
-            }
+            raise RuntimeError(f"pm.save_selected mathmodels_sync failed: {str(e)[:100]}") from e
 
         for k in keys:
             status_by_key[k] = "OK"
@@ -1944,17 +1800,7 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
                 )
             except Exception:
                 logger.warning("pm.save_selected.status_write_failed_on_params_error")
-            return {
-                "pm_job": "pm.save_selected",
-                "tab": tab,
-                "selected_count": len(keys),
-                "saved_count": 0,
-                "skipped_no_key": skipped_no_key,
-                "failed_count": len(keys),
-                "substeps": [
-                    {"step": "save", "status": "failed", "error": str(e)[:50]},
-                ],
-            }
+            raise RuntimeError(f"pm.save_selected params_sync failed: {str(e)[:100]}") from e
 
         for k in keys:
             status_by_key[k] = "OK"
@@ -2008,17 +1854,7 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
                 )
             except Exception:
                 logger.warning("pm.save_selected.status_write_failed_on_backlog_error")
-            return {
-                "pm_job": "pm.save_selected",
-                "tab": tab,
-                "selected_count": len(keys),
-                "saved_count": 0,
-                "skipped_no_key": skipped_no_key,
-                "failed_count": len(keys),
-                "substeps": [
-                    {"step": "save", "status": "failed", "error": str(e)[:50]},
-                ],
-            }
+            raise RuntimeError(f"pm.save_selected backlog_update failed: {str(e)[:100]}") from e
 
         for k in keys:
             status_by_key[k] = "OK"
@@ -2070,17 +1906,7 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
             )
         except Exception:
             logger.warning("pm.save_selected.status_write_failed_on_inputs_error")
-        return {
-            "pm_job": "pm.save_selected",
-            "tab": tab,
-            "selected_count": len(keys),
-            "saved_count": 0,
-            "skipped_no_key": skipped_no_key,
-            "failed_count": len(keys),
-            "substeps": [
-                {"step": "save", "status": "failed", "error": str(e)[:50]},
-            ],
-        }
+        raise RuntimeError(f"pm.save_selected inputs_sync failed: {str(e)[:100]}") from e
 
     for k in keys:
         status_by_key[k] = "OK"
@@ -2111,6 +1937,91 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
     }
 
     # (No fallback needed; all branches return above)
+
+
+# ---------------------------------------------------------------------------
+# pm.populate_initiatives — Populate  Scoring_Inputs from DB (optimization candidates)
+# ---------------------------------------------------------------------------
+
+def _action_pm_populate_initiatives(db: Session, ctx: ActionContext) -> Dict[str, Any]:
+    """PM Job: Populate Scoring_Inputs tab with optimization candidate initiatives from DB.
+    
+    Workflow:
+      1. PM marks initiatives as optimization candidates in Central Backlog
+      2. PM runs "Populate Initiatives" action on Scoring_Inputs tab
+      3. Backend queries DB for initiatives where is_optimization_candidate=True
+      4. Backend writes new initiative keys to Scoring_Inputs tab (appends, doesn't overwrite existing)
+      5. PM can then edit framework parameters and run "Score Selected"
+    
+    This action only writes the initiative_key column; other columns remain blank for PM input/computation.
+    
+    Payload:
+      - sheet_context: {spreadsheet_id, tab} (defaults to config.PRODUCT_OPS)
+      - options: {} (currently unused, reserved for future filtering options)
+      - scope: {} (currently unused, always operates on all is_optimization_candidate=True)
+    
+    Returns:
+      - total_candidates: Number of initiatives with is_optimization_candidate=True in DB
+      - existing_in_sheet: Number of those already present in Scoring_Inputs
+      - newly_added: Number of new initiatives added to sheet
+    
+    Raises:
+      ValueError: if PRODUCT_OPS not configured or tab mismatch
+      RuntimeError: if job fails (ensures STATUS_FAILED is set by execute_next_queued_run)
+    """
+    sheet_ctx = ctx.payload.get("sheet_context") or {}
+    
+    cfg = settings.PRODUCT_OPS
+    if not cfg:
+        raise ValueError("PRODUCT_OPS not configured")
+    
+    from app.utils.header_utils import normalize_tab_name
+    
+    spreadsheet_id = sheet_ctx.get("spreadsheet_id") or cfg.spreadsheet_id
+    requested_tab = sheet_ctx.get("tab")
+    configured_tab = cfg.scoring_inputs_tab or "Scoring_Inputs"
+    
+    # Tab validation: either use configured tab or validate requested tab matches (normalized)
+    if requested_tab and normalize_tab_name(requested_tab) != normalize_tab_name(configured_tab):
+        raise ValueError(
+            f"Tab mismatch: requested '{requested_tab}' but configured scoring_inputs_tab is '{configured_tab}'. "
+            f"pm.populate_initiatives must target the configured Scoring_Inputs tab."
+        )
+    tab = configured_tab
+    
+    if not spreadsheet_id:
+        raise ValueError("sheet_context.spreadsheet_id missing and PRODUCT_OPS not configured")
+    
+    # Pass the existing sheets_client from context instead of creating a new one
+    result = run_flow3_populate_initiatives(
+        db=db,
+        client=ctx.sheets_client,
+        spreadsheet_id=str(spreadsheet_id),
+        tab_name=str(tab),
+    )
+    
+    logger.info(
+        "pm.populate_initiatives.done",
+        extra={
+            "total_candidates": result["total_candidates"],
+            "existing": result["existing_in_sheet"],
+            "newly_added": result["newly_added"],
+            "db_collisions": result.get("db_collisions", 0),
+            "sheet_collisions": result.get("sheet_collisions", 0),
+        }
+    )
+    return {
+        "pm_job": "pm.populate_initiatives",
+        "tab": tab,
+        "total_candidates": result["total_candidates"],
+        "existing_in_sheet": result["existing_in_sheet"],
+        "newly_added": result["newly_added"],
+        "db_collisions": result.get("db_collisions", 0),
+        "sheet_collisions": result.get("sheet_collisions", 0),
+        "substeps": [
+            {"step": "populate_from_db", "status": "ok", "count": result["newly_added"]},
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -2147,12 +2058,7 @@ def _action_pm_save_optimization(db: Session, ctx: ActionContext) -> Dict[str, A
 
     # Resolve spreadsheet_id / tab names from config
     if not settings.OPTIMIZATION_CENTER:
-        return {
-            "pm_job": "pm.save_optimization",
-            "status": "failed",
-            "error": "Optimization Center sheet not configured",
-            "substeps": [{"step": "config_check", "status": "failed", "reason": "no_config"}],
-        }
+        raise ValueError("Optimization Center sheet not configured for pm.save_optimization")
 
     oc = settings.OPTIMIZATION_CENTER
     spreadsheet_id = sheet_ctx.get("spreadsheet_id") or oc.spreadsheet_id
@@ -2296,9 +2202,14 @@ def _action_pm_save_optimization(db: Session, ctx: ActionContext) -> Dict[str, A
     any_failed = any(s.get("status") == "failed" for s in substeps)
     total_synced = synced_scenarios_count + synced_constraints_count + synced_candidates_count
 
+    # Raise if any substep failed — ensures STATUS_FAILED is set by execute_next_queued_run
+    if any_failed:
+        failed_steps = [s["step"] for s in substeps if s.get("status") == "failed"]
+        raise RuntimeError(f"pm.save_optimization failed substeps: {', '.join(failed_steps)}; errors: {'; '.join(errors[:3])}")
+
     return {
         "pm_job": "pm.save_optimization",
-        "status": "partial" if any_failed else "ok",
+        "status": "ok",
         "tab": active_tab,
         "save_all": save_all,
         "synced_scenarios": synced_scenarios_count,
@@ -2352,15 +2263,7 @@ def _action_pm_populate_candidates(db: Session, ctx: ActionContext) -> Dict[str,
     
     if not scenario_name or not constraint_set_name:
         logger.error("pm.populate_candidates.missing_params")
-        return {
-            "pm_job": "pm.populate_candidates",
-            "tab": tab,
-            "populated_count": 0,
-            "skipped_no_key": 0,
-            "failed_count": 0,
-            "error": "Missing scenario_name or constraint_set_name in options",
-            "substeps": [{"step": "validate", "status": "failed", "reason": "missing_params"}],
-        }
+        raise ValueError("Missing scenario_name or constraint_set_name in options for pm.populate_candidates")
     
     # Extract initiative keys from scope (optional filter)
     keys = scope.get("initiative_keys") or []
@@ -2416,15 +2319,7 @@ def _action_pm_populate_candidates(db: Session, ctx: ActionContext) -> Dict[str,
         
     except Exception as e:
         logger.exception("pm.populate_candidates.failed")
-        return {
-            "pm_job": "pm.populate_candidates",
-            "tab": tab,
-            "populated_count": 0,
-            "skipped_no_key": 0,
-            "failed_count": 0,
-            "error": str(e),
-            "substeps": [{"step": "populate", "status": "failed", "error": str(e)}],
-        }
+        raise RuntimeError(f"pm.populate_candidates failed: {str(e)[:100]}") from e
 
 
 def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext) -> Dict[str, Any]:
@@ -2459,12 +2354,7 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
     
     if not scenario_name or not constraint_set_name:
         logger.error("pm.optimize_run_selected_candidates.missing_params")
-        return {
-            "pm_job": "pm.optimize_run_selected_candidates",
-            "optimization_status": "failed",
-            "error": "Missing scenario_name or constraint_set_name in options",
-            "substeps": [{"step": "validate", "status": "failed", "reason": "missing_params"}],
-        }
+        raise ValueError("Missing scenario_name or constraint_set_name in options for pm.optimize_run_selected_candidates")
     
     # Check if scope.initiative_keys is provided (explicit selection)
     scope = ctx.payload.get("scope") or {}
@@ -2478,21 +2368,11 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
     # This ensures DB has latest data regardless of selection method
     if not settings.OPTIMIZATION_CENTER:
         logger.error("pm.optimize_run_selected_candidates.no_config")
-        return {
-            "pm_job": "pm.optimize_run_selected_candidates",
-            "optimization_status": "failed",
-            "error": "Optimization Center sheet not configured",
-            "substeps": [{"step": "config_check", "status": "failed", "reason": "no_config"}],
-        }
+        raise ValueError("Optimization Center sheet not configured for pm.optimize_run_selected_candidates")
 
     sheets_client = ctx.sheets_client
     if sheets_client is None:
-        return {
-            "pm_job": "pm.optimize_run_selected_candidates",
-            "optimization_status": "failed",
-            "error": "Sheets client not provided",
-            "substeps": [{"step": "config_check", "status": "failed", "reason": "no_sheets_client"}],
-        }
+        raise ValueError("Sheets client not provided for pm.optimize_run_selected_candidates")
     
     try:
         logger.info("pm.optimize_run_selected_candidates.auto_sync_start")
@@ -2544,12 +2424,7 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
         
     except Exception as e:
         logger.exception("pm.optimize_run_selected_candidates.auto_sync_failed")
-        return {
-            "pm_job": "pm.optimize_run_selected_candidates",
-            "optimization_status": "failed",
-            "error": f"Auto-sync failed: {str(e)[:100]}",
-            "substeps": [{"step": "auto_sync", "status": "failed", "error": str(e)[:50]}],
-        }
+        raise RuntimeError(f"pm.optimize_run_selected_candidates auto-sync failed: {str(e)[:100]}") from e
     
     # Now determine selection method: explicit keys or sheet reading
     if explicit_keys and isinstance(explicit_keys, list):
@@ -2562,14 +2437,7 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
         )
     else:
         # Read from Optimization Center sheet (auto-sync already completed above)
-        if not settings.OPTIMIZATION_CENTER:
-            logger.error("pm.optimize_run_selected_candidates.no_config")
-            return {
-                "pm_job": "pm.optimize_run_selected_candidates",
-                "optimization_status": "failed",
-                "error": "Optimization Center sheet not configured",
-                "substeps": [{"step": "read_sheet", "status": "failed", "reason": "no_config"}],
-            }
+        # Note: settings.OPTIMIZATION_CENTER was already validated above
         
         try:
             reader = CandidatesReader(sheets_client)
@@ -2597,12 +2465,7 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
             )
         except Exception as e:
             logger.exception("pm.optimize_run_selected_candidates.sheet_read_failed")
-            return {
-                "pm_job": "pm.optimize_run_selected_candidates",
-                "optimization_status": "failed",
-                "error": f"Failed to read Candidates tab: {str(e)[:100]}",
-                "substeps": [{"step": "read_sheet", "status": "failed", "error": str(e)[:50]}],
-            }
+            raise RuntimeError(f"pm.optimize_run_selected_candidates failed to read Candidates tab: {str(e)[:100]}") from e
     
     if not keys:
         logger.warning("pm.optimize_run_selected_candidates.no_valid_keys")
@@ -2655,15 +2518,7 @@ def _action_pm_optimize_run_selected_candidates(db: Session, ctx: ActionContext)
     
     except Exception as e:
         logger.exception("pm.optimize_run_selected_candidates.failed")
-        return {
-            "pm_job": "pm.optimize_run_selected_candidates",
-            "input_candidates_count": len(keys),
-            "skipped_no_key": 0,
-            "optimization_status": "failed",
-            "selected_initiatives_count": 0,
-            "error": str(e)[:100],
-            "substeps": [{"step": "solve", "status": "failed", "error": str(e)[:50]}],
-        }
+        raise RuntimeError(f"pm.optimize_run_selected_candidates solver failed: {str(e)[:100]}") from e
 
 
 def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> Dict[str, Any]:
@@ -2695,33 +2550,18 @@ def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> D
     
     if not scenario_name or not constraint_set_name:
         logger.error("pm.optimize_run_all_candidates.missing_params")
-        return {
-            "pm_job": "pm.optimize_run_all_candidates",
-            "optimization_status": "failed",
-            "error": "Missing scenario_name or constraint_set_name in options",
-            "substeps": [{"step": "validate", "status": "failed", "reason": "missing_params"}],
-        }
+        raise ValueError("Missing scenario_name or constraint_set_name in options for pm.optimize_run_all_candidates")
     
     # AUTO-SYNC: Sync scenarios and constraints from sheet to DB before optimization
     if not settings.OPTIMIZATION_CENTER:
         logger.error("pm.optimize_run_all_candidates.no_config")
-        return {
-            "pm_job": "pm.optimize_run_all_candidates",
-            "optimization_status": "failed",
-            "error": "Optimization Center sheet not configured",
-            "substeps": [{"step": "config_check", "status": "failed", "reason": "no_config"}],
-        }
+        raise ValueError("Optimization Center sheet not configured for pm.optimize_run_all_candidates")
     
     synced_scenarios = []
     synced_constraints = []
     sheets_client = ctx.sheets_client
     if sheets_client is None:
-        return {
-            "pm_job": "pm.optimize_run_all_candidates",
-            "optimization_status": "failed",
-            "error": "Sheets client not provided",
-            "substeps": [{"step": "config_check", "status": "failed", "reason": "no_sheets_client"}],
-        }
+        raise ValueError("Sheets client not provided for pm.optimize_run_all_candidates")
     
     try:
         logger.info("pm.optimize_run_all_candidates.auto_sync_start")
@@ -2773,12 +2613,7 @@ def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> D
         
     except Exception as e:
         logger.exception("pm.optimize_run_all_candidates.auto_sync_failed")
-        return {
-            "pm_job": "pm.optimize_run_all_candidates",
-            "optimization_status": "failed",
-            "error": f"Auto-sync failed: {str(e)[:100]}",
-            "substeps": [{"step": "auto_sync", "status": "failed", "error": str(e)[:50]}],
-        }
+        raise RuntimeError(f"pm.optimize_run_all_candidates auto-sync failed: {str(e)[:100]}") from e
     
     # Generate run_id (use local helper)
     run_id = _make_run_id()
@@ -2818,14 +2653,7 @@ def _action_pm_optimize_run_all_candidates(db: Session, ctx: ActionContext) -> D
     
     except Exception as e:
         logger.exception("pm.optimize_run_all_candidates.failed")
-        return {
-            "pm_job": "pm.optimize_run_all_candidates",
-            "optimization_status": "failed",
-            "input_candidates_count": 0,
-            "selected_initiatives_count": 0,
-            "error": str(e)[:100],
-            "substeps": [{"step": "solve", "status": "failed", "error": str(e)[:50]}],
-        }
+        raise RuntimeError(f"pm.optimize_run_all_candidates solver failed: {str(e)[:100]}") from e
 
 
 def _serialize_explainer_outputs(ev: Any, rp: Any) -> Dict[str, Any]:
@@ -2907,12 +2735,7 @@ def _action_pm_explain_selection(db: Session, ctx: ActionContext) -> Dict[str, A
     sync_candidates = bool(options.get("sync_candidates_first", False))
     
     if not scenario_name or not constraint_set_name:
-        return {
-            "pm_job": "pm.explain_selection",
-            "status": "failed",
-            "error": "Missing scenario_name or constraint_set_name in options",
-            "substeps": [{"step": "validate", "status": "failed", "reason": "missing_params"}],
-        }
+        raise ValueError("Missing scenario_name or constraint_set_name in options for pm.explain_selection")
 
     scope = ctx.payload.get("scope") or {}
     explicit_keys = scope.get("initiative_keys") or []
@@ -2930,12 +2753,7 @@ def _action_pm_explain_selection(db: Session, ctx: ActionContext) -> Dict[str, A
     candidates_tab = sheet_ctx.get("candidates_tab") or (cfg.candidates_tab if cfg else "Candidates")
     
     if not spreadsheet_id:
-        return {
-            "pm_job": "pm.explain_selection",
-            "status": "failed",
-            "error": "Optimization Center sheet not configured (no spreadsheet_id)",
-            "substeps": [{"step": "config_check", "status": "failed", "reason": "no_config"}],
-        }
+        raise ValueError("Optimization Center sheet not configured (no spreadsheet_id) for pm.explain_selection")
 
     synced_scenarios = []
     synced_constraints = []
@@ -2973,12 +2791,7 @@ def _action_pm_explain_selection(db: Session, ctx: ActionContext) -> Dict[str, A
             )
     except Exception as e:
         logger.exception("pm.explain_selection.auto_sync_failed")
-        return {
-            "pm_job": "pm.explain_selection",
-            "status": "failed",
-            "error": f"Auto-sync failed: {str(e)[:100]}",
-            "substeps": [{"step": "auto_sync", "status": "failed", "error": str(e)[:50]}],
-        }
+        raise RuntimeError(f"pm.explain_selection auto-sync failed: {str(e)[:100]}") from e
 
     # Resolve selection keys
     if explicit_keys and isinstance(explicit_keys, list):
@@ -2995,12 +2808,7 @@ def _action_pm_explain_selection(db: Session, ctx: ActionContext) -> Dict[str, A
             keys = [str(c.initiative_key) for c in candidates if getattr(c, "is_selected_for_run", False) and c.initiative_key]
         except Exception as e:
             logger.exception("pm.explain_selection.read_sheet_failed")
-            return {
-                "pm_job": "pm.explain_selection",
-                "status": "failed",
-                "error": f"Failed to read Candidates tab: {str(e)[:100]}",
-                "substeps": [{"step": "read_sheet", "status": "failed", "error": str(e)[:50]}],
-            }
+            raise RuntimeError(f"pm.explain_selection failed to read Candidates tab: {str(e)[:100]}") from e
     
     # Normalize keys using compiler's canonicalizer (handles INIT-4, INIT_4, init0004, etc.)
     keys = [normalize_initiative_key(k) for k in keys]
@@ -3049,13 +2857,7 @@ def _action_pm_explain_selection(db: Session, ctx: ActionContext) -> Dict[str, A
         }
     except Exception as e:
         logger.exception("pm.explain_selection.failed")
-        return {
-            "pm_job": "pm.explain_selection",
-            "status": "failed",
-            "error": str(e)[:150],
-            "input_candidates_count": len(keys),
-            "substeps": [{"step": "evaluate", "status": "failed", "error": str(e)[:80]}],
-        }
+        raise RuntimeError(f"pm.explain_selection evaluate failed: {str(e)[:150]}") from e
 
 
 def _action_pm_refresh_tab_instructions(db: Session, ctx: ActionContext) -> Dict[str, Any]:
@@ -3075,11 +2877,11 @@ def _action_pm_refresh_tab_instructions(db: Session, ctx: ActionContext) -> Dict
     tab = sheet_ctx.get("tab")
 
     if not sheet_type:
-        return {"pm_job": "pm.refresh_tab_instructions", "status": "failed", "error": "options.sheet_type is required"}
+        raise ValueError("options.sheet_type is required for pm.refresh_tab_instructions")
     if not spreadsheet_id or not tab:
-        return {"pm_job": "pm.refresh_tab_instructions", "status": "failed", "error": "sheet_context.spreadsheet_id and tab are required"}
+        raise ValueError("sheet_context.spreadsheet_id and tab are required for pm.refresh_tab_instructions")
     if ctx.sheets_client is None:
-        return {"pm_job": "pm.refresh_tab_instructions", "status": "failed", "error": "Sheets client not provided"}
+        raise ValueError("Sheets client not provided for pm.refresh_tab_instructions")
 
     ins = get_tab_instructions(sheet_type, tab)
     if not ins:
@@ -3118,11 +2920,11 @@ def _action_pm_refresh_sheet_instructions(db: Session, ctx: ActionContext) -> Di
 
     spreadsheet_id = sheet_ctx.get("spreadsheet_id")
     if not sheet_type:
-        return {"pm_job": "pm.refresh_sheet_instructions", "status": "failed", "error": "options.sheet_type is required"}
+        raise ValueError("options.sheet_type is required for pm.refresh_sheet_instructions")
     if not spreadsheet_id:
-        return {"pm_job": "pm.refresh_sheet_instructions", "status": "failed", "error": "sheet_context.spreadsheet_id is required"}
+        raise ValueError("sheet_context.spreadsheet_id is required for pm.refresh_sheet_instructions")
     if ctx.sheets_client is None:
-        return {"pm_job": "pm.refresh_sheet_instructions", "status": "failed", "error": "Sheets client not provided"}
+        raise ValueError("Sheets client not provided for pm.refresh_sheet_instructions")
 
     written = 0
     errors: List[str] = []
@@ -3145,13 +2947,16 @@ def _action_pm_refresh_sheet_instructions(db: Session, ctx: ActionContext) -> Di
         except Exception as e:
             errors.append(f"{ins.tab_name}: {str(e)[:120]}")
 
-    status = "partial" if errors else "ok"
+    # Raise if any tab write failed — ensures STATUS_FAILED is set by execute_next_queued_run
+    if errors:
+        raise RuntimeError(f"pm.refresh_sheet_instructions failed for {len(errors)} tab(s): {'; '.join(errors[:3])}")
+
     return {
         "pm_job": "pm.refresh_sheet_instructions",
-        "status": status,
+        "status": "ok",
         "sheet_type": sheet_type,
         "written": written,
-        "errors": errors[:10],
+        "errors": [],
     }
 
 
@@ -3184,6 +2989,7 @@ _ACTION_REGISTRY: Dict[str, ActionFn] = {
     "pm.score_selected": _action_pm_score_selected,
     "pm.switch_framework": _action_pm_switch_framework,
     "pm.save_selected": _action_pm_save_selected,
+    "pm.populate_initiatives": _action_pm_populate_initiatives,
     "pm.suggest_math_model_llm": _action_pm_suggest_math_model_llm,
     "pm.seed_math_params": _action_pm_seed_math_params,
     

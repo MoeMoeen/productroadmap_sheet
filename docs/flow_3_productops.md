@@ -834,6 +834,110 @@ Product Ops Sheet (outputs)    Central Backlog Sheet (active scores only)
 
 ---
 
+## 🎉 New Feature: Populate Initiatives from Database
+
+### Overview
+A new PM action `pm.populate_initiatives` enables Product Managers to automatically populate the Scoring_Inputs tab with optimization candidate initiatives from the database.
+
+### Workflow
+1. **Mark candidates in Central Backlog**: PM sets `Is Optimization Candidate = TRUE` for desired initiatives
+2. **Navigate to Scoring_Inputs**: PM opens the Scoring_Inputs tab in Product Ops sheet
+3. **Run action**: PM clicks "Populate Initiatives" from the Roadmap AI menu
+4. **Backend processing**:
+   - Queries all initiatives where `is_optimization_candidate = TRUE`
+   - Reads existing initiative keys from Scoring_Inputs tab using `ScoringInputsReader`
+   - Normalizes keys for robust matching (handles `INIT-4` vs `INIT-0004` variants)
+   - Appends only new initiatives using dedicated writer helper
+   - Writes only the `initiative_key` column; other columns remain blank
+5. **Continue workflow**: PM can now edit framework parameters and run "Score Selected"
+
+### Technical Details
+
+**Backend Components:**
+- **Job function**: `app/jobs/flow3_product_ops_job.py::run_flow3_populate_initiatives()`
+  - Uses `ScoringInputsReader` abstraction for reading existing keys
+  - Uses `normalize_initiative_key()` for robust key comparison (handles `INIT-4`, `INIT_4`, `init0004`)
+  - Uses `append_initiative_keys_to_scoring_inputs()` writer helper
+  - Accepts `SheetsClient` from caller (no redundant client creation)
+- **Action handler**: `app/services/action_runner.py::_action_pm_populate_initiatives()`
+  - Validates tab matches configured `scoring_inputs_tab` (rejects wrong-tab triggers)
+  - Raises exceptions on failure (ensures proper `STATUS_FAILED` in ActionRuns)
+  - Passes existing `ctx.sheets_client` to job
+- **Writer helper**: `app/sheets/productops_writer.py::append_initiative_keys_to_scoring_inputs()`
+  - Robust row detection (handles sparse sheets, gaps)
+  - Batch writes for efficiency
+- **Summary extraction**: `_extract_summary()` includes `pm.populate_initiatives` branch
+  - `total` = total_candidates
+  - `success` = newly_added
+  - `skipped` = existing_in_sheet
+  - `failed` = failed_count
+
+**Frontend (AppScript):**
+- **Function**: `uiPopulateInitiatives()` in `docs/appscripts/productops_appscripts.md`
+- **User confirmation**: Shows dialog before execution
+- **Result display**: Shows count of total candidates, existing, and newly added
+
+**Action Registry:**
+- Registered as `"pm.populate_initiatives"` in action registry
+- Tab: Scoring_Inputs (Product Ops sheet)
+- Scope: Operates on all optimization candidates (no selection required)
+
+### Production-Grade Features
+- **Key normalization**: Uses `normalize_initiative_key()` for robust matching
+  - `INIT-4`, `INIT-0004`, `init_4`, `INIT_4` all match correctly
+  - Prevents duplicates from formatting variance
+- **Tab validation**: Rejects requests targeting wrong tab
+- **Proper error handling**: Raises exceptions on failure → ActionRun status = `failed`
+- **Reader/writer abstractions**: Uses `ScoringInputsReader` and dedicated writer helper
+- **Sparse sheet handling**: Writer scans full column to find last data row (no blank-run cutoff)
+- **Client reuse**: Uses existing `ctx.sheets_client` (consistent with action runner pattern)
+
+### Benefits
+- **Eliminates manual data entry**: No need to copy initiative keys between sheets
+- **Prevents cross-sheet formula brittleness**: Uses programmatic DB→Sheet sync instead of fragile inter-sheet formulas
+- **Supports optimization workflow**: Clean handoff from backlog curation to scoring process
+- **Scalable**: Handles large candidate sets efficiently with batch operations
+- **Robust**: Key normalization prevents duplicates from formatting variance
+
+### Example Usage
+```javascript
+// AppScript menu trigger
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('Roadmap AI')
+    .addItem('Populate Initiatives', 'uiPopulateInitiatives')
+    .addItem('Score Selected', 'uiScoreSelected')
+    .addItem('Save Selected', 'uiSaveSelected')
+    .addToUi();
+}
+```
+
+### Result Format
+```json
+{
+  "pm_job": "pm.populate_initiatives",
+  "tab": "Scoring_Inputs",
+  "total_candidates": 25,
+  "existing_in_sheet": 15,
+  "newly_added": 10,
+  "substeps": [
+    {"step": "populate_from_db", "status": "ok", "count": 10}
+  ]
+}
+```
+
+### UI Summary (via _extract_summary)
+```json
+{
+  "total": 25,
+  "success": 10,
+  "skipped": 15,
+  "failed": 0
+}
+```
+
+---
+
 ## 🐛 Known Issues / Limitations
 
 1. **`---` separator rows in Product Ops sheet**
