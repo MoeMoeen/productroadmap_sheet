@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from app.sheets.backlog_reader import BacklogRow  # type: ignore
+from app.sheets.models import CENTRAL_EDITABLE_FIELDS, CENTRAL_HEADER_TO_FIELD
+from app.utils.header_utils import get_value_by_header_alias
 
 def _to_float(value: Any) -> Optional[float]:
     if value is None:
@@ -37,37 +39,44 @@ def _split_keys(value: Any) -> List[str]:
     return parts
 
 
+FIELD_CONVERTERS = {
+    "title": lambda value: str(value).strip() or None if value is not None else None,
+    "department": lambda value: str(value).strip() or None if value is not None else None,
+    "requesting_team": lambda value: str(value).strip() or None if value is not None else None,
+    "requester_name": lambda value: str(value).strip() or None if value is not None else None,
+    "requester_email": lambda value: str(value).strip() or None if value is not None else None,
+    "country": lambda value: str(value).strip() or None if value is not None else None,
+    "product_area": lambda value: str(value).strip() or None if value is not None else None,
+    "lifecycle_status": lambda value: str(value).strip() or None if value is not None else None,
+    "customer_segment": lambda value: str(value).strip() or None if value is not None else None,
+    "initiative_type": lambda value: str(value).strip() or None if value is not None else None,
+    "hypothesis": lambda value: str(value).strip() or None if value is not None else None,
+    "problem_statement": lambda value: str(value).strip() or None if value is not None else None,
+    "active_scoring_framework": lambda value: str(value).strip() or None if value is not None else None,
+    "use_math_model": _to_bool,
+    "dependencies_initiatives": _split_keys,
+    "dependencies_others": lambda value: str(value).strip() or None if value is not None else None,
+    "llm_summary": lambda value: str(value).strip() or None if value is not None else None,
+    "strategic_priority_coefficient": _to_float,
+    "is_optimization_candidate": _to_bool,
+    "candidate_period_key": lambda value: str(value).strip() or None if value is not None else None,
+}
+
+
 def backlog_row_to_update_data(row: BacklogRow) -> Dict[str, Any]:
     """Map central backlog sheet columns to Initiative fields."""
     data: Dict[str, Any] = {}
 
-    # High-level text fields
-    data["title"] = row.get("Title") or None
-    data["requesting_team"] = row.get("Requesting Team") or None
-    data["country"] = row.get("Country") or None
-    data["product_area"] = row.get("Product Area") or None
-    data["customer_segment"] = row.get("Customer Segment") or None
-    data["initiative_type"] = row.get("Initiative Type") or None
-    data["hypothesis"] = row.get("Hypothesis") or None
+    editable_headers = {
+        sheet_header: field_name
+        for sheet_header, field_name in CENTRAL_HEADER_TO_FIELD.items()
+        if field_name in CENTRAL_EDITABLE_FIELDS
+    }
 
-    # Scoring summary
-    data["value_score"] = _to_float(row.get("Value Score"))
-    data["effort_score"] = _to_float(row.get("Effort Score"))
-    data["overall_score"] = _to_float(row.get("Overall Score"))
-
-    data["active_scoring_framework"] = row.get("Active Scoring Framework") or None
-    data["use_math_model"] = _to_bool(row.get("Use Math Model"))
-
-    # Dependencies
-    data["dependencies_initiatives"] = _split_keys(row.get("Dependencies Initiatives"))
-    data["dependencies_others"] = row.get("Dependencies Others") or None
-
-    # Lifecycle
-    data["status"] = (row.get("Status") or "").strip() or None
-
-    # Optimization candidate flags
-    data["is_optimization_candidate"] = _to_bool(row.get("Is Optimization Candidate"))
-    data["candidate_period_key"] = row.get("Candidate Period Key") or None
+    for sheet_header, field_name in editable_headers.items():
+        raw_value = get_value_by_header_alias(row, sheet_header, [])
+        converter = FIELD_CONVERTERS.get(field_name, lambda value: value)
+        data[field_name] = converter(raw_value)
 
     return data
 

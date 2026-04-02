@@ -99,6 +99,9 @@ class Initiative(Base):
     # I. Lifecycle & workflow
     status = Column(String(50), nullable=False, default="active")  # Database column
     lifecycle_status = Column(String(50), nullable=False, default="new")
+    is_archived = Column(Boolean, nullable=False, default=False, index=True)
+    archived_at = Column(DateTime(timezone=True), nullable=True)
+    archived_reason = Column(String(100), nullable=True)
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     # Source that last updated this row (e.g., "intake", "backlog", "system")

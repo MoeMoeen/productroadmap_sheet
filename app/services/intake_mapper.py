@@ -154,6 +154,7 @@ def map_sheet_row_to_initiative_create(row: Dict[str, Any]) -> InitiativeCreate:
 	return InitiativeCreate(
 		# Ownership & requester
 		title=title,
+		department=row.get("Department") or None,
 		requesting_team=row.get("Requesting Team") or None,
 		requester_name=row.get("Requester Name") or None,
 		requester_email=row.get("Requester Email") or None,
@@ -198,7 +199,7 @@ def map_sheet_row_to_initiative_create(row: Dict[str, Any]) -> InitiativeCreate:
 		deadline_date=_to_date(row.get("Deadline Date")),
 
 		# Lifecycle
-		status=(row.get("Status") or "new").strip() or "new",
+		status=(row.get("Status") or row.get("Lifecycle_status") or "new").strip() or "new",
 		# active_scoring_framework left None at intake time
 	)
 

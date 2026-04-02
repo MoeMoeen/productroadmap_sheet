@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Optional, List
-from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
@@ -458,6 +457,9 @@ CENTRAL_BACKLOG_HEADER: List[str] = [
     "Strategic Priority Coefficient",
     "Updated At",
     "Updated Source",
+    "Is Archived",
+    "Archived At",
+    "Archived Reason",
     # KPI field from ProductOps/MathModels (backend writes from Initiative.immediate_kpi_key)
     "Immediate KPI Key",
     # Metric Chain JSON (backend fetches from primary InitiativeMathModel.metric_chain_json)
@@ -504,6 +506,9 @@ CENTRAL_HEADER_TO_FIELD: Dict[str, str] = {
     "Strategic Priority Coefficient": "strategic_priority_coefficient",
     "Updated At": "updated_at",
     "Updated Source": "updated_source",
+    "Is Archived": "is_archived",
+    "Archived At": "archived_at",
+    "Archived Reason": "archived_reason",
     "Immediate KPI Key": "immediate_kpi_key",
     "Metric Chain JSON (Primary)": "metric_chain_json",
     "Is Optimization Candidate": "is_optimization_candidate",
@@ -833,25 +838,27 @@ class OptGapAlertRow(BaseModel):
 # - PM edits in sheet → synced to DB via pm.save_selected (BacklogService.update_many)
 # - DB values → written to sheet via pm.backlog_sync (write_backlog_from_db)
 # Note: is_mandatory, engineering_tokens, deadline_date are read-only here (entry surface is Optimization Center)
+# IMPORTANT: These must be DB field names (snake_case), not sheet header names (Title Case),
+# because BacklogService._apply_central_update checks data.keys() against this list.
 CENTRAL_EDITABLE_FIELDS: List[str] = [
-    "Title",
-    "Department",
-    "Requesting Team",
-    "Requester Name",
-    "Requester Email",
-    "Country",
-    "Product Area",
-    "Lifecycle Status",
-    "Customer Segment",
-    "Initiative Type",
-    "Hypothesis",
-    "Problem Statement",
-    "Active Scoring Framework",  # PM choice
-    "Use Math Model",  # PM toggle
-    "Dependencies Initiatives",
-    "Dependencies Others",
-    "LLM Summary",
-    "Strategic Priority Coefficient",  # CPO/PM priority multiplier
-    "Is Optimization Candidate",
-    "Candidate Period Key",
+    "title",
+    "department",
+    "requesting_team",
+    "requester_name",
+    "requester_email",
+    "country",
+    "product_area",
+    "lifecycle_status",
+    "customer_segment",
+    "initiative_type",
+    "hypothesis",
+    "problem_statement",
+    "active_scoring_framework",  # PM choice
+    "use_math_model",  # PM toggle
+    "dependencies_initiatives",
+    "dependencies_others",
+    "llm_summary",
+    "strategic_priority_coefficient",  # CPO/PM priority multiplier
+    "is_optimization_candidate",
+    "candidate_period_key",
 ]

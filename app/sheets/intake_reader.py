@@ -51,12 +51,13 @@ class IntakeReader:
             return []
 
         header = raw_values[0]
-        # Skip reserved/meta rows per layout config
-        _dri = data_row_index(tab_name)
+        # Determine data start row - use passed value or layout config
+        _sdr = start_data_row if start_data_row is not None else data_start_row(tab_name)
+        # Convert 1-indexed row number to array index (relative to header_row)
+        _dri = _sdr - header_row
         data_rows = raw_values[_dri:] if len(raw_values) > _dri else []
 
         rows: List[IntakeRowPair] = []
-        _sdr = start_data_row if start_data_row is not None else data_start_row(tab_name)
         current_row_number = _sdr
 
         for row_cells in data_rows:

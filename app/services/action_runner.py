@@ -181,6 +181,9 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         substeps = result.get("substeps", [])
         summary["total"] = 3  # Expected substeps
         summary["success"] = len(substeps)
+        summary["intake_archived"] = result.get("intake_archived", 0)
+        summary["intake_unarchived"] = result.get("intake_unarchived", 0)
+        summary["archived_rows_excluded"] = result.get("archived_rows_excluded", 0)
         # Check for partial failure
         if not result.get("backlog_update_completed", True):
             summary["failed"] = 1
@@ -229,10 +232,20 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
     
     # PM jobs
     elif action == "pm.backlog_sync":
-        # Reuses flow1.full_sync summary
+        # Reuses flow1.full_sync summary with detailed counts
         substeps = result.get("substeps", [])
         summary["total"] = 3  # Expected substeps
         summary["success"] = len(substeps)
+        # Include counts for AppScript display
+        summary["updated_count"] = result.get("updated_count", 0)
+        summary["cells_updated"] = result.get("cells_updated", 0)
+        summary["initiatives_written"] = result.get("initiatives_written", 0)
+        summary["intake_created"] = result.get("intake_created", 0)
+        summary["intake_updated"] = result.get("intake_updated", 0)
+        summary["intake_archived"] = result.get("intake_archived", 0)
+        summary["intake_unarchived"] = result.get("intake_unarchived", 0)
+        summary["archived_rows_excluded"] = result.get("archived_rows_excluded", 0)
+        summary["intake_deleted"] = result.get("intake_deleted", 0)
         # Check for partial failure
         if not result.get("backlog_update_completed", True):
             summary["failed"] = 1
@@ -548,12 +561,16 @@ def _action_flow1_full_sync(db: Session, ctx: ActionContext) -> Dict[str, Any]:
     allow_status_override = bool(options.get("allow_status_override_global", False))
     backlog_commit_every = options.get("backlog_commit_every")
     product_org = options.get("product_org")
+    archive_missing = bool(options.get("archive_missing_initiatives", True))
+    include_archived = bool(options.get("include_archived", False))
 
     result = run_flow1_full_sync(
         db=db,
         allow_status_override_global=allow_status_override,
         backlog_commit_every=backlog_commit_every,
         product_org=product_org,
+        archive_missing_initiatives=archive_missing,
+        include_archived_in_backlog=include_archived,
     )
     
     return {
@@ -563,6 +580,19 @@ def _action_flow1_full_sync(db: Session, ctx: ActionContext) -> Dict[str, Any]:
         "backlog_update_error": result["backlog_update_error"],
         "backlog_sync_completed": result["backlog_sync_completed"],
         "substeps": result["substeps"],
+        # Counts for summary
+        "intake_sheets_processed": result["intake_sheets_processed"],
+        "intake_rows_processed": result["intake_rows_processed"],
+        "intake_created": result["intake_created"],
+        "intake_updated": result["intake_updated"],
+        "intake_archived": result["intake_archived"],
+        "intake_unarchived": result["intake_unarchived"],
+        "archived_rows_excluded": result["backlog_archived_excluded"],
+        "intake_deleted": result["intake_archived"],
+        "initiatives_written": result["backlog_initiatives_written"],
+        "cells_updated": result["backlog_cells_updated"],
+        # Legacy aliases for AppScript compatibility
+        "updated_count": result["intake_created"] + result["intake_updated"],
     }
 
 
@@ -685,15 +715,13 @@ def _action_flow0_intake_sync(db: Session, ctx: ActionContext) -> Dict[str, Any]
 
 def _action_pm_backlog_sync(db: Session, ctx: ActionContext) -> Dict[str, Any]:
     """PM Job #1: Sync intake to backlog.
-    
-    Thin wrapper around flow1.full_sync (which includes flow0.intake_sync + backlog update + backlog sync).
-    Reuses the Flow1 action implementation directly; returns structured result with pm_job metadata.
-    
-    Single ActionRun, server-side orchestration, no nested enqueues.
+
+    Uses the Flow 1 soft-reconcile path:
+    1. Sync intake sheets into DB
+    2. Soft-archive intake-managed initiatives missing from intake
+    3. Regenerate central backlog from DB, excluding archived initiatives by default
     """
     result = _action_flow1_full_sync(db, ctx)
-    
-    # Wrap with PM job metadata
     result["pm_job"] = "pm.backlog_sync"
     return result
 

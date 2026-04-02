@@ -44,6 +44,9 @@ class BacklogService:
         if initiative is None:
             logger.info("backlog.update.missing_initiative", extra={"initiative_key": initiative_key})
             return None
+        if getattr(initiative, "is_archived", False):
+            logger.info("backlog.update.skip_archived", extra={"initiative_key": initiative_key})
+            return None
 
         update_data = backlog_row_to_update_data(row)
         self._apply_central_update(initiative, update_data)
@@ -95,6 +98,9 @@ class BacklogService:
             stmt = select(Initiative).where(Initiative.initiative_key == initiative_key)
             initiative = self.db.execute(stmt).scalar_one_or_none()
             if initiative is None:
+                continue
+            if getattr(initiative, "is_archived", False):
+                logger.info("backlog.update.skip_archived", extra={"initiative_key": initiative_key})
                 continue
 
             update_data = backlog_row_to_update_data(row)

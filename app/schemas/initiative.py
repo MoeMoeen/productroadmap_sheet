@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class InitiativeBase(BaseModel):
     title: str = Field(..., min_length=3)
 
+    department: Optional[str] = None
     requesting_team: Optional[str] = None
     requester_name: Optional[str] = None
     requester_email: Optional[str] = None
@@ -72,6 +73,7 @@ class InitiativeCreate(InitiativeBase):
 class InitiativeUpdate(BaseModel):
     title: Optional[str] = None
 
+    department: Optional[str] = None
     requesting_team: Optional[str] = None
     requester_name: Optional[str] = None
     requester_email: Optional[str] = None

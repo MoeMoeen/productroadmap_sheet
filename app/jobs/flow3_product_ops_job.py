@@ -204,7 +204,7 @@ def run_flow3_sync_inputs_to_initiatives(
 
     try:
         db.commit()
-        logger.info("flow3.sync.done", extra={"updated": updated})
+        logger.info("flow3.sync.done", extra={"updated_count": updated})
     except Exception:
         db.rollback()
         logger.exception("flow3.sync.final_commit_failed")
@@ -268,7 +268,7 @@ def run_flow3_write_scores_to_sheet(
             initiative_keys=initiative_keys,
             warnings_by_key=warnings_by_key,
         )
-        logger.info("flow3.write_scores.done", extra={"updated": count})
+        logger.info("flow3.write_scores.done", extra={"updated_count": count})
         return count
     except Exception:
         logger.exception("flow3.write_scores.failed")

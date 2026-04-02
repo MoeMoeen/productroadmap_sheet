@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models.initiative import Initiative
 from app.sheets.client import SheetsClient
-from app.sheets.layout import data_start_row, data_row_index
+from app.sheets.layout import data_start_row
 from app.sheets.models import CENTRAL_EDITABLE_FIELDS
 from app.sheets.models import CENTRAL_BACKLOG_HEADER, CENTRAL_HEADER_TO_FIELD
 from app.utils.provenance import Provenance, token
@@ -108,15 +108,27 @@ def write_backlog_from_db(
     client: SheetsClient,
     backlog_spreadsheet_id: str,
     backlog_tab_name: str = "Backlog",
-) -> None:
-    """Upsert initiatives into the backlog sheet without overwriting unknown columns.
+    include_archived: bool = False,
+) -> dict[str, int]:
+    """Overwrite backlog sheet with current DB initiatives (destructive sync).
 
-    Strategy: read header + existing rows, map initiative_key → row number, then perform
-    targeted cell writes only for columns we own. New initiatives append at the end.
+    Strategy:
+    1. Read header row to preserve column structure
+    2. Clear all data rows below header (keeps header/metadata rows intact)
+    3. Write all DB initiatives starting at data_start_row
+    
+    This ensures a clean sync - stale rows are removed, current data is written fresh.
+    
+    Returns:
+        Dict with counts: {initiatives_written, cells_updated, archived_rows_excluded}
     """
-    initiatives: List[Initiative] = (
-        db.query(Initiative).order_by(getattr(Initiative, "id")).all()
-    )
+    total_initiatives_query = db.query(Initiative)
+    initiatives_query = db.query(Initiative)
+    if not include_archived:
+        initiatives_query = initiatives_query.filter(Initiative.is_archived.is_(False))
+
+    initiatives: List[Initiative] = initiatives_query.order_by(getattr(Initiative, "id")).all()
+    archived_rows_excluded = max(total_initiatives_query.count() - len(initiatives), 0) if not include_archived else 0
 
     # 1) Read header row
     header_values = client.get_values(
@@ -126,98 +138,46 @@ def write_backlog_from_db(
     )
     header: List[str] = header_values[0] if header_values else CENTRAL_BACKLOG_HEADER
 
-    # Build lookup for initiative_key column(s) using normalized header matching
-    norm_header = [normalize_header(str(h)) for h in header]
+    # Build sheet->canonical mapping for owned columns (alias-aware)
     norm_to_header = {normalize_header(k): k for k in CENTRAL_HEADER_TO_FIELD.keys()}
     col_idx_map = {header[i]: i for i in range(len(header))}
-    initiative_header_candidates = [h for h, field in CENTRAL_HEADER_TO_FIELD.items() if field == "initiative_key"]
-    norm_initiative_candidates = {normalize_header(h) for h in initiative_header_candidates}
-    init_key_indices = [idx for idx, h in enumerate(header) if normalize_header(str(h)) in norm_initiative_candidates]
-    if not init_key_indices:
-        logger.error("backlog.no_initiative_key_column", extra={"header": header})
-        raise RuntimeError("Backlog write failed: no initiative key column found in sheet header")
-
-    # Build sheet->canonical mapping for owned columns (alias-aware)
+    
     owned_sheet_to_canonical: Dict[str, str] = {}
     for col in header:
         canon = norm_to_header.get(normalize_header(str(col)))
         if canon:
             owned_sheet_to_canonical[col] = canon
 
-    # 2) Read existing initiative_key column only to map initiative_key -> row number, with blank-run cutoff
-    init_col_idx = init_key_indices[0]  # prefer first match
-    init_col_a1 = _col_index_to_a1(init_col_idx + 1)
-    grid_rows, _ = client.get_sheet_grid_size(backlog_spreadsheet_id, backlog_tab_name)
-    end_row = grid_rows if grid_rows > 0 else 1
+    # 2) Clear all data rows (everything below header/metadata rows)
     _dsr = data_start_row(backlog_tab_name)
-    key_col_values = client.get_values(
-        spreadsheet_id=backlog_spreadsheet_id,
-        range_=f"{backlog_tab_name}!{init_col_a1}{_dsr}:{init_col_a1}{end_row}",
-        value_render_option="UNFORMATTED_VALUE",
-    ) or []
+    grid_rows, grid_cols = client.get_sheet_grid_size(backlog_spreadsheet_id, backlog_tab_name)
+    if grid_rows >= _dsr:
+        # Clear from data start row to end of existing data
+        last_col_a1 = _col_index_to_a1(max(grid_cols, len(header)))
+        clear_range = f"{backlog_tab_name}!A{_dsr}:{last_col_a1}{grid_rows}"
+        logger.info("backlog.clearing_stale_rows", extra={"range": clear_range})
+        client.clear_values(backlog_spreadsheet_id, clear_range)
 
-    init_key_to_rownum: Dict[str, int] = {}
-    blank_run = 0
-    BLANK_STOP_THRESHOLD = 50
-    for offset, row_cells in enumerate(key_col_values, start=_dsr):
-        cell_val = row_cells[0] if row_cells else None
-        if cell_val is None or cell_val == "":
-            blank_run += 1
-            if blank_run >= BLANK_STOP_THRESHOLD:
-                break
-            continue
-        blank_run = 0
-        key = str(cell_val).strip()
-        if not key:
-            continue
-        if key in init_key_to_rownum:
-            logger.warning("backlog.duplicate_initiative_key_in_sheet", extra={"initiative_key": key, "row": offset})
-            continue
-        init_key_to_rownum[key] = offset
-
-    next_append_row = max(init_key_to_rownum.values(), default=data_row_index(backlog_tab_name)) + 1
-
-    # 3) Build batch updates grouped by column to reduce request count
+    # 3) Build rows for all initiatives
     owned_headers = [col for col in header if col in owned_sheet_to_canonical]
-
-    updates_by_col: Dict[str, Dict[int, Any]] = {col: {} for col in owned_headers}
-
     now_ts = datetime.now(timezone.utc)
-
-    for ini in initiatives:
-        target_row = init_key_to_rownum.get(str(ini.initiative_key))
-        if not target_row:
-            target_row = next_append_row
-            next_append_row += 1
-            init_key_to_rownum[str(ini.initiative_key)] = target_row
-        values_by_header = initiative_cell_values(owned_headers, ini, owned_sheet_to_canonical, now_ts)
-        for col, value in values_by_header.items():
-            updates_by_col[col][target_row] = value
-
+    
     batch_data: List[Dict[str, Any]] = []
-    for col, row_values in updates_by_col.items():
-        if not row_values:
-            continue
-        col_idx = col_idx_map.get(col)
-        if col_idx is None:
-            continue
-        col_a1 = _col_index_to_a1(col_idx + 1)
-        # group consecutive rows to minimize ranges
-        sorted_rows = sorted(row_values.keys())
-        start = prev = sorted_rows[0]
-        group_vals: List[Any] = [row_values[start]]
-        for r in sorted_rows[1:]:
-            if r == prev + 1:
-                group_vals.append(row_values[r])
-            else:
-                range_a1 = f"{backlog_tab_name}!{col_a1}{start}:{col_a1}{prev}"
-                batch_data.append({"range": range_a1, "values": [[v] for v in group_vals]})
-                start = r
-                group_vals = [row_values[r]]
-            prev = r
-        range_a1 = f"{backlog_tab_name}!{col_a1}{start}:{col_a1}{prev}"
-        batch_data.append({"range": range_a1, "values": [[v] for v in group_vals]})
+    
+    for row_offset, ini in enumerate(initiatives):
+        target_row = _dsr + row_offset
+        values_by_header = initiative_cell_values(owned_headers, ini, owned_sheet_to_canonical, now_ts)
+        
+        # Write each owned column for this initiative
+        for col, value in values_by_header.items():
+            col_idx = col_idx_map.get(col)
+            if col_idx is None:
+                continue
+            col_a1 = _col_index_to_a1(col_idx + 1)
+            cell_range = f"{backlog_tab_name}!{col_a1}{target_row}"
+            batch_data.append({"range": cell_range, "values": [[value]]})
 
+    cells_updated = 0
     if batch_data:
         # Chunk to avoid API range count limits
         CHUNK_SIZE = 200
@@ -228,6 +188,16 @@ def write_backlog_from_db(
                 data=chunk,
                 value_input_option="USER_ENTERED",
             )
+            cells_updated += len(chunk)
+
+    logger.info(
+        "backlog.write_complete",
+        extra={
+            "initiatives": len(initiatives),
+            "cells": cells_updated,
+            "archived_excluded_count": archived_rows_excluded,
+        },
+    )
 
     # Configure protected ranges using the actual sheet header
     _apply_backlog_protected_ranges(
@@ -236,6 +206,12 @@ def write_backlog_from_db(
         tab_name=backlog_tab_name,
         header=header,
     )
+    
+    return {
+        "initiatives_written": len(initiatives),
+        "cells_updated": cells_updated,
+        "archived_rows_excluded": archived_rows_excluded,
+    }
 
 
 def _apply_backlog_protected_ranges(

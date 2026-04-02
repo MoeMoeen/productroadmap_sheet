@@ -31,6 +31,20 @@ from app.utils.provenance import Provenance, token
 
 logger = logging.getLogger(__name__)
 
+
+def _to_float(value: object) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
 # Fields that are allowed to be written/updated from department intake sheets.
 # NOTE: Only includes fields that exist in current Initiative ORM schema.
 INTAKE_EDITABLE_FIELDS = {
@@ -80,6 +94,52 @@ class IntakeService:
         # Queue of pending key backfills to perform after a commit
         # Each entry: (sheet_id, tab_name, row_number, initiative_key)
         self._pending_key_backfills: list[tuple[str, str, int, str]] = []
+
+    def _initiative_payload_from_dto(
+        self,
+        dto: InitiativeCreate,
+        *,
+        allow_status_override: bool = False,
+        existing: Optional[Initiative] = None,
+    ) -> dict[str, object]:
+        """Build a safe Initiative ORM payload from intake DTO fields.
+
+        The intake schema intentionally contains some legacy fields that no longer
+        exist on the Initiative ORM model. Creation and updates must therefore
+        filter DTO data through the ORM-supported intake field list.
+        """
+        payload: dict[str, object] = {}
+        data = dto.model_dump(exclude_unset=True)
+
+        for field_name, value in data.items():
+            if field_name == "status":
+                if str(value).strip().lower() not in {s.lower() for s in ALLOWED_INTAKE_STATUSES}:
+                    continue
+                current = ((existing.lifecycle_status if existing else "") or "").strip().lower()
+                new = (str(value) or "").strip().lower()
+                if existing is not None and not allow_status_override and current == "withdrawn" and new == "new":
+                    logger.info(
+                        "intake.status_blocked",
+                        extra={
+                            "initiative_key": existing.initiative_key,
+                            "from": current,
+                            "to": new,
+                        },
+                    )
+                    continue
+                payload["lifecycle_status"] = value
+                continue
+
+            if field_name == "time_sensitivity":
+                payload["time_sensitivity_score"] = _to_float(value)
+                continue
+
+            if field_name not in INTAKE_EDITABLE_FIELDS:
+                continue
+
+            payload[field_name] = value
+
+        return payload
 
     def _queue_key_backfill(
         self,
@@ -173,6 +233,82 @@ class IntakeService:
             self.flush_pending_key_backfills()
         return initiative
 
+    def upsert_from_intake_row_with_status(
+        self,
+        row: IntakeRow,
+        source_sheet_id: str,
+        source_tab_name: str,
+        source_row_number: int,
+        allow_status_override: bool = False,
+        auto_commit: bool = True,
+    ) -> tuple[Initiative, bool]:
+        """Create or update an Initiative from a single intake sheet row.
+        
+        Returns:
+            Tuple of (Initiative, was_created) where was_created is True if new.
+        """
+        dto: InitiativeCreate = map_sheet_row_to_initiative_create(row)
+        if not dto.title:
+            raise ValueError("Intake row missing required Title field")
+
+        initiative = self._find_existing_initiative(
+            row=row,
+            source_sheet_id=source_sheet_id,
+            source_tab_name=source_tab_name,
+            source_row_number=source_row_number,
+        )
+
+        was_created = initiative is None
+        if was_created:
+            initiative = self._create_from_intake(
+                dto=dto,
+                source_sheet_id=source_sheet_id,
+                source_tab_name=source_tab_name,
+                source_row_number=source_row_number,
+            )
+            try:
+                setattr(initiative, "updated_source", token(Provenance.FLOW0_INTAKE_SYNC))
+            except Exception:
+                logger.debug("intake.updated_source_set_failed_on_create")
+            logger.info(
+                "intake.create",
+                extra={
+                    "initiative_key": getattr(initiative, "initiative_key", None),
+                    "sheet_id": source_sheet_id,
+                    "tab": source_tab_name,
+                    "row": source_row_number,
+                },
+            )
+        else:
+            self._apply_intake_update(initiative, dto, allow_status_override=allow_status_override)
+            try:
+                setattr(initiative, "updated_source", token(Provenance.FLOW0_INTAKE_SYNC))
+            except Exception:
+                logger.debug("intake.updated_source_set_failed_on_update")
+            logger.debug(
+                "intake.update",
+                extra={
+                    "initiative_key": getattr(initiative, "initiative_key", None),
+                    "sheet_id": source_sheet_id,
+                    "tab": source_tab_name,
+                    "row": source_row_number,
+                },
+            )
+
+        # always queue a key backfill if initiative has a key
+        self._queue_key_backfill(
+            sheet_id=source_sheet_id,
+            tab_name=source_tab_name,
+            row_number=source_row_number,
+            initiative=initiative,
+        )
+
+        if auto_commit:
+            self.db.commit()
+            self.db.refresh(initiative)
+            self.flush_pending_key_backfills()
+        return initiative, was_created
+
     def upsert_many(
         self,
         rows: list[IntakeRow],
@@ -262,6 +398,7 @@ class IntakeService:
         attempts = 0
         last_error: Optional[Exception] = None
         max_attempts = max(1, int(settings.INTAKE_CREATE_MAX_RETRIES))
+        initiative_data = self._initiative_payload_from_dto(dto)
         while attempts < max_attempts:
             attempts += 1
             initiative_key = generate_initiative_key(self.db)
@@ -270,7 +407,7 @@ class IntakeService:
                 source_sheet_id=source_sheet_id,
                 source_tab_name=source_tab_name,
                 source_row_number=source_row_number,
-                **dto.model_dump(),
+                **initiative_data,
             )
             self.db.add(initiative)
             try:
@@ -287,32 +424,13 @@ class IntakeService:
     def _apply_intake_update(
         self, initiative: Initiative, dto: InitiativeCreate, allow_status_override: bool = False
     ) -> None:
-        data = dto.model_dump(exclude_unset=True)
-        for field_name, value in data.items():
-            if field_name not in INTAKE_EDITABLE_FIELDS:
-                continue
-            
-            # Map input field to target ORM field
-            target_field = "lifecycle_status" if field_name == "status" else field_name
-            
-            # Status validation and transition guard
-            if field_name in ("status", "lifecycle_status"):
-                if str(value).strip().lower() not in {s.lower() for s in ALLOWED_INTAKE_STATUSES}:
-                    continue
-                current = (initiative.lifecycle_status or "").strip().lower()
-                new = (str(value) or "").strip().lower()
-                if not allow_status_override and current == "withdrawn" and new == "new":
-                    logger.info(
-                        "intake.status_blocked",
-                        extra={
-                            "initiative_key": initiative.initiative_key,
-                            "from": current,
-                            "to": new,
-                        },
-                    )
-                    continue
-            
-            setattr(initiative, target_field, value)
+        payload = self._initiative_payload_from_dto(
+            dto,
+            allow_status_override=allow_status_override,
+            existing=initiative,
+        )
+        for field_name, value in payload.items():
+            setattr(initiative, field_name, value)
 
     def _backfill_initiative_key(
         self, sheet_id: str, tab_name: str, row_number: int, initiative_key: str
@@ -324,18 +442,24 @@ class IntakeService:
         except Exception:
             logger.exception("intake.key_backfill_failed")
 
-    def flush_pending_key_backfills(self) -> None:
+    def flush_pending_key_backfills(self) -> int:
         """Write any queued initiative keys to their intake sheet cells.
 
         This should be called after a successful commit when using batched transactions.
+        
+        Returns:
+            Number of keys backfilled.
         """
         if not self._pending_key_backfills:
-            return
+            return 0
         # Copy and clear to avoid re-entrancy issues
         pending = self._pending_key_backfills
         self._pending_key_backfills = []
+        count = 0
         for sheet_id, tab_name, row_number, key in pending:
             self._backfill_initiative_key(sheet_id, tab_name, row_number, key)
+            count += 1
+        return count
 
 
 __all__ = [

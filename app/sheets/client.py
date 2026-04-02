@@ -98,6 +98,15 @@ class SheetsClient:
             .execute()
         )
 
+    def clear_values(self, spreadsheet_id: str, range_: str) -> None:
+        """Clear values in a given spreadsheet and range (keeps formatting)."""
+        (
+            self.service.spreadsheets()
+            .values()
+            .clear(spreadsheetId=spreadsheet_id, range=range_, body={})
+            .execute()
+        )
+
     def get_sheet_grid_size(self, spreadsheet_id: str, tab_name: str) -> tuple[int, int]:
         """Return (rowCount, columnCount) for a given tab by title.
 
