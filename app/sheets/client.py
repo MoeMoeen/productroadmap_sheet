@@ -107,6 +107,18 @@ class SheetsClient:
             .execute()
         )
 
+    def batch_clear_values(self, spreadsheet_id: str, ranges: List[str]) -> None:
+        """Clear multiple ranges in one API call while preserving formatting."""
+        if not ranges:
+            return
+
+        (
+            self.service.spreadsheets()
+            .values()
+            .batchClear(spreadsheetId=spreadsheet_id, body={"ranges": ranges})
+            .execute()
+        )
+
     def get_sheet_grid_size(self, spreadsheet_id: str, tab_name: str) -> tuple[int, int]:
         """Return (rowCount, columnCount) for a given tab by title.
 

@@ -16,6 +16,30 @@
         "region": "EMEA",
         "department": "Marketing",
         "allow_status_override": false
+      },
+      {
+        "key": "sales_emea",
+        "spreadsheet_id": "1mQLVtMhgC-09fQ2xczyxghiIwZFb2e5ac5JVODkyJsU",
+        "tab_name": "Sales_EMEA",
+        "header_row": 1,
+        "start_data_row": 2,
+        "max_rows": null,
+        "active": true,
+        "region": "EMEA",
+        "department": "Sales",
+        "allow_status_override": false
+      },
+      {
+        "key": "simulated_department",
+        "spreadsheet_id": "1mQLVtMhgC-09fQ2xczyxghiIwZFb2e5ac5JVODkyJsU",
+        "tab_name": "Simulated_Department",
+        "header_row": 1,
+        "start_data_row": 2,
+        "max_rows": null,
+        "active": true,
+        "region": "EMEA",
+        "department": "Simulation",
+        "allow_status_override": false
       }
     ]
   }

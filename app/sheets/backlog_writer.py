@@ -9,6 +9,7 @@ import json
 
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db.models.initiative import Initiative
 from app.sheets.client import SheetsClient
 from app.sheets.layout import data_start_row
@@ -18,6 +19,23 @@ from app.utils.provenance import Provenance, token
 from app.utils.header_utils import normalize_header
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_source_sheet_key(initiative: Initiative) -> str:
+    source_sheet_key = str(getattr(initiative, "source_sheet_key", "") or "").strip()
+    if source_sheet_key:
+        return source_sheet_key
+
+    source_sheet_id = str(getattr(initiative, "source_sheet_id", "") or "").strip()
+    source_tab_name = str(getattr(initiative, "source_tab_name", "") or "").strip()
+    if not source_sheet_id or not source_tab_name:
+        return ""
+
+    for sheet_cfg in settings.INTAKE_SHEETS:
+        for tab_cfg in sheet_cfg.active_tabs():
+            if tab_cfg.spreadsheet_id == source_sheet_id and tab_cfg.tab_name == source_tab_name:
+                return str(sheet_cfg.sheet_key or "").strip()
+    return ""
 
 
 def _to_sheet_value(value: Any):
@@ -49,7 +67,7 @@ def _initiative_field_value(field: str, initiative: Initiative, now_ts: datetime
     if field == "updated_source":
         return token(Provenance.FLOW1_BACKLOGSHEET_WRITE)
     if field == "intake_source":
-        source_sheet_key = str(getattr(initiative, "source_sheet_key", "") or "").strip()
+        source_sheet_key = _resolve_source_sheet_key(initiative)
         source_tab_name = str(getattr(initiative, "source_tab_name", "") or "").strip()
         if source_sheet_key and source_tab_name:
             return f"{source_sheet_key} / {source_tab_name}"
@@ -118,7 +136,7 @@ def write_backlog_from_db(
     client: SheetsClient,
     backlog_spreadsheet_id: str,
     backlog_tab_name: str = "Backlog",
-    include_archived: bool = False,
+    include_archived: bool = True,
 ) -> dict[str, int]:
     """Rewrite backend-owned backlog columns from current DB initiatives.
 
@@ -172,8 +190,7 @@ def write_backlog_from_db(
             col_a1 = _col_index_to_a1(col_idx + 1)
             clear_ranges.append(f"{backlog_tab_name}!{col_a1}{_dsr}:{col_a1}{grid_rows}")
 
-        for clear_range in clear_ranges:
-            client.clear_values(backlog_spreadsheet_id, clear_range)
+        client.batch_clear_values(backlog_spreadsheet_id, clear_ranges)
 
         logger.info(
             "backlog.clearing_owned_columns",

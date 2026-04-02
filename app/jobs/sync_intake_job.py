@@ -43,6 +43,15 @@ class IntakeReconcileResult(TypedDict):
     archived_count: int
     unarchived_count: int
     already_archived_count: int
+    provenance_backfilled_count: int
+
+
+def _configured_intake_sheet_key_by_scope() -> dict[tuple[str, str], str]:
+    return {
+        (tab.spreadsheet_id, tab.tab_name): sheet_cfg.sheet_key
+        for sheet_cfg in settings.INTAKE_SHEETS
+        for tab in sheet_cfg.active_tabs()
+    }
 
 
 def reset_initiatives_for_intake_sync(db: Session) -> int:
@@ -81,6 +90,7 @@ def reconcile_intake_managed_initiatives(
             archived_count=0,
             unarchived_count=0,
             already_archived_count=0,
+            provenance_backfilled_count=0,
         )
 
     scope_filters = [
@@ -92,9 +102,19 @@ def reconcile_intake_managed_initiatives(
     archived_count = 0
     unarchived_count = 0
     already_archived_count = 0
+    provenance_backfilled_count = 0
     now = datetime.now(timezone.utc)
+    sheet_key_by_scope = _configured_intake_sheet_key_by_scope()
 
     for initiative in managed_initiatives:
+        source_sheet_id = str(getattr(initiative, "source_sheet_id", "") or "").strip()
+        source_tab_name = str(getattr(initiative, "source_tab_name", "") or "").strip()
+        if source_sheet_id and source_tab_name and not str(getattr(initiative, "source_sheet_key", "") or "").strip():
+            resolved_sheet_key = sheet_key_by_scope.get((source_sheet_id, source_tab_name))
+            if resolved_sheet_key:
+                setattr(initiative, "source_sheet_key", resolved_sheet_key)
+                provenance_backfilled_count += 1
+
         key = str(initiative.initiative_key or "").strip()
         if not key:
             continue
@@ -116,7 +136,7 @@ def reconcile_intake_managed_initiatives(
         setattr(initiative, "archived_reason", "missing_from_intake_sync")
         archived_count += 1
 
-    if archived_count or unarchived_count:
+    if archived_count or unarchived_count or provenance_backfilled_count:
         db.commit()
 
     logger.info(
@@ -127,6 +147,7 @@ def reconcile_intake_managed_initiatives(
             "archived_count": archived_count,
             "unarchived_count": unarchived_count,
             "already_archived_count": already_archived_count,
+            "provenance_backfilled_count": provenance_backfilled_count,
         },
     )
 
@@ -136,6 +157,7 @@ def reconcile_intake_managed_initiatives(
         archived_count=archived_count,
         unarchived_count=unarchived_count,
         already_archived_count=already_archived_count,
+        provenance_backfilled_count=provenance_backfilled_count,
     )
 
 
@@ -279,6 +301,7 @@ def run_sync_all_intake_sheets(
     Returns:
         IntakeSyncResult with detailed counts
     """
+    settings.reload_intake_sheets_from_file()
     service_obj = get_sheets_service()
     
     # Track all initiative_keys seen across all intake sheets
@@ -329,6 +352,7 @@ def run_sync_all_intake_sheets(
         archived_count=0,
         unarchived_count=0,
         already_archived_count=0,
+        provenance_backfilled_count=0,
     )
     if archive_missing:
         reconcile_result = reconcile_intake_managed_initiatives(

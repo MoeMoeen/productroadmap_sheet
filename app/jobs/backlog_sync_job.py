@@ -52,7 +52,7 @@ def run_backlog_sync(
     spreadsheet_id: str | None = None,
     tab_name: str | None = None,
     product_org: str | None = None,
-    include_archived: bool = False,
+    include_archived: bool = True,
 ) -> dict[str, int]:
     """Regenerate a backlog Google Sheet from DB Initiatives.
 
@@ -73,7 +73,7 @@ def run_backlog_sync(
     )
 
 
-def run_all_backlog_sync(db: Session, include_archived: bool = False) -> BacklogSyncResult:
+def run_all_backlog_sync(db: Session, include_archived: bool = True) -> BacklogSyncResult:
     """Regenerate all configured backlog sheets (multi-org scenario).
     
     Returns:

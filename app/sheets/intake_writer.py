@@ -32,13 +32,31 @@ class GoogleSheetsIntakeWriter:
 
     def __init__(self, client: SheetsClient) -> None:
         self.client = client
+        self._header_cache: dict[tuple[str, str], list[str]] = {}
+        self._key_column_cache: dict[tuple[str, str], Optional[int]] = {}
+        self._updated_at_column_cache: dict[tuple[str, str], Optional[int]] = {}
 
-    def _find_key_column_index(self, sheet_id: str, tab_name: str) -> Optional[int]:
-        """Find the column index (1-based) for the initiative key header."""
+    def _get_headers(self, sheet_id: str, tab_name: str) -> list[str]:
+        cache_key = (sheet_id, tab_name)
+        cached = self._header_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         header_row = getattr(settings, "INTAKE_HEADER_ROW_INDEX", 1) or 1
         range_a1 = f"{tab_name}!{header_row}:{header_row}"
         values = self.client.get_values(sheet_id, range_a1)
         headers = values[0] if values else []
+        self._header_cache[cache_key] = headers
+        return headers
+
+    def _find_key_column_index(self, sheet_id: str, tab_name: str) -> Optional[int]:
+        """Find the column index (1-based) for the initiative key header."""
+        cache_key = (sheet_id, tab_name)
+        cached = self._key_column_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        headers = self._get_headers(sheet_id, tab_name)
         aliases = INTAKE_HEADER_MAP.get("initiative_key", ["Initiative Key"]) or ["Initiative Key"]
         target = normalize_header(aliases[0])
         alias_set = {normalize_header(h) for h in aliases[1:]}
@@ -47,20 +65,26 @@ class GoogleSheetsIntakeWriter:
                 continue
             name = normalize_header(str(h))
             if name == target or name in alias_set:
+                self._key_column_cache[cache_key] = i
                 return i
+        self._key_column_cache[cache_key] = None
         return None
 
     def _find_updated_at_column_index(self, sheet_id: str, tab_name: str) -> Optional[int]:
-        header_row = getattr(settings, "INTAKE_HEADER_ROW_INDEX", 1) or 1
-        range_a1 = f"{tab_name}!{header_row}:{header_row}"
-        values = self.client.get_values(sheet_id, range_a1)
-        headers = values[0] if values else []
+        cache_key = (sheet_id, tab_name)
+        cached = self._updated_at_column_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        headers = self._get_headers(sheet_id, tab_name)
         for i, h in enumerate(headers, start=1):
             if h is None:
                 continue
             name = normalize_header(str(h))
             if name in {"updated_at", "updated at"}:
+                self._updated_at_column_cache[cache_key] = i
                 return i
+        self._updated_at_column_cache[cache_key] = None
         return None
 
     def write_initiative_key(self, sheet_id: str, tab_name: str, row_number: int, initiative_key: str) -> None:

@@ -57,7 +57,7 @@ def run_flow1_full_sync(
     backlog_commit_every: Optional[int] = None,
     product_org: Optional[str] = None,
     archive_missing_initiatives: bool = True,
-    include_archived_in_backlog: bool = False,
+    include_archived_in_backlog: bool = True,
 ) -> Flow1SyncResult:
     """Run the full Flow 1 cycle.
 

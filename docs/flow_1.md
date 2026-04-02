@@ -167,32 +167,22 @@ def _to_date(value: Any) -> Optional[datetime.date]:
 
 Now we map from “sheet columns” to `InitiativeCreate` fields.
 
-We’ll assume your **intake sheet headers** look roughly like this (you can tweak later):
+We’ll assume your **intake sheet headers** look roughly like this:
 
 * `Title`
+* `Department`
 * `Requesting Team`
 * `Requester Name`
 * `Requester Email`
 * `Country`
 * `Product Area`
 * `Problem Statement`
-* `Hypothesis`
-* `Customer Segment`
-* `Initiative Type`
-* `Market`
-* `Category`
-* `Effort T-shirt Size`
-* `Effort Engineering Days`
-* `Effort Other Teams Days`
-* `Infra Cost Estimate`
-* `Engineering Tokens`
-* `Dependencies Others`
-* `Program Key`
-* `Risk Level`
-* `Risk Description`
-* `Time Sensitivity`
 * `Deadline Date`
 * `Lifecycle Status` or `Status`
+
+Production note: intake is intentionally narrow. Fields such as hypothesis, customer segment,
+initiative type, effort, dependencies, risk, time sensitivity, market/category, and program metadata
+should not be entered on the intake sheet.
 
 Here’s the mapper:
 
@@ -204,27 +194,13 @@ def map_sheet_row_to_initiative_create(row: Dict[str, Any]) -> InitiativeCreate:
 
     Assumes the intake sheet uses the following column headers:
     - Title
+    - Department
     - Requesting Team
     - Requester Name
     - Requester Email
     - Country
     - Product Area
     - Problem Statement
-    - Hypothesis
-    - Customer Segment
-    - Initiative Type
-    - Market
-    - Category
-    - Effort T-shirt Size
-    - Effort Engineering Days
-    - Effort Other Teams Days
-    - Infra Cost Estimate
-    - Engineering Tokens
-    - Dependencies Others
-    - Program Key
-    - Risk Level
-    - Risk Description
-    - Time Sensitivity
     - Deadline Date
     - Lifecycle Status / Status
     """
@@ -235,6 +211,7 @@ def map_sheet_row_to_initiative_create(row: Dict[str, Any]) -> InitiativeCreate:
     return InitiativeCreate(
         # Ownership & requester
         title=title,
+        department=row.get("Department") or None,
         requesting_team=row.get("Requesting Team") or None,
         requester_name=row.get("Requester Name") or None,
         requester_email=row.get("Requester Email") or None,
@@ -243,28 +220,6 @@ def map_sheet_row_to_initiative_create(row: Dict[str, Any]) -> InitiativeCreate:
 
         # Problem & context
         problem_statement=row.get("Problem Statement") or None,
-        hypothesis=row.get("Hypothesis") or None,
-
-        # Strategic alignment & classification
-        customer_segment=row.get("Customer Segment") or None,
-        initiative_type=row.get("Initiative Type") or None,
-        market=row.get("Market") or None,
-        category=row.get("Category") or None,
-        # strategic_priority_coefficient left at default 1.0
-
-        # Effort & cost
-        effort_tshirt_size=row.get("Effort T-shirt Size") or None,
-        effort_engineering_days=_to_float(row.get("Effort Engineering Days")),
-        effort_other_teams_days=_to_float(row.get("Effort Other Teams Days")),
-        infra_cost_estimate=_to_float(row.get("Infra Cost Estimate")),
-        engineering_tokens=_to_float(row.get("Engineering Tokens")),
-
-        # Risk, dependencies, constraints
-        dependencies_others=row.get("Dependencies Others") or None,
-        program_key=row.get("Program Key") or None,
-        risk_level=row.get("Risk Level") or None,
-        risk_description=row.get("Risk Description") or None,
-        time_sensitivity_score=_to_float(row.get("Time Sensitivity")),
         deadline_date=_to_date(row.get("Deadline Date")),
 
         # Lifecycle
@@ -284,9 +239,6 @@ def map_sheet_row_to_initiative_create(row: Dict[str, Any]) -> InitiativeCreate:
 * For numbers (impact/effort/cost):
 
   * Use `_to_float` to handle `None`, `""`, `"  "`, invalid text, etc.
-* `is_mandatory`:
-
-  * `_to_bool` interprets `"yes"`, `"TRUE"`, `"1"`, `✅`, etc. as `True`.
 * `deadline_date`:
 
   * `_to_date` tries several formats and returns a `date` or `None`.

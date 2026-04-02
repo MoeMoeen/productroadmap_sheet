@@ -9,23 +9,13 @@ Implements Step 1 from docs/flow_1.md:
 
 Assumed intake sheet headers (adjust as needed):
 - Title
+- Department
 - Requesting Team
 - Requester Name
 - Requester Email
 - Country
 - Product Area
 - Problem Statement
-- Hypothesis
-- Customer Segment
-- Initiative Type
-- Effort T-shirt Size
-- Effort Engineering Days
-- Effort Other Teams Days
-- Infra Cost Estimate
-- Dependencies Others
-- Risk Level
-- Risk Description
-- Time Sensitivity
 - Deadline Date
 - Lifecycle Status / Status
 """
@@ -36,6 +26,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from app.schemas.initiative import InitiativeCreate
+from app.utils.header_utils import get_value_by_header_alias
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -99,74 +90,58 @@ def _to_date(value: Any):
 	return None
 
 
+def _get_row_value(row: Dict[str, Any], primary_name: str, *aliases: str) -> Any:
+	return get_value_by_header_alias(row, primary_name, aliases)
+
+
+def _get_text(row: Dict[str, Any], primary_name: str, *aliases: str) -> Optional[str]:
+	value = _get_row_value(row, primary_name, *aliases)
+	if value is None:
+		return None
+	text = str(value).strip()
+	return text or None
+
+
 def map_sheet_row_to_initiative_create(row: Dict[str, Any]) -> InitiativeCreate:
 	"""Map a single Google Sheets intake row (column_name -> value)
 	to an InitiativeCreate schema.
 
-	Assumes the intake sheet uses the following column headers:
+	Headers are resolved via normalized aliases, so the row may use either
+	user-facing sheet headers like "Department" and "Problem Statement" or
+	normalized variants like "department" and "problem_statement".
+
+	Currently mapped intake fields include:
 	- Title
+	- Department
 	- Requesting Team
 	- Requester Name
 	- Requester Email
 	- Country
 	- Product Area
 	- Problem Statement
-	- Hypothesis
-	- Customer Segment
-	- Initiative Type
-	- Effort T-shirt Size
-	- Effort Engineering Days
-	- Effort Other Teams Days
-	- Infra Cost Estimate
-	- Dependencies Others
-	- Risk Level
-	- Risk Description
-	- Time Sensitivity
 	- Deadline Date
 	- Lifecycle Status / Status
 	"""
 
 	# Basic text fields: strip whitespace where relevant
-	title = (row.get("Title") or "").strip()
+	title = _get_text(row, "Title", "title") or ""
 
 	return InitiativeCreate(
 		# Ownership & requester
 		title=title,
-		department=row.get("Department") or None,
-		requesting_team=row.get("Requesting Team") or None,
-		requester_name=row.get("Requester Name") or None,
-		requester_email=row.get("Requester Email") or None,
-		country=row.get("Country") or None,
-		product_area=row.get("Product Area") or None,
-		market=row.get("Market") or None,
-		category=row.get("Category") or None,
+		department=_get_text(row, "Department", "department", "dept"),
+		requesting_team=_get_text(row, "Requesting Team", "requesting_team"),
+		requester_name=_get_text(row, "Requester Name", "requester_name"),
+		requester_email=_get_text(row, "Requester Email", "requester_email"),
+		country=_get_text(row, "Country", "country"),
+		product_area=_get_text(row, "Product Area", "product_area"),
 
 		# Problem & context
-		problem_statement=row.get("Problem Statement") or None,
-		hypothesis=row.get("Hypothesis") or None,
-
-		# Strategic alignment & classification
-		customer_segment=row.get("Customer Segment") or None,
-		initiative_type=row.get("Initiative Type") or None,
-		# strategic_priority_coefficient left at default 1.0
-
-		# Effort & cost
-		effort_tshirt_size=row.get("Effort T-shirt Size") or None,
-		effort_engineering_days=_to_float(row.get("Effort Engineering Days")),
-		effort_other_teams_days=_to_float(row.get("Effort Other Teams Days")),
-		infra_cost_estimate=_to_float(row.get("Infra Cost Estimate")),
-		engineering_tokens=_to_float(row.get("Engineering Tokens")),
-
-		# Risk, dependencies, constraints
-		dependencies_others=row.get("Dependencies Others") or None,
-		program_key=row.get("Program Key") or None,
-		risk_level=row.get("Risk Level") or None,
-		risk_description=row.get("Risk Description") or None,
-		time_sensitivity_score=_to_float(row.get("Time Sensitivity")),
-		deadline_date=_to_date(row.get("Deadline Date")),
+		problem_statement=_get_text(row, "Problem Statement", "problem_statement"),
+		deadline_date=_to_date(_get_row_value(row, "Deadline Date", "deadline_date")),
 
 		# Lifecycle
-		lifecycle_status=(row.get("Lifecycle Status") or row.get("Lifecycle_status") or row.get("Status") or "new").strip() or "new",
+		lifecycle_status=(_get_text(row, "Lifecycle Status", "Lifecycle_status", "lifecycle_status", "Status", "status") or "new"),
 		# active_scoring_framework left None at intake time
 	)
 

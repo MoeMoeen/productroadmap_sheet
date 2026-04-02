@@ -435,11 +435,11 @@ function uiSaveSelected() {
  * Workflow:
  * 1) PM marks initiatives as optimization candidates in Central Backlog
  * 2) PM goes to Scoring_Inputs tab and runs "Populate Initiatives"
- * 3) Backend queries DB for is_optimization_candidate=True initiatives
+ * 3) Backend queries DB for initiatives where is_optimization_candidate=True and is_archived=False
  * 4) Backend appends new initiative keys to Scoring_Inputs (doesn't overwrite existing)
  * 5) PM can then edit framework parameters and run "Score Selected"
  *
- * This action doesn't require a selection - it operates on all optimization candidates.
+ * This action doesn't require a selection - it operates on all active optimization candidates.
  */
 function uiPopulateInitiatives() {
   const ss = SpreadsheetApp.getActive();
@@ -451,7 +451,8 @@ function uiPopulateInitiatives() {
   const ui = SpreadsheetApp.getUi();
   const resp = ui.alert(
     "Populate Initiatives",
-    "This will add all optimization candidate initiatives from the database to this sheet.\n\n" +
+    "This will add all active optimization candidate initiatives from the database to this sheet.\n\n" +
+      "Archived initiatives are excluded automatically.\n\n" +
       "Only new initiatives will be added - existing ones won't be duplicated.\n\n" +
       "Continue?",
     ui.ButtonSet.YES_NO
@@ -466,7 +467,7 @@ function uiPopulateInitiatives() {
       spreadsheet_id: spreadsheetId,
       tab: tabName,
     },
-    scope: {},  // No scope needed - operates on all is_optimization_candidate=True
+    scope: {},  // No scope needed - operates on all active optimization candidates
     options: {},
     requested_by: {
       ui: "apps_script",

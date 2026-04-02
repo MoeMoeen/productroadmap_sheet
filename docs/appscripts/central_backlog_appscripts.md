@@ -9,7 +9,7 @@ It provides PM actions for syncing initiatives between the sheet and database.
 
 | Menu Item | Action | Direction | Description |
 |-----------|--------|-----------|-------------|
-| Sync intake → backlog | `pm.backlog_sync` | DB → Sheet | Pulls all initiatives from DB, overwrites all columns |
+| Sync intake → backlog | `pm.backlog_sync` | Intake sheets → DB → backlog | Reconciles intake into DB, then refreshes backend-owned backlog columns |
 | Save selected rows | `pm.save_selected` | Sheet → DB | Syncs CENTRAL_EDITABLE_FIELDS to DB |
 | Switch scoring framework | `pm.switch_framework` | DB → Sheet | Activates per-framework scores |
 
@@ -246,10 +246,10 @@ function getSelectedInitiativeKeys() {
 
 ```javascript
 // ui_backlog_sync.gs
-// PM Job #1: pm.backlog_sync (DB → Sheet)
+// PM Job #1: pm.backlog_sync (intake sheets → DB → backlog)
 //
-// This syncs ALL initiatives from DB to the Central Backlog sheet.
-// WARNING: Overwrites ALL columns - run "Save selected rows" first to preserve PM edits!
+// This syncs all intake sheets into DB, then refreshes backend-owned columns in Central Backlog.
+// WARNING: Unsaved edits in backend-managed columns will be replaced. Run "Save selected rows" first.
 
 function uiBacklogSync() {
   const ss = SpreadsheetApp.getActive();
@@ -260,8 +260,8 @@ function uiBacklogSync() {
     "Sync intake → backlog",
     "This will:\n" +
       "1. Sync all intake sheets to DB\n" +
-      "2. Regenerate this entire backlog from DB\n\n" +
-      "⚠️ WARNING: Any unsaved edits will be OVERWRITTEN.\n" +
+      "2. Refresh backend-owned backlog columns from DB\n\n" +
+      "⚠️ WARNING: Unsaved edits in backend-managed columns will be replaced.\n" +
       "Run 'Save selected rows' first if you have unsaved changes.\n\n" +
       "Continue?",
     ui.ButtonSet.YES_NO
@@ -293,7 +293,11 @@ function uiBacklogSync() {
 
     if (String(finalResult?.status || "").toLowerCase() === "success") {
       const summary = finalResult?.result?.summary || {};
-      const msg = `Updated: ${summary.updated_count || 0} initiatives, ${summary.cells_updated || 0} cells`;
+      const msg =
+        `Intake changed: ${summary.updated_count || 0}, ` +
+        `backlog rows written: ${summary.initiatives_written || 0}, ` +
+        `cells updated: ${summary.cells_updated || 0}, ` +
+        `archived hidden: ${summary.archived_rows_excluded || 0}`;
       ss.toast(msg, "🧠 Roadmap AI ✅", 8);
     }
   } catch (e) {
@@ -513,11 +517,12 @@ function showRunToast_(run, title) {
 1. **View data**: Open Central Backlog sheet
 2. **Edit PM fields**: Modify Title, Hypothesis, Problem Statement, etc.
 3. **Save edits**: Select edited rows → Roadmap AI → "Save selected rows"
-4. **Sync latest**: Roadmap AI → "Sync intake → backlog" (pulls DB → Sheet)
+4. **Sync latest**: Roadmap AI → "Sync intake → backlog" (intake sheets → DB → backlog)
 
 ### Warning: Unsaved Edits
 
-The "Sync intake → backlog" action **overwrites all columns** from DB.
+The "Sync intake → backlog" action refreshes backend-owned backlog columns from DB.
+PM-added helper/formula columns are preserved, but unsaved edits in backend-managed columns can still be replaced.
 Always run "Save selected rows" first if you have unsaved PM edits!
 
 ### Fields Synced by "Save selected rows"

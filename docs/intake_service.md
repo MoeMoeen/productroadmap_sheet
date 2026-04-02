@@ -35,37 +35,20 @@ def map_sheet_row_to_initiative_create(row: Dict[str, Any]) -> InitiativeCreate:
     """
 
     # Example header names on the intake sheet:
-    # Title, Requesting Team, Requester Name, Requester Email, Country, Product Area,
-    # Market, Category, Program Key, Problem Statement, Hypothesis, etc.
+    # Title, Department, Requesting Team, Requester Name, Requester Email,
+    # Country, Product Area, Problem Statement, Deadline Date, Lifecycle Status / Status
 
     return InitiativeCreate(
         title=row.get("Title", "").strip(),
+        department=row.get("Department"),
         requesting_team=row.get("Requesting Team"),
         requester_name=row.get("Requester Name"),
         requester_email=row.get("Requester Email"),
         country=row.get("Country"),
         product_area=row.get("Product Area"),
-        market=row.get("Market"),
-        category=row.get("Category"),
 
         problem_statement=row.get("Problem Statement"),
-        hypothesis=row.get("Hypothesis"),
-
-        customer_segment=row.get("Customer Segment"),
-        initiative_type=row.get("Initiative Type"),
-
-        effort_tshirt_size=row.get("Effort T-shirt Size"),
-        effort_engineering_days=_to_float(row.get("Effort Engineering Days")),
-        effort_other_teams_days=_to_float(row.get("Effort Other Teams Days")),
-        infra_cost_estimate=_to_float(row.get("Infra Cost Estimate")),
-        engineering_tokens=_to_float(row.get("Engineering Tokens")),
-
-        dependencies_others=row.get("Dependencies Others"),
-        program_key=row.get("Program Key"),
-        risk_level=row.get("Risk Level"),
-        risk_description=row.get("Risk Description"),
-        time_sensitivity_score=_to_float(row.get("Time Sensitivity")),
-        # Deadline handled separately if date format parsing is needed
+        deadline_date=_to_date(row.get("Deadline Date")),
 
         lifecycle_status=(row.get("Lifecycle Status") or row.get("Status") or "new").strip() or "new",
     )
@@ -89,7 +72,9 @@ def _to_bool(value: Any) -> bool:
     return s in {"true", "yes", "y", "1", "✅"}
 ```
 
-You can extend this as needed (date parsing, enums, etc).
+This mapper should stay limited to fields that are genuinely owned by the intake sheet.
+Downstream planning, scoring, effort, dependency, and risk fields belong in Central Backlog,
+Product Ops, MathModels, or Optimization flows rather than department intake.
 
 ---
 

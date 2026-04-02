@@ -207,6 +207,38 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    def _resolve_json_config_path(self, config_path: str) -> Path:
+        path = Path(config_path)
+        if not path.is_absolute():
+            path = BASE_DIR / path
+        return path
+
+    def reload_intake_sheets_from_file(self) -> None:
+        """Refresh INTAKE_SHEETS from the configured JSON file.
+
+        This allows tab config edits to take effect without rebuilding the Settings object.
+        """
+        if not self.INTAKE_SHEETS_CONFIG_FILE:
+            return
+
+        cfg_path = self._resolve_json_config_path(self.INTAKE_SHEETS_CONFIG_FILE)
+        if not cfg_path.exists():
+            raise FileNotFoundError(
+                f"INTAKE_SHEETS_CONFIG_FILE points to {cfg_path}, but it does not exist."
+            )
+
+        with cfg_path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+
+        if not isinstance(raw, list):
+            raise ValueError(
+                "INTAKE_SHEETS config file must contain a JSON list of intake sheet objects."
+            )
+
+        self.INTAKE_SHEETS = [
+            IntakeSheetConfig.model_validate(item) for item in raw
+        ]
+
     @model_validator(mode="after")
     def load_intake_sheets_from_file(self) -> "Settings":
         """
@@ -214,26 +246,7 @@ class Settings(BaseSettings):
         and use it to populate INTAKE_SHEETS.
         """
         if self.INTAKE_SHEETS_CONFIG_FILE:
-            cfg_path = Path(self.INTAKE_SHEETS_CONFIG_FILE)
-            if not cfg_path.is_absolute():
-                cfg_path = BASE_DIR / cfg_path
-
-            if not cfg_path.exists():
-                raise FileNotFoundError(
-                    f"INTAKE_SHEETS_CONFIG_FILE points to {cfg_path}, but it does not exist."
-                )
-
-            with cfg_path.open("r", encoding="utf-8") as f:
-                raw = json.load(f)
-
-            if not isinstance(raw, list):
-                raise ValueError(
-                    "INTAKE_SHEETS config file must contain a JSON list of intake sheet objects."
-                )
-
-            self.INTAKE_SHEETS = [
-                IntakeSheetConfig.model_validate(item) for item in raw
-            ]
+            self.reload_intake_sheets_from_file()
 
         return self
 

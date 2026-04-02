@@ -7,7 +7,7 @@ Q2 2026 Qlub roadmapping simulation end-to-end test.
 
 Sheets populated:
 1. Metrics_Config (ProductOps) - 5 KPIs (1 north star + 4 strategic)
-2. Central Backlog - 25 initiatives (basic fields for all)
+2. Intake Sheet (Simulated_Department) - 25 initiatives in intake-first format
 3. MathModels (ProductOps) - 6 enriched initiatives with formulas
 4. Params (ProductOps) - Parameters for 6 enriched initiatives
 5. Optimization Center - Scenarios, Constraints, Targets
@@ -15,7 +15,7 @@ Sheets populated:
 Usage:
     python test_scripts/q2_2026_simulation_populate.py --all
     python test_scripts/q2_2026_simulation_populate.py --metrics-config
-    python test_scripts/q2_2026_simulation_populate.py --backlog
+    python test_scripts/q2_2026_simulation_populate.py --intake
     python test_scripts/q2_2026_simulation_populate.py --mathmodels
     python test_scripts/q2_2026_simulation_populate.py --params
     python test_scripts/q2_2026_simulation_populate.py --optimization
@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.sheets.client import SheetsClient, get_sheets_service
 from app.sheets.layout import data_start_row
-from app.config import settings
+from app.utils.header_utils import normalize_header
 
 # ============================================================================
 # CONFIGURATION
@@ -46,15 +46,42 @@ with open(PROJECT_ROOT / "product_ops_config.json") as f:
 with open(PROJECT_ROOT / "optimization_center_sheet_config.json") as f:
     OPTIMIZATION_CONFIG = json.load(f)
 
+with open(PROJECT_ROOT / "intake_sheets_test_config.json") as f:
+    INTAKE_CONFIG = json.load(f)
+
 PRODUCTOPS_SHEET_ID = PRODUCTOPS_CONFIG["spreadsheet_id"]
 OPTIMIZATION_SHEET_ID = OPTIMIZATION_CONFIG["spreadsheet_id"]
+INTAKE_SHEET_ID = INTAKE_CONFIG[0]["spreadsheet_id"]
+SIMULATED_INTAKE_TAB = "Simulated_Department"
 
-# Central Backlog - get from settings or use a default
-def get_central_backlog_config():
-    if settings.CENTRAL_BACKLOG:
-        return settings.CENTRAL_BACKLOG.spreadsheet_id, settings.CENTRAL_BACKLOG.tab_name or "Backlog"
-    # Fallback: use ProductOps sheet with a Backlog tab
-    return PRODUCTOPS_SHEET_ID, "Backlog"
+DEFAULT_INTAKE_HEADERS = [
+    "Title",
+    "Department",
+    "Requesting Team",
+    "Requester Name",
+    "Requester Email",
+    "Country",
+    "Product Area",
+    "Problem Statement",
+    "Deadline Date",
+    "Lifecycle_status",
+    "Initiative Key",
+]
+INTAKE_ELIGIBLE_HEADER_SET = {normalize_header(header) for header in DEFAULT_INTAKE_HEADERS + ["Lifecycle Status", "Status"]}
+
+SIMULATED_REQUESTER_BY_DEPARTMENT = {
+    "Product": ("Core Product", "Amina"),
+    "Sales": ("Revenue Ops", "Omar"),
+    "Leadership": ("Strategy", "Sara"),
+    "Ops": ("Field Ops", "Mila"),
+    "Tech": ("Platform", "Noah"),
+    "Marketing": ("Growth", "Lina"),
+    "Data": ("Analytics", "Zayd"),
+    "Finance": ("Finance Ops", "Rana"),
+}
+
+def get_simulated_intake_config():
+    return INTAKE_SHEET_ID, SIMULATED_INTAKE_TAB
 
 # ============================================================================
 # KPI DEFINITIONS (Metrics_Config)
@@ -109,7 +136,7 @@ METRICS_CONFIG_ROWS = [
 ]
 
 # ============================================================================
-# ALL 25 INITIATIVES (Central Backlog)
+# ALL 25 INITIATIVES (seeded into simulated intake)
 # ============================================================================
 
 ALL_INITIATIVES = [
@@ -760,6 +787,72 @@ def write_data_only(
         )
 
 
+def write_table(
+    client: SheetsClient,
+    spreadsheet_id: str,
+    tab: str,
+    headers: list[str],
+    data_rows: list[list[str]],
+    dry_run: bool = False,
+) -> None:
+    """Write a full table including header row starting at A1."""
+    num_cols = len(headers)
+    end_col = col_letter(num_cols - 1)
+    total_rows = len(data_rows) + 1
+
+    if dry_run:
+        print(f"    Header row 1 and data rows 2-{total_rows} (cols A-{end_col})")
+        return
+
+    grid_rows, _ = client.get_sheet_grid_size(spreadsheet_id, tab)
+    client.clear_values(spreadsheet_id, f"{tab}!A1:{end_col}{grid_rows}")
+    client.update_values(
+        spreadsheet_id=spreadsheet_id,
+        range_=f"{tab}!A1:{end_col}{total_rows}",
+        values=[headers, *data_rows],
+        value_input_option="USER_ENTERED",
+    )
+
+
+def get_existing_or_default_intake_headers(client: SheetsClient, spreadsheet_id: str, tab: str) -> list[str]:
+    values = client.get_values(spreadsheet_id, f"{tab}!1:1", value_render_option="FORMATTED_VALUE")
+    if values and values[0]:
+        existing_headers = [str(value).strip() for value in values[0] if str(value).strip()]
+        eligible_headers = [header for header in existing_headers if normalize_header(header) in INTAKE_ELIGIBLE_HEADER_SET]
+        if eligible_headers:
+            return eligible_headers
+    return list(DEFAULT_INTAKE_HEADERS)
+
+
+def build_simulated_intake_row(init: dict, header_order: list[str]) -> list[str]:
+    department = init.get("department", "")
+    team_name, requester_name = SIMULATED_REQUESTER_BY_DEPARTMENT.get(
+        department,
+        (f"{department or 'General'} Team".strip(), "Simulation User"),
+    )
+    requester_email = requester_name.lower().replace(" ", ".") + "@qlub-sim.test"
+
+    value_by_header = {
+        "title": init.get("title", ""),
+        "department": department,
+        "requesting_team": team_name,
+        "requester_name": requester_name,
+        "requester_email": requester_email,
+        "country": init.get("country", ""),
+        "product_area": init.get("bucket", ""),
+        "problem_statement": init.get("description", ""),
+        "deadline_date": init.get("deadline", ""),
+        "lifecycle_status": "new",
+        "status": "new",
+        "initiative_key": "",
+    }
+
+    row: list[str] = []
+    for header in header_order:
+        row.append(str(value_by_header.get(normalize_header(header), "")))
+    return row
+
+
 def populate_metrics_config(client: SheetsClient, dry_run: bool = False):
     """Populate Metrics_Config tab with KPI definitions.
     
@@ -795,71 +888,22 @@ def populate_metrics_config(client: SheetsClient, dry_run: bool = False):
         print(f"  ✅ Wrote {len(data_rows)} KPI rows to {tab}")
 
 
-def populate_central_backlog(client: SheetsClient, dry_run: bool = False):
-    """Populate Central Backlog with all 25 initiatives.
-    
-    Column order (from Live Sheets Registry - 32 columns):
-    A: Initiative Key, B: Title, C: Description, D: Department, E: Requesting Team,
-    F: Requester Name, G: Requester Email, H: Country, I: Product Area, J: Lifecycle Status,
-    K: Customer Segment, L: Initiative Type, M: Hypothesis, N: Problem Statement,
-    O: Value Score, P: Effort Score, Q: Overall Score, R: Active Scoring Framework,
-    S: Use Math Model, T: Dependencies Initiatives, U: Dependencies Others, V: LLM Summary,
-    W: Strategic Priority Coefficient, X: Updated At, Y: Updated Source, Z: Immediate KPI Key,
-    AA: Metric Chain JSON, AB: engineering_tokens, AC: deadline_date, AD: is_mandatory,
-    AE: Is Optimization Candidate, AF: Candidate Period Key
-    """
-    print("\n📋 Populating Central Backlog...")
-    
-    sheet_id, tab = get_central_backlog_config()
-    
-    # Map of enriched initiatives (6) that should have MATH_MODEL framework
-    enriched_keys = {m["initiative_key"] for m in MATHMODELS_ROWS}
-    
-    data_rows = []
-    for init in ALL_INITIATIVES:
-        is_enriched = init["initiative_key"] in enriched_keys
-        data_rows.append([
-            init["initiative_key"],                                           # A: Initiative Key
-            init["title"],                                                    # B: Title
-            init["description"],                                              # C: Description
-            init["department"],                                               # D: Department
-            "",                                                               # E: Requesting Team
-            "",                                                               # F: Requester Name
-            "",                                                               # G: Requester Email
-            init["country"],                                                  # H: Country
-            init["bucket"],                                                   # I: Product Area
-            "new",                                                            # J: Lifecycle Status
-            "",                                                               # K: Customer Segment
-            "",                                                               # L: Initiative Type
-            f"Testing hypothesis for {init['title']}" if is_enriched else "", # M: Hypothesis
-            init["description"],                                              # N: Problem Statement
-            "",                                                               # O: Value Score (backend)
-            "",                                                               # P: Effort Score (backend)
-            "",                                                               # Q: Overall Score (backend)
-            "MATH_MODEL" if is_enriched else "",                              # R: Active Scoring Framework
-            "TRUE" if is_enriched else "",                                    # S: Use Math Model
-            "",                                                               # T: Dependencies Initiatives
-            "",                                                               # U: Dependencies Others
-            "",                                                               # V: LLM Summary
-            "1.0",                                                            # W: Strategic Priority Coefficient
-            "",                                                               # X: Updated At (backend)
-            "",                                                               # Y: Updated Source (backend)
-            init.get("immediate_kpi_key", ""),                                # Z: Immediate KPI Key
-            "",                                                               # AA: Metric Chain JSON
-            str(init.get("engineering_tokens", "")),                          # AB: engineering_tokens
-            init.get("deadline", ""),                                         # AC: deadline_date
-            "TRUE" if init.get("is_mandatory") else "",                       # AD: is_mandatory
-            "TRUE",                                                           # AE: Is Optimization Candidate
-            "Q2_2026",                                                        # AF: Candidate Period Key
-        ])
-    
+def populate_simulated_intake(client: SheetsClient, dry_run: bool = False):
+    """Populate the simulated intake tab with initiatives using intake-eligible headers only."""
+    print("\n🧾 Populating Simulated Intake...")
+
+    sheet_id, tab = get_simulated_intake_config()
+    headers = get_existing_or_default_intake_headers(client, sheet_id, tab)
+    data_rows = [build_simulated_intake_row(init, headers) for init in ALL_INITIATIVES]
+
     if dry_run:
         print(f"  Would write {len(data_rows)} initiatives to {tab}")
-    
-    write_data_only(client, sheet_id, tab, data_rows, num_cols=32, dry_run=dry_run)
-    
+        print(f"  Headers: {headers}")
+
+    write_table(client, sheet_id, tab, headers, data_rows, dry_run=dry_run)
+
     if not dry_run:
-        print(f"  ✅ Wrote {len(data_rows)} initiatives to {tab}")
+        print(f"  ✅ Wrote {len(data_rows)} intake initiatives to {tab}")
 
 
 def populate_mathmodels(client: SheetsClient, dry_run: bool = False):
@@ -1137,7 +1181,8 @@ def main():
     )
     parser.add_argument("--all", action="store_true", help="Populate all sheets")
     parser.add_argument("--metrics-config", action="store_true", help="Populate Metrics_Config only")
-    parser.add_argument("--backlog", action="store_true", help="Populate Central Backlog only")
+    parser.add_argument("--intake", action="store_true", help="Populate simulated intake tab only")
+    parser.add_argument("--backlog", action="store_true", help="Deprecated alias for --intake")
     parser.add_argument("--mathmodels", action="store_true", help="Populate MathModels only")
     parser.add_argument("--params", action="store_true", help="Populate Params only")
     parser.add_argument("--scoring", action="store_true", help="Populate Scoring_Inputs only")
@@ -1147,7 +1192,10 @@ def main():
     args = parser.parse_args()
     
     # Default to --all if no specific flags
-    if not any([args.all, args.metrics_config, args.backlog, args.mathmodels, 
+    if args.backlog:
+        args.intake = True
+
+    if not any([args.all, args.metrics_config, args.intake, args.mathmodels, 
                 args.params, args.scoring, args.optimization]):
         args.all = True
     
@@ -1157,8 +1205,8 @@ def main():
     print(f"\nProductOps Sheet ID: {PRODUCTOPS_SHEET_ID}")
     print(f"Optimization Sheet ID: {OPTIMIZATION_SHEET_ID}")
     
-    backlog_id, backlog_tab = get_central_backlog_config()
-    print(f"Central Backlog: {backlog_id} / {backlog_tab}")
+    intake_id, intake_tab = get_simulated_intake_config()
+    print(f"Simulated Intake: {intake_id} / {intake_tab}")
     
     if args.dry_run:
         print("\n⚠️  DRY RUN MODE - No changes will be made")
@@ -1168,8 +1216,8 @@ def main():
     if args.all or args.metrics_config:
         populate_metrics_config(client, args.dry_run)
     
-    if args.all or args.backlog:
-        populate_central_backlog(client, args.dry_run)
+    if args.all or args.intake:
+        populate_simulated_intake(client, args.dry_run)
     
     if args.all or args.mathmodels:
         populate_mathmodels(client, args.dry_run)
@@ -1189,9 +1237,9 @@ def main():
     print("✅ Population complete!")
     print("=" * 60)
     print("\n📌 Next steps:")
-    print("   1. Open ProductOps sheet and run 'Seed Math Params' for MathModels")
-    print("   2. Open Scoring_Inputs and run 'Score Selected' for enriched initiatives")
-    print("   3. Check KPI_Contributions tab for computed contributions")
+    print("   1. Run 'Sync intake → backlog' so the simulated intake rows are ingested into DB and Central Backlog")
+    print("   2. Open ProductOps sheet and run 'Seed Math Params' for MathModels")
+    print("   3. Open Scoring_Inputs and run 'Score Selected' for enriched initiatives")
     print("   4. Open Optimization Center and run optimization")
 
 

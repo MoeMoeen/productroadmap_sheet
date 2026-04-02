@@ -13,11 +13,15 @@ from app.jobs.flow3_product_ops_job import run_flow3_sync_inputs_to_initiatives
 from app.jobs.flow3_product_ops_job import run_flow3_populate_initiatives
 from app.jobs.sync_intake_job import reconcile_intake_managed_initiatives
 from app.jobs.sync_intake_job import run_sync_for_sheet
+from app.jobs.sync_intake_job import run_sync_all_intake_sheets
+from app.services.action_runner import ActionContext, _action_pm_backlog_sync
 from app.services.intake_mapper import map_sheet_row_to_initiative_create
 from app.services.intake_service import IntakeService
 from app.sheets.backlog_writer import write_backlog_from_db
+from app.sheets.intake_writer import GoogleSheetsIntakeWriter
 from app.sheets.layout import data_start_row
 from app.sheets.scoring_inputs_reader import ScoringInputsRow
+from app.config import IntakeSheetConfig, IntakeTabConfig, settings
 
 
 class FakeSheetsClient:
@@ -35,6 +39,9 @@ class FakeSheetsClient:
     def clear_values(self, spreadsheet_id: str, range_: str) -> None:
         self.cleared_ranges.append(range_)
 
+    def batch_clear_values(self, spreadsheet_id: str, ranges: list[str]) -> None:
+        self.cleared_ranges.extend(ranges)
+
     def batch_update_values(self, spreadsheet_id: str, data: list[dict], value_input_option: str = "USER_ENTERED") -> None:
         self.updated_batches.append(data)
 
@@ -43,6 +50,16 @@ class FakeSheetsClient:
 
     def batch_update(self, spreadsheet_id: str, requests: list[dict]) -> None:
         return None
+
+
+class CountingSheetsClient(FakeSheetsClient):
+    def __init__(self, header: list[str]) -> None:
+        super().__init__(header)
+        self.get_values_calls = 0
+
+    def get_values(self, spreadsheet_id: str, range_: str, value_render_option: str = "UNFORMATTED_VALUE"):
+        self.get_values_calls += 1
+        return super().get_values(spreadsheet_id, range_, value_render_option)
 
 
 @pytest.fixture
@@ -113,27 +130,77 @@ def test_new_intake_initiative_created_and_active(db_session) -> None:
     assert getattr(initiative, "source_sheet_key", None) == "emea_intake"
 
 
-def test_intake_mapper_uses_current_schema_fields() -> None:
+def test_intake_mapper_only_reads_intake_fields() -> None:
     dto = map_sheet_row_to_initiative_create(
         {
             "Title": "New Initiative",
+            "Department": "Marketing",
+            "Requesting Team": "Growth",
+            "Problem Statement": "Customer drop-off is high",
+            "Deadline Date": "2026-04-30",
+            "Lifecycle Status": "new",
             "Market": "MENA",
             "Category": "Growth",
+            "Hypothesis": "Should be ignored",
+            "Customer Segment": "SMB",
+            "Initiative Type": "Feature",
+            "Effort T-shirt Size": "M",
+            "Effort Engineering Days": "10",
+            "Effort Other Teams Days": "4",
+            "Infra Cost Estimate": "500",
+            "Engineering Tokens": "250",
+            "Dependencies Others": "Legal",
             "Program Key": "program-alpha",
+            "Risk Level": "high",
+            "Risk Description": "Needs migration",
             "Time Sensitivity": "4.5",
-            "Lifecycle Status": "new",
-            "Current Pain": "legacy field should be ignored",
         }
     )
 
     dumped = dto.model_dump()
 
-    assert dumped["market"] == "MENA"
-    assert dumped["category"] == "Growth"
-    assert dumped["program_key"] == "program-alpha"
-    assert dumped["time_sensitivity_score"] == 4.5
+    assert dumped["department"] == "Marketing"
+    assert dumped["requesting_team"] == "Growth"
+    assert dumped["problem_statement"] == "Customer drop-off is high"
+    assert str(dumped["deadline_date"]) == "2026-04-30"
     assert dumped["lifecycle_status"] == "new"
-    assert "current_pain" not in dumped
+    assert dumped["market"] is None
+    assert dumped["category"] is None
+    assert dumped["hypothesis"] is None
+    assert dumped["customer_segment"] is None
+    assert dumped["initiative_type"] is None
+    assert dumped["effort_tshirt_size"] is None
+    assert dumped["effort_engineering_days"] is None
+    assert dumped["effort_other_teams_days"] is None
+    assert dumped["infra_cost_estimate"] is None
+    assert dumped["engineering_tokens"] is None
+    assert dumped["dependencies_others"] is None
+    assert dumped["program_key"] is None
+    assert dumped["risk_level"] is None
+    assert dumped["risk_description"] is None
+    assert dumped["time_sensitivity_score"] is None
+
+
+def test_intake_mapper_resolves_header_aliases() -> None:
+    dto = map_sheet_row_to_initiative_create(
+        {
+            "title": "Alias Initiative",
+            "dept": "Leadership",
+            "requesting_team": "PMO",
+            "problem_statement": "Need header normalization",
+			"deadline_date": "2026-05-15",
+            "status": "new",
+        }
+    )
+
+    dumped = dto.model_dump()
+
+    assert dumped["title"] == "Alias Initiative"
+    assert dumped["department"] == "Leadership"
+    assert dumped["requesting_team"] == "PMO"
+    assert dumped["problem_statement"] == "Need header normalization"
+    assert str(dumped["deadline_date"]) == "2026-05-15"
+    assert dumped["lifecycle_status"] == "new"
 
 
 def test_existing_intake_initiative_remains_active_after_reconcile(db_session) -> None:
@@ -291,7 +358,7 @@ def test_pm_owned_fields_preserved_for_surviving_initiative(db_session) -> None:
     assert getattr(initiative, "candidate_period_key", None) == "2026-Q2"
 
 
-def test_backlog_writer_excludes_archived_by_default(db_session) -> None:
+def test_backlog_writer_includes_archived_by_default(db_session) -> None:
     _create_initiative(db_session, initiative_key="INIT-000006", title="Visible")
     _create_initiative(
         db_session,
@@ -310,18 +377,18 @@ def test_backlog_writer_excludes_archived_by_default(db_session) -> None:
         backlog_tab_name="Backlog",
     )
 
-    assert result["initiatives_written"] == 1
-    assert result["archived_rows_excluded"] == 1
+    assert result["initiatives_written"] == 2
+    assert result["archived_rows_excluded"] == 0
 
-    result_with_archived = write_backlog_from_db(
+    result_without_archived = write_backlog_from_db(
         db_session,
         cast(Any, client),
         backlog_spreadsheet_id="spreadsheet-1",
         backlog_tab_name="Backlog",
-        include_archived=True,
+        include_archived=False,
     )
-    assert result_with_archived["initiatives_written"] == 2
-    assert result_with_archived["archived_rows_excluded"] == 0
+    assert result_without_archived["initiatives_written"] == 1
+    assert result_without_archived["archived_rows_excluded"] == 1
 
 
 def test_backlog_writer_renders_archive_columns_when_present(db_session) -> None:
@@ -383,6 +450,82 @@ def test_backlog_writer_renders_intake_source_column(db_session) -> None:
         for item in batch
     }
     assert flat_updates["Backlog!C5"] == "mena_intake / UAE"
+
+
+def test_backlog_writer_derives_missing_sheet_key_for_intake_source(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    original_sheets = list(settings.INTAKE_SHEETS)
+    settings.INTAKE_SHEETS = [
+        IntakeSheetConfig(
+            sheet_key="intake_emea",
+            spreadsheet_id="sheet-1",
+            tabs=[
+                IntakeTabConfig(
+                    key="marketing_emea",
+                    spreadsheet_id="sheet-1",
+                    tab_name="Marketing_EMEA",
+                )
+            ],
+        )
+    ]
+    try:
+        _create_initiative(
+            db_session,
+            initiative_key="INIT-000016",
+            title="Derived Source",
+            source_sheet_id="sheet-1",
+            source_tab_name="Marketing_EMEA",
+        )
+        client = FakeSheetsClient(["Initiative Key", "Title", "Intake Source"])
+
+        write_backlog_from_db(
+            db_session,
+            cast(Any, client),
+            backlog_spreadsheet_id="spreadsheet-1",
+            backlog_tab_name="Backlog",
+        )
+
+        flat_updates = {
+            item["range"]: item["values"][0][0]
+            for batch in client.updated_batches
+            for item in batch
+        }
+        assert flat_updates["Backlog!C5"] == "intake_emea / Marketing_EMEA"
+    finally:
+        settings.INTAKE_SHEETS = original_sheets
+
+
+def test_reconcile_backfills_missing_source_sheet_key_from_config(db_session) -> None:
+    original_sheets = list(settings.INTAKE_SHEETS)
+    settings.INTAKE_SHEETS = [
+        IntakeSheetConfig(
+            sheet_key="intake_emea",
+            spreadsheet_id="sheet-1",
+            tabs=[
+                IntakeTabConfig(
+                    key="marketing_emea",
+                    spreadsheet_id="sheet-1",
+                    tab_name="Marketing_EMEA",
+                )
+            ],
+        )
+    ]
+    try:
+        initiative = _create_initiative(
+            db_session,
+            initiative_key="INIT-000017",
+            title="Needs Provenance",
+            source_sheet_id="sheet-1",
+            source_tab_name="Marketing_EMEA",
+        )
+
+        result = reconcile_intake_managed_initiatives(db_session, {"INIT-000017"})
+        db_session.refresh(initiative)
+
+        assert result["provenance_backfilled_count"] == 1
+        assert getattr(initiative, "source_sheet_key", None) == "intake_emea"
+        assert getattr(initiative, "is_archived", False) is False
+    finally:
+        settings.INTAKE_SHEETS = original_sheets
 
 
 def test_backlog_writer_preserves_non_owned_columns(db_session) -> None:
@@ -479,6 +622,141 @@ def test_run_sync_for_sheet_raises_on_backfill_failure(db_session, monkeypatch: 
             tab_name="Marketing_EMEA",
             sheets_service=object(),
         )
+
+
+def test_intake_key_writer_caches_header_reads_across_multiple_backfills() -> None:
+    client = CountingSheetsClient(["Title", "Initiative Key", "Updated At"])
+    writer = GoogleSheetsIntakeWriter(cast(Any, client))
+
+    writer.write_initiative_key("sheet-1", "Simulated_Department", 2, "INIT-000001")
+    writer.write_initiative_key("sheet-1", "Simulated_Department", 3, "INIT-000002")
+
+    assert client.get_values_calls == 1
+    assert len(client.updated_batches) == 2
+
+
+def test_run_sync_all_intake_sheets_reloads_runtime_tab_config(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    original_sheets = list(settings.INTAKE_SHEETS)
+    reloaded_sheets = [
+        IntakeSheetConfig(
+            sheet_key="intake_emea",
+            spreadsheet_id="sheet-1",
+            region="EMEA",
+            tabs=[
+                IntakeTabConfig(
+                    key="marketing_emea",
+                    spreadsheet_id="sheet-1",
+                    tab_name="Marketing_EMEA",
+                ),
+                IntakeTabConfig(
+                    key="sales_emea",
+                    spreadsheet_id="sheet-1",
+                    tab_name="sales EMEA",
+                ),
+            ],
+        )
+    ]
+
+    monkeypatch.setattr("app.jobs.sync_intake_job.get_sheets_service", lambda: object())
+    monkeypatch.setattr(
+        settings.__class__,
+        "reload_intake_sheets_from_file",
+        lambda self: setattr(self, "INTAKE_SHEETS", reloaded_sheets),
+    )
+
+    synced_tabs: list[str] = []
+
+    def fake_run_sync_for_sheet(
+        db,
+        spreadsheet_id,
+        source_sheet_key,
+        tab_name,
+        sheets_service=None,
+        allow_status_override=False,
+        header_row=1,
+        start_data_row=2,
+        max_rows=None,
+        seen_keys=None,
+        commit_every=None,
+    ):
+        synced_tabs.append(tab_name)
+        return {
+            "rows_processed": 1,
+            "initiatives_created": 0,
+            "initiatives_updated": 1,
+            "keys_backfilled": 0,
+        }
+
+    monkeypatch.setattr("app.jobs.sync_intake_job.run_sync_for_sheet", fake_run_sync_for_sheet)
+    monkeypatch.setattr(
+        "app.jobs.sync_intake_job.reconcile_intake_managed_initiatives",
+        lambda db, current_intake_keys, managed_scopes=None: {
+            "intake_keys_seen": len(current_intake_keys),
+            "db_intake_managed_checked": 0,
+            "archived_count": 0,
+            "already_archived_count": 0,
+            "unarchived_count": 0,
+        },
+    )
+
+    try:
+        result = run_sync_all_intake_sheets(db_session)
+    finally:
+        settings.INTAKE_SHEETS = original_sheets
+
+    assert synced_tabs == ["Marketing_EMEA", "sales EMEA"]
+    assert result["sheets_processed"] == 2
+
+
+def test_pm_backlog_sync_skips_backlog_update_stage(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    backlog_call: dict[str, bool] = {}
+
+    monkeypatch.setattr(
+        "app.services.action_runner.run_sync_all_intake_sheets",
+        lambda db, allow_status_override_global=False, archive_missing=True: {
+            "sheets_processed": 2,
+            "rows_processed": 19,
+            "initiatives_created": 1,
+            "initiatives_updated": 18,
+            "initiatives_archived": 0,
+            "initiatives_unarchived": 0,
+            "already_archived": 1,
+            "db_intake_managed_checked": 20,
+            "intake_keys_seen": 19,
+            "keys_backfilled": 1,
+        },
+    )
+
+    def fake_run_all_backlog_sync(db, include_archived=True):
+        backlog_call["include_archived"] = include_archived
+        return {
+            "initiatives_written": 19,
+            "cells_updated": 589,
+            "archived_rows_excluded": 1,
+        }
+
+    monkeypatch.setattr(
+        "app.services.action_runner.run_all_backlog_sync",
+        fake_run_all_backlog_sync,
+    )
+
+    def fail_backlog_update(*args, **kwargs):
+        raise AssertionError("pm.backlog_sync must not call backlog update")
+
+    monkeypatch.setattr("app.services.action_runner.run_backlog_update", fail_backlog_update)
+
+    ctx = ActionContext(payload={"action": "pm.backlog_sync", "options": {}}, sheets_client=cast(Any, object()), llm_client=None)
+
+    result = _action_pm_backlog_sync(db_session, ctx)
+
+    assert result["pm_job"] == "pm.backlog_sync"
+    assert result["backlog_update_skipped"] is True
+    assert result["backlog_update_completed"] is False
+    assert result["substeps"] == ["flow0.intake_sync", "flow1.backlogsheet_write"]
+    assert result["updated_count"] == 19
+    assert result["initiatives_written"] == 19
+    assert result["cells_updated"] == 589
+    assert backlog_call["include_archived"] is True
 
 
 def test_flow3_sync_inputs_raises_on_batch_commit_failure(db_session, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -232,9 +232,9 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
     
     # PM jobs
     elif action == "pm.backlog_sync":
-        # Reuses flow1.full_sync summary with detailed counts
+        # Two-step PM refresh: intake sync -> backlog write
         substeps = result.get("substeps", [])
-        summary["total"] = 3  # Expected substeps
+        summary["total"] = 2
         summary["success"] = len(substeps)
         # Include counts for AppScript display
         summary["updated_count"] = result.get("updated_count", 0)
@@ -246,9 +246,6 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         summary["intake_unarchived"] = result.get("intake_unarchived", 0)
         summary["archived_rows_excluded"] = result.get("archived_rows_excluded", 0)
         summary["intake_deleted"] = result.get("intake_deleted", 0)
-        # Check for partial failure
-        if not result.get("backlog_update_completed", True):
-            summary["failed"] = 1
     
     elif action == "pm.score_selected":
         selected_count = result.get("selected_count", 0)
@@ -562,7 +559,7 @@ def _action_flow1_full_sync(db: Session, ctx: ActionContext) -> Dict[str, Any]:
     backlog_commit_every = options.get("backlog_commit_every")
     product_org = options.get("product_org")
     archive_missing = bool(options.get("archive_missing_initiatives", True))
-    include_archived = bool(options.get("include_archived", False))
+    include_archived = bool(options.get("include_archived", True))
 
     result = run_flow1_full_sync(
         db=db,
@@ -716,14 +713,47 @@ def _action_flow0_intake_sync(db: Session, ctx: ActionContext) -> Dict[str, Any]
 def _action_pm_backlog_sync(db: Session, ctx: ActionContext) -> Dict[str, Any]:
     """PM Job #1: Sync intake to backlog.
 
-    Uses the Flow 1 soft-reconcile path:
+    This PM action is intentionally one-way from intake to Central Backlog:
     1. Sync intake sheets into DB
     2. Soft-archive intake-managed initiatives missing from intake
-    3. Regenerate central backlog from DB, excluding archived initiatives by default
+    3. Regenerate central backlog from DB, including archived initiatives by default
+
+    It must NOT read Central Backlog edits back into DB as part of the same run,
+    otherwise stale sheet values can overwrite freshly-synced intake fields.
     """
-    result = _action_flow1_full_sync(db, ctx)
-    result["pm_job"] = "pm.backlog_sync"
-    return result
+    options = (ctx.payload.get("options") or {}) if isinstance(ctx.payload.get("options"), dict) else {}
+    allow_status_override = bool(options.get("allow_status_override_global", False))
+    archive_missing = bool(options.get("archive_missing_initiatives", True))
+    include_archived = bool(options.get("include_archived", True))
+
+    intake_result = run_sync_all_intake_sheets(
+        db=db,
+        allow_status_override_global=allow_status_override,
+        archive_missing=archive_missing,
+    )
+    backlog_result = run_all_backlog_sync(db=db, include_archived=include_archived)
+
+    return {
+        "completed": True,
+        "pm_job": "pm.backlog_sync",
+        "intake_sync_completed": True,
+        "backlog_update_completed": False,
+        "backlog_update_skipped": True,
+        "backlog_update_error": None,
+        "backlog_sync_completed": True,
+        "substeps": ["flow0.intake_sync", "flow1.backlogsheet_write"],
+        "intake_sheets_processed": intake_result["sheets_processed"],
+        "intake_rows_processed": intake_result["rows_processed"],
+        "intake_created": intake_result["initiatives_created"],
+        "intake_updated": intake_result["initiatives_updated"],
+        "intake_archived": intake_result["initiatives_archived"],
+        "intake_unarchived": intake_result["initiatives_unarchived"],
+        "archived_rows_excluded": backlog_result["archived_rows_excluded"],
+        "intake_deleted": intake_result["initiatives_archived"],
+        "initiatives_written": backlog_result["initiatives_written"],
+        "cells_updated": backlog_result["cells_updated"],
+        "updated_count": intake_result["initiatives_created"] + intake_result["initiatives_updated"],
+    }
 
 
 def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
