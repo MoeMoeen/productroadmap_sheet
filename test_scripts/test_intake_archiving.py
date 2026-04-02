@@ -9,9 +9,14 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
 from app.db.models.initiative import Initiative
+from app.jobs.flow3_product_ops_job import run_flow3_sync_inputs_to_initiatives
+from app.jobs.flow3_product_ops_job import run_flow3_populate_initiatives
 from app.jobs.sync_intake_job import reconcile_intake_managed_initiatives
+from app.jobs.sync_intake_job import run_sync_for_sheet
 from app.services.intake_service import IntakeService
 from app.sheets.backlog_writer import write_backlog_from_db
+from app.sheets.layout import data_start_row
+from app.sheets.scoring_inputs_reader import ScoringInputsRow
 
 
 class FakeSheetsClient:
@@ -289,6 +294,169 @@ def test_backlog_writer_renders_archive_columns_when_present(db_session) -> None
     assert flat_updates["Backlog!C5"] is True
     assert str(flat_updates["Backlog!D5"]).startswith("2026-04-02T12:00:00")
     assert flat_updates["Backlog!E5"] == "missing_from_intake_sync"
+
+
+def test_backlog_writer_preserves_non_owned_columns(db_session) -> None:
+    _create_initiative(db_session, initiative_key="INIT-000010", title="Visible")
+    client = FakeSheetsClient(["Initiative Key", "Title", "PM Helper Formula"])
+
+    result = write_backlog_from_db(
+        db_session,
+        cast(Any, client),
+        backlog_spreadsheet_id="spreadsheet-1",
+        backlog_tab_name="Backlog",
+    )
+
+    dsr = data_start_row("Backlog")
+    assert result["initiatives_written"] == 1
+    assert client.cleared_ranges == [
+        f"Backlog!A{dsr}:A50",
+        f"Backlog!B{dsr}:B50",
+    ]
+    assert all("C" not in clear_range for clear_range in client.cleared_ranges)
+
+
+def test_flow3_populate_excludes_archived_candidates(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    _create_initiative(
+        db_session,
+        initiative_key="INIT-000011",
+        is_optimization_candidate=True,
+        is_archived=False,
+    )
+    _create_initiative(
+        db_session,
+        initiative_key="INIT-000012",
+        is_optimization_candidate=True,
+        is_archived=True,
+    )
+
+    class FakeScoringInputsReader:
+        def __init__(self, client: Any, spreadsheet_id: str, tab_name: str) -> None:
+            self.client = client
+            self.spreadsheet_id = spreadsheet_id
+            self.tab_name = tab_name
+
+        def read(self) -> list[Any]:
+            return []
+
+    captured_keys: list[str] = []
+
+    def fake_append_initiative_keys_to_scoring_inputs(*, client: Any, spreadsheet_id: str, tab_name: str, initiative_keys: list[str]) -> int:
+        captured_keys.extend(initiative_keys)
+        return len(initiative_keys)
+
+    monkeypatch.setattr(
+        "app.jobs.flow3_product_ops_job.ScoringInputsReader",
+        FakeScoringInputsReader,
+    )
+    monkeypatch.setattr(
+        "app.sheets.productops_writer.append_initiative_keys_to_scoring_inputs",
+        fake_append_initiative_keys_to_scoring_inputs,
+    )
+
+    result = run_flow3_populate_initiatives(
+        db_session,
+        client=cast(Any, object()),
+        spreadsheet_id="spreadsheet-1",
+        tab_name="Scoring_Inputs",
+    )
+
+    assert result["total_candidates"] == 1
+    assert result["newly_added"] == 1
+    assert captured_keys == ["INIT-000011"]
+
+
+def test_run_sync_for_sheet_raises_on_backfill_failure(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.jobs.sync_intake_job.IntakeReader.get_rows_for_sheet",
+        lambda self, spreadsheet_id, tab_name, header_row=1, start_data_row=2, max_rows=None: [
+            (2, {"Title": "New Initiative", "Department": "Marketing", "Requesting Team": "Growth"})
+        ],
+    )
+
+    def fail_backfill(self, sheet_id: str, tab_name: str, row_number: int, initiative_key: str) -> None:
+        raise RuntimeError("sheet write failed")
+
+    monkeypatch.setattr(
+        "app.sheets.intake_writer.GoogleSheetsIntakeWriter.write_initiative_key",
+        fail_backfill,
+    )
+
+    with pytest.raises(RuntimeError, match="sheet write failed"):
+        run_sync_for_sheet(
+            db_session,
+            spreadsheet_id="sheet-1",
+            tab_name="Marketing_EMEA",
+            sheets_service=object(),
+        )
+
+
+def test_flow3_sync_inputs_raises_on_batch_commit_failure(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    _create_initiative(db_session, initiative_key="INIT-000013", title="Needs Sync")
+
+    monkeypatch.setattr(
+        "app.jobs.flow3_product_ops_job.run_flow3_preview_inputs",
+        lambda spreadsheet_id=None, tab_name=None: [
+            ScoringInputsRow(
+                initiative_key="INIT-000013",
+                active_scoring_framework="RICE",
+                extras={
+                    "strategic_priority_coefficient": 1.5,
+                    "risk_level": "medium",
+                    "time_sensitivity_score": 3.0,
+                },
+            )
+        ],
+    )
+
+    commit_calls = {"count": 0}
+    original_rollback = db_session.rollback
+
+    def fail_first_commit() -> None:
+        commit_calls["count"] += 1
+        raise RuntimeError("batch commit failed")
+
+    monkeypatch.setattr(db_session, "commit", fail_first_commit)
+    monkeypatch.setattr(db_session, "rollback", original_rollback)
+
+    with pytest.raises(RuntimeError, match="batch commit failed"):
+        run_flow3_sync_inputs_to_initiatives(db_session, commit_every=1)
+
+    assert commit_calls["count"] == 1
+
+
+def test_flow3_sync_inputs_raises_on_final_commit_failure(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    _create_initiative(db_session, initiative_key="INIT-000014", title="Needs Final Commit")
+
+    monkeypatch.setattr(
+        "app.jobs.flow3_product_ops_job.run_flow3_preview_inputs",
+        lambda spreadsheet_id=None, tab_name=None: [
+            ScoringInputsRow(
+                initiative_key="INIT-000014",
+                active_scoring_framework="WSJF",
+                extras={
+                    "strategic_priority_coefficient": 2.0,
+                    "risk_level": "high",
+                    "time_sensitivity_score": 5.0,
+                },
+            )
+        ],
+    )
+
+    commit_calls = {"count": 0}
+    original_rollback = db_session.rollback
+
+    def fail_final_commit() -> None:
+        commit_calls["count"] += 1
+        raise RuntimeError("final commit failed")
+
+    monkeypatch.setattr(db_session, "commit", fail_final_commit)
+    monkeypatch.setattr(db_session, "rollback", original_rollback)
+
+    with pytest.raises(RuntimeError, match="final commit failed"):
+        run_flow3_sync_inputs_to_initiatives(db_session, commit_every=1_000)
+
+    assert commit_calls["count"] == 1
 
 
 def test_reconcile_is_idempotent(db_session) -> None:

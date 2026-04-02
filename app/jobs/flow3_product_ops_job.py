@@ -201,6 +201,7 @@ def run_flow3_sync_inputs_to_initiatives(
             except Exception:
                 db.rollback()
                 logger.exception("flow3.sync.batch_commit_failed")
+                raise
 
     try:
         db.commit()
@@ -208,6 +209,7 @@ def run_flow3_sync_inputs_to_initiatives(
     except Exception:
         db.rollback()
         logger.exception("flow3.sync.final_commit_failed")
+        raise
 
     return updated
 
@@ -313,7 +315,8 @@ def run_flow3_populate_initiatives(
     
     # Step 1: Query optimization candidates from DB
     candidates = db.query(Initiative).filter(
-        Initiative.is_optimization_candidate.is_(True)
+        Initiative.is_optimization_candidate.is_(True),
+        Initiative.is_archived.is_(False),
     ).order_by(Initiative.initiative_key).all()
     
     total_candidates = len(candidates)

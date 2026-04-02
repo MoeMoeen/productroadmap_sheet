@@ -213,19 +213,43 @@ def run_sync_for_sheet(
         if batch_size and (rows_processed % batch_size == 0):
             try:
                 db.commit()
-                intake_service.flush_pending_key_backfills()
             except Exception:
                 db.rollback()
-                pass
+                logger.exception(
+                    "intake.batch_commit_failed",
+                    extra={"sheet_id": spreadsheet_id, "tab": tab_name, "rows_processed": rows_processed},
+                )
+                raise
+
+            try:
+                intake_service.flush_pending_key_backfills()
+            except Exception:
+                logger.exception(
+                    "intake.batch_backfill_failed",
+                    extra={"sheet_id": spreadsheet_id, "tab": tab_name, "rows_processed": rows_processed},
+                )
+                raise
                 
     # Final commit and backfill for remainder
     keys_backfilled = 0
     try:
         db.commit()
-        keys_backfilled = intake_service.flush_pending_key_backfills()
     except Exception:
         db.rollback()
-        pass
+        logger.exception(
+            "intake.final_commit_failed",
+            extra={"sheet_id": spreadsheet_id, "tab": tab_name, "rows_processed": rows_processed},
+        )
+        raise
+
+    try:
+        keys_backfilled = intake_service.flush_pending_key_backfills()
+    except Exception:
+        logger.exception(
+            "intake.final_backfill_failed",
+            extra={"sheet_id": spreadsheet_id, "tab": tab_name, "rows_processed": rows_processed},
+        )
+        raise
     
     return {
         "rows_processed": rows_processed,

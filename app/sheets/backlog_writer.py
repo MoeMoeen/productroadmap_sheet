@@ -110,14 +110,15 @@ def write_backlog_from_db(
     backlog_tab_name: str = "Backlog",
     include_archived: bool = False,
 ) -> dict[str, int]:
-    """Overwrite backlog sheet with current DB initiatives (destructive sync).
+    """Rewrite backend-owned backlog columns from current DB initiatives.
 
     Strategy:
     1. Read header row to preserve column structure
-    2. Clear all data rows below header (keeps header/metadata rows intact)
+    2. Clear only backend-owned data columns below the header/metadata rows
     3. Write all DB initiatives starting at data_start_row
     
-    This ensures a clean sync - stale rows are removed, current data is written fresh.
+    This removes stale system-managed values without wiping PM-added helper or formula
+    columns that are not part of the canonical backlog schema.
     
     Returns:
         Dict with counts: {initiatives_written, cells_updated, archived_rows_excluded}
@@ -148,18 +149,28 @@ def write_backlog_from_db(
         if canon:
             owned_sheet_to_canonical[col] = canon
 
-    # 2) Clear all data rows (everything below header/metadata rows)
+    # 2) Clear only backend-owned columns so PM-added helper/formula columns survive.
     _dsr = data_start_row(backlog_tab_name)
     grid_rows, grid_cols = client.get_sheet_grid_size(backlog_spreadsheet_id, backlog_tab_name)
+    owned_headers = [col for col in header if col in owned_sheet_to_canonical]
     if grid_rows >= _dsr:
-        # Clear from data start row to end of existing data
-        last_col_a1 = _col_index_to_a1(max(grid_cols, len(header)))
-        clear_range = f"{backlog_tab_name}!A{_dsr}:{last_col_a1}{grid_rows}"
-        logger.info("backlog.clearing_stale_rows", extra={"range": clear_range})
-        client.clear_values(backlog_spreadsheet_id, clear_range)
+        clear_ranges: List[str] = []
+        for col in owned_headers:
+            col_idx = col_idx_map.get(col)
+            if col_idx is None:
+                continue
+            col_a1 = _col_index_to_a1(col_idx + 1)
+            clear_ranges.append(f"{backlog_tab_name}!{col_a1}{_dsr}:{col_a1}{grid_rows}")
+
+        for clear_range in clear_ranges:
+            client.clear_values(backlog_spreadsheet_id, clear_range)
+
+        logger.info(
+            "backlog.clearing_owned_columns",
+            extra={"column_count": len(clear_ranges), "grid_rows": grid_rows},
+        )
 
     # 3) Build rows for all initiatives
-    owned_headers = [col for col in header if col in owned_sheet_to_canonical]
     now_ts = datetime.now(timezone.utc)
     
     batch_data: List[Dict[str, Any]] = []

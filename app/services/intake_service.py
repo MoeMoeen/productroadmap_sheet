@@ -440,7 +440,11 @@ class IntakeService:
         try:
             self.key_writer.write_initiative_key(sheet_id, tab_name, row_number, initiative_key)
         except Exception:
-            logger.exception("intake.key_backfill_failed")
+            logger.exception(
+                "intake.key_backfill_failed",
+                extra={"sheet_id": sheet_id, "tab": tab_name, "row": row_number},
+            )
+            raise
 
     def flush_pending_key_backfills(self) -> int:
         """Write any queued initiative keys to their intake sheet cells.
