@@ -176,30 +176,23 @@ We’ll assume your **intake sheet headers** look roughly like this (you can twe
 * `Country`
 * `Product Area`
 * `Problem Statement`
-* `Current Pain`
-* `Desired Outcome`
-* `Target Metrics`
 * `Hypothesis`
-* `Strategic Theme`
 * `Customer Segment`
 * `Initiative Type`
-* `Expected Impact Description`
-* `Impact Metric`
-* `Impact Unit`
-* `Impact Low`
-* `Impact Expected`
-* `Impact High`
+* `Market`
+* `Category`
 * `Effort T-shirt Size`
 * `Effort Engineering Days`
 * `Effort Other Teams Days`
 * `Infra Cost Estimate`
+* `Engineering Tokens`
 * `Dependencies Others`
-* `Is Mandatory`
+* `Program Key`
 * `Risk Level`
 * `Risk Description`
 * `Time Sensitivity`
 * `Deadline Date`
-* `Status`
+* `Lifecycle Status` or `Status`
 
 Here’s the mapper:
 
@@ -217,30 +210,23 @@ def map_sheet_row_to_initiative_create(row: Dict[str, Any]) -> InitiativeCreate:
     - Country
     - Product Area
     - Problem Statement
-    - Current Pain
-    - Desired Outcome
-    - Target Metrics
     - Hypothesis
-    - Strategic Theme
     - Customer Segment
     - Initiative Type
-    - Expected Impact Description
-    - Impact Metric
-    - Impact Unit
-    - Impact Low
-    - Impact Expected
-    - Impact High
+    - Market
+    - Category
     - Effort T-shirt Size
     - Effort Engineering Days
     - Effort Other Teams Days
     - Infra Cost Estimate
+    - Engineering Tokens
     - Dependencies Others
-    - Is Mandatory
+    - Program Key
     - Risk Level
     - Risk Description
     - Time Sensitivity
     - Deadline Date
-    - Status
+    - Lifecycle Status / Status
     """
 
     # Basic text fields: strip whitespace where relevant
@@ -257,42 +243,32 @@ def map_sheet_row_to_initiative_create(row: Dict[str, Any]) -> InitiativeCreate:
 
         # Problem & context
         problem_statement=row.get("Problem Statement") or None,
-        current_pain=row.get("Current Pain") or None,
-        desired_outcome=row.get("Desired Outcome") or None,
-        target_metrics=row.get("Target Metrics") or None,
         hypothesis=row.get("Hypothesis") or None,
 
         # Strategic alignment & classification
-        strategic_theme=row.get("Strategic Theme") or None,
         customer_segment=row.get("Customer Segment") or None,
         initiative_type=row.get("Initiative Type") or None,
+        market=row.get("Market") or None,
+        category=row.get("Category") or None,
         # strategic_priority_coefficient left at default 1.0
-
-        # Impact & value modeling
-        expected_impact_description=row.get("Expected Impact Description") or None,
-        impact_metric=row.get("Impact Metric") or None,
-        impact_unit=row.get("Impact Unit") or None,
-        impact_low=_to_float(row.get("Impact Low")),
-        impact_expected=_to_float(row.get("Impact Expected")),
-        impact_high=_to_float(row.get("Impact High")),
 
         # Effort & cost
         effort_tshirt_size=row.get("Effort T-shirt Size") or None,
         effort_engineering_days=_to_float(row.get("Effort Engineering Days")),
         effort_other_teams_days=_to_float(row.get("Effort Other Teams Days")),
         infra_cost_estimate=_to_float(row.get("Infra Cost Estimate")),
-        # total_cost_estimate left empty; derived later
+        engineering_tokens=_to_float(row.get("Engineering Tokens")),
 
         # Risk, dependencies, constraints
         dependencies_others=row.get("Dependencies Others") or None,
-        is_mandatory=_to_bool(row.get("Is Mandatory")),
+        program_key=row.get("Program Key") or None,
         risk_level=row.get("Risk Level") or None,
         risk_description=row.get("Risk Description") or None,
-        time_sensitivity=row.get("Time Sensitivity") or None,
+        time_sensitivity_score=_to_float(row.get("Time Sensitivity")),
         deadline_date=_to_date(row.get("Deadline Date")),
 
         # Lifecycle
-        status=(row.get("Status") or "new").strip() or "new",
+        lifecycle_status=(row.get("Lifecycle Status") or row.get("Status") or "new").strip() or "new",
         # active_scoring_framework left None at intake time
     )
 ```
@@ -408,19 +384,17 @@ INTAKE_EDITABLE_FIELDS = {
 
     # Dependencies / risk
     "dependencies_others",
-    "is_mandatory",
     "risk_level",
     "risk_description",
-    "time_sensitivity",
+    "time_sensitivity_score",
     "deadline_date",
 
-    # Status: intake side can set/override some values (e.g. new / withdrawn)
-    # Product may further update it via other flows; we can add guards later.
-    "status",
+    # Lifecycle: intake side can set/override limited lifecycle states (e.g. new / withdrawn)
+    "lifecycle_status",
 }
 ```
 
-> 🧠 **Why this filter?** It prevents a later intake edit from accidentally wiping out things like `linked_objectives`, `dependencies_initiatives`, `value_score`, `llm_notes`, etc., which are not owned by the requesters.
+> 🧠 **Why this filter?** It prevents a later intake edit from accidentally wiping out things like `dependencies_initiatives`, `value_score`, or optimization fields that are not owned by the requesters.
 
 ---
 
@@ -1172,21 +1146,23 @@ Columns:
 5. `Requester Email`
 6. `Country`
 7. `Product Area`
-8. `Status`
-9. `Strategic Theme`
-10. `Customer Segment`
-11. `Initiative Type`
-12. `Hypothesis`
-13. `Value Score`
-14. `Effort Score`
-15. `Overall Score`
-16. `Active Scoring Framework`
-17. `Use Math Model`
-18. `Dependencies Initiatives` (comma-separated keys)
-19. `Dependencies Others`
-20. `LLM Summary`
-21. `LLM Notes`
-22. `Strategic Priority Coefficient`
+8. `Lifecycle Status`
+9. `Customer Segment`
+10. `Initiative Type`
+11. `Hypothesis`
+12. `Value Score`
+13. `Effort Score`
+14. `Overall Score`
+15. `Active Scoring Framework`
+16. `Use Math Model`
+17. `Dependencies Initiatives` (comma-separated keys)
+18. `Dependencies Others`
+19. `LLM Summary`
+20. `Strategic Priority Coefficient`
+21. `Is Archived`
+22. `Archived At`
+23. `Archived Reason`
+24. `Intake Source`
 
 We can add more later (impact fields, etc.), but this is enough to show the pattern.
 
@@ -1211,8 +1187,7 @@ CENTRAL_BACKLOG_HEADER = [
     "Requester Email",
     "Country",
     "Product Area",
-    "Status",
-    "Strategic Theme",
+    "Lifecycle Status",
     "Customer Segment",
     "Initiative Type",
     "Hypothesis",
@@ -1224,8 +1199,11 @@ CENTRAL_BACKLOG_HEADER = [
     "Dependencies Initiatives",
     "Dependencies Others",
     "LLM Summary",
-    "LLM Notes",
     "Strategic Priority Coefficient",
+    "Is Archived",
+    "Archived At",
+    "Archived Reason",
+    "Intake Source",
 ]
 ```
 
@@ -1517,7 +1495,7 @@ class BacklogReader:
 (row_number, {
     "Initiative Key": "INIT-000123",
     "Title": "Improve checkout",
-    "Strategic Theme": "Growth",
+    "Lifecycle Status": "new",
     "Active Scoring Framework": "RICE",
     "Dependencies Initiatives": "INIT-000050, INIT-000051",
     ...
@@ -1623,19 +1601,16 @@ CENTRAL_EDITABLE_FIELDS = {
     "effort_engineering_days",
     "effort_other_teams_days",
     "infra_cost_estimate",
-    "total_cost_estimate",  # optional if you let Product override derived totals
-
     # Dependencies / risk
     "dependencies_initiatives",  # structured list of initiative_keys
     "dependencies_others",
-    "is_mandatory",
     "risk_level",
     "risk_description",
-    "time_sensitivity",
+    "time_sensitivity_score",
     "deadline_date",
 
     # Lifecycle
-    "status",
+    "lifecycle_status",
 
     # Scoring & frameworks
     "active_scoring_framework",
@@ -1645,8 +1620,6 @@ CENTRAL_EDITABLE_FIELDS = {
     "overall_score",
     "score_approved_by_user",
 
-    # LLM notes / annotations Product may edit or extend
-    "llm_notes",
 }
 ```
 
@@ -1677,8 +1650,7 @@ def backlog_row_to_update_data(row: BacklogRow) -> Dict[str, Any]:
     - Requester Email
     - Country
     - Product Area
-    - Status
-    - Strategic Theme
+    - Lifecycle Status
     - Customer Segment
     - Initiative Type
     - Hypothesis
@@ -1690,7 +1662,6 @@ def backlog_row_to_update_data(row: BacklogRow) -> Dict[str, Any]:
     - Dependencies Initiatives
     - Dependencies Others
     - LLM Summary
-    - LLM Notes
     - Strategic Priority Coefficient
     """
 
@@ -1702,13 +1673,10 @@ def backlog_row_to_update_data(row: BacklogRow) -> Dict[str, Any]:
     data["country"] = row.get("Country") or None
     data["product_area"] = row.get("Product Area") or None
 
-    data["strategic_theme"] = row.get("Strategic Theme") or None
+    data["lifecycle_status"] = row.get("Lifecycle Status") or None
     data["customer_segment"] = row.get("Customer Segment") or None
     data["initiative_type"] = row.get("Initiative Type") or None
     data["hypothesis"] = row.get("Hypothesis") or None
-
-    # Linked objectives: you might store JSON string or comma-separated
-    data["linked_objectives"] = row.get("Linked Objectives") or None  # column optional for now
 
     # Scoring summary
     data["value_score"] = _to_float(row.get("Value Score"))

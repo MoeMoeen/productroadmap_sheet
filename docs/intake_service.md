@@ -36,7 +36,7 @@ def map_sheet_row_to_initiative_create(row: Dict[str, Any]) -> InitiativeCreate:
 
     # Example header names on the intake sheet:
     # Title, Requesting Team, Requester Name, Requester Email, Country, Product Area,
-    # Problem Statement, Desired Outcome, Target Metrics, Current Pain, etc.
+    # Market, Category, Program Key, Problem Statement, Hypothesis, etc.
 
     return InitiativeCreate(
         title=row.get("Title", "").strip(),
@@ -45,37 +45,29 @@ def map_sheet_row_to_initiative_create(row: Dict[str, Any]) -> InitiativeCreate:
         requester_email=row.get("Requester Email"),
         country=row.get("Country"),
         product_area=row.get("Product Area"),
+        market=row.get("Market"),
+        category=row.get("Category"),
 
         problem_statement=row.get("Problem Statement"),
-        current_pain=row.get("Current Pain"),
-        desired_outcome=row.get("Desired Outcome"),
-        target_metrics=row.get("Target Metrics"),
         hypothesis=row.get("Hypothesis"),
 
-        strategic_theme=row.get("Strategic Theme"),
         customer_segment=row.get("Customer Segment"),
         initiative_type=row.get("Initiative Type"),
-
-        expected_impact_description=row.get("Expected Impact Description"),
-        impact_metric=row.get("Impact Metric"),
-        impact_unit=row.get("Impact Unit"),
-        impact_low=_to_float(row.get("Impact Low")),
-        impact_expected=_to_float(row.get("Impact Expected")),
-        impact_high=_to_float(row.get("Impact High")),
 
         effort_tshirt_size=row.get("Effort T-shirt Size"),
         effort_engineering_days=_to_float(row.get("Effort Engineering Days")),
         effort_other_teams_days=_to_float(row.get("Effort Other Teams Days")),
         infra_cost_estimate=_to_float(row.get("Infra Cost Estimate")),
+        engineering_tokens=_to_float(row.get("Engineering Tokens")),
 
         dependencies_others=row.get("Dependencies Others"),
-        is_mandatory=_to_bool(row.get("Is Mandatory")),
+        program_key=row.get("Program Key"),
         risk_level=row.get("Risk Level"),
         risk_description=row.get("Risk Description"),
-        time_sensitivity=row.get("Time Sensitivity"),
+        time_sensitivity_score=_to_float(row.get("Time Sensitivity")),
         # Deadline handled separately if date format parsing is needed
 
-        status=row.get("Status") or "new",
+        lifecycle_status=(row.get("Lifecycle Status") or row.get("Status") or "new").strip() or "new",
     )
 
 

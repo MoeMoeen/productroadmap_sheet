@@ -13,6 +13,7 @@ from app.jobs.flow3_product_ops_job import run_flow3_sync_inputs_to_initiatives
 from app.jobs.flow3_product_ops_job import run_flow3_populate_initiatives
 from app.jobs.sync_intake_job import reconcile_intake_managed_initiatives
 from app.jobs.sync_intake_job import run_sync_for_sheet
+from app.services.intake_mapper import map_sheet_row_to_initiative_create
 from app.services.intake_service import IntakeService
 from app.sheets.backlog_writer import write_backlog_from_db
 from app.sheets.layout import data_start_row
@@ -64,6 +65,7 @@ def _create_initiative(
     initiative_key: str,
     title: str = "Test Initiative",
     source_sheet_id: str | None = None,
+    source_sheet_key: str | None = None,
     source_tab_name: str | None = None,
     source_row_number: int | None = None,
     is_archived: bool = False,
@@ -76,6 +78,7 @@ def _create_initiative(
         initiative_key=initiative_key,
         title=title,
         source_sheet_id=source_sheet_id,
+        source_sheet_key=source_sheet_key,
         source_tab_name=source_tab_name,
         source_row_number=source_row_number,
         is_archived=is_archived,
@@ -96,6 +99,7 @@ def test_new_intake_initiative_created_and_active(db_session) -> None:
     initiative, was_created = service.upsert_from_intake_row_with_status(
         row={"Title": "New Initiative", "Department": "Marketing", "Requesting Team": "Growth"},
         source_sheet_id="sheet-1",
+        source_sheet_key="emea_intake",
         source_tab_name="Marketing_EMEA",
         source_row_number=2,
         auto_commit=False,
@@ -106,6 +110,30 @@ def test_new_intake_initiative_created_and_active(db_session) -> None:
     assert was_created is True
     assert getattr(initiative, "title", None) == "New Initiative"
     assert bool(getattr(initiative, "is_archived", False)) is False
+    assert getattr(initiative, "source_sheet_key", None) == "emea_intake"
+
+
+def test_intake_mapper_uses_current_schema_fields() -> None:
+    dto = map_sheet_row_to_initiative_create(
+        {
+            "Title": "New Initiative",
+            "Market": "MENA",
+            "Category": "Growth",
+            "Program Key": "program-alpha",
+            "Time Sensitivity": "4.5",
+            "Lifecycle Status": "new",
+            "Current Pain": "legacy field should be ignored",
+        }
+    )
+
+    dumped = dto.model_dump()
+
+    assert dumped["market"] == "MENA"
+    assert dumped["category"] == "Growth"
+    assert dumped["program_key"] == "program-alpha"
+    assert dumped["time_sensitivity_score"] == 4.5
+    assert dumped["lifecycle_status"] == "new"
+    assert "current_pain" not in dumped
 
 
 def test_existing_intake_initiative_remains_active_after_reconcile(db_session) -> None:
@@ -113,6 +141,7 @@ def test_existing_intake_initiative_remains_active_after_reconcile(db_session) -
         db_session,
         initiative_key="INIT-000001",
         source_sheet_id="sheet-1",
+        source_sheet_key="emea_intake",
         source_tab_name="Marketing_EMEA",
         source_row_number=2,
     )
@@ -129,11 +158,40 @@ def test_existing_intake_initiative_remains_active_after_reconcile(db_session) -
     assert stats["unarchived_count"] == 0
 
 
+def test_intake_service_blocks_withdrawn_to_new_without_override(db_session) -> None:
+    initiative = _create_initiative(
+        db_session,
+        initiative_key="INIT-000001A",
+        source_sheet_id="sheet-1",
+        source_sheet_key="emea_intake",
+        source_tab_name="Marketing_EMEA",
+        source_row_number=22,
+    )
+    setattr(initiative, "lifecycle_status", "withdrawn")
+    db_session.commit()
+
+    service = IntakeService(db_session)
+    service.upsert_from_intake_row_with_status(
+        row={"Initiative Key": "INIT-000001A", "Title": "Still Withdrawn", "Lifecycle Status": "new"},
+        source_sheet_id="sheet-1",
+        source_sheet_key="emea_intake",
+        source_tab_name="Marketing_EMEA",
+        source_row_number=22,
+        auto_commit=False,
+    )
+    db_session.commit()
+    db_session.refresh(initiative)
+
+    assert getattr(initiative, "title", None) == "Still Withdrawn"
+    assert getattr(initiative, "lifecycle_status", None) == "withdrawn"
+
+
 def test_missing_intake_initiative_is_soft_archived(db_session) -> None:
     initiative = _create_initiative(
         db_session,
         initiative_key="INIT-000002",
         source_sheet_id="sheet-1",
+        source_sheet_key="emea_intake",
         source_tab_name="Marketing_EMEA",
         source_row_number=3,
     )
@@ -157,6 +215,7 @@ def test_archived_initiative_reappearing_is_unarchived(db_session) -> None:
         db_session,
         initiative_key="INIT-000003",
         source_sheet_id="sheet-1",
+        source_sheet_key="emea_intake",
         source_tab_name="Marketing_EMEA",
         source_row_number=4,
         is_archived=True,
@@ -168,6 +227,7 @@ def test_archived_initiative_reappearing_is_unarchived(db_session) -> None:
     service.upsert_from_intake_row_with_status(
         row={"Initiative Key": "INIT-000003", "Title": "Restored Initiative"},
         source_sheet_id="sheet-1",
+        source_sheet_key="emea_intake",
         source_tab_name="Marketing_EMEA",
         source_row_number=10,
         auto_commit=False,
@@ -207,6 +267,7 @@ def test_pm_owned_fields_preserved_for_surviving_initiative(db_session) -> None:
         db_session,
         initiative_key="INIT-000005",
         source_sheet_id="sheet-1",
+        source_sheet_key="emea_intake",
         source_tab_name="Marketing_EMEA",
         source_row_number=5,
         is_optimization_candidate=True,
@@ -217,6 +278,7 @@ def test_pm_owned_fields_preserved_for_surviving_initiative(db_session) -> None:
     service.upsert_from_intake_row_with_status(
         row={"Initiative Key": "INIT-000005", "Title": "Updated Intake Title", "Department": "Marketing"},
         source_sheet_id="sheet-1",
+        source_sheet_key="emea_intake",
         source_tab_name="Marketing_EMEA",
         source_row_number=5,
         auto_commit=False,
@@ -294,6 +356,33 @@ def test_backlog_writer_renders_archive_columns_when_present(db_session) -> None
     assert flat_updates["Backlog!C5"] is True
     assert str(flat_updates["Backlog!D5"]).startswith("2026-04-02T12:00:00")
     assert flat_updates["Backlog!E5"] == "missing_from_intake_sync"
+
+
+def test_backlog_writer_renders_intake_source_column(db_session) -> None:
+    _create_initiative(
+        db_session,
+        initiative_key="INIT-000015",
+        title="Visible",
+        source_sheet_key="mena_intake",
+        source_tab_name="UAE",
+    )
+    client = FakeSheetsClient(["Initiative Key", "Title", "Intake Source"])
+
+    result = write_backlog_from_db(
+        db_session,
+        cast(Any, client),
+        backlog_spreadsheet_id="spreadsheet-1",
+        backlog_tab_name="Backlog",
+    )
+
+    assert result["initiatives_written"] == 1
+
+    flat_updates = {
+        item["range"]: item["values"][0][0]
+        for batch in client.updated_batches
+        for item in batch
+    }
+    assert flat_updates["Backlog!C5"] == "mena_intake / UAE"
 
 
 def test_backlog_writer_preserves_non_owned_columns(db_session) -> None:
@@ -386,6 +475,7 @@ def test_run_sync_for_sheet_raises_on_backfill_failure(db_session, monkeypatch: 
         run_sync_for_sheet(
             db_session,
             spreadsheet_id="sheet-1",
+            source_sheet_key="emea_intake",
             tab_name="Marketing_EMEA",
             sheets_service=object(),
         )

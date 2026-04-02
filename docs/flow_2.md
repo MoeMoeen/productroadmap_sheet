@@ -367,11 +367,10 @@ Conceptually, the full loop is:
 
    * E.g. fields like:
 
-     * `Impact Expected`
      * `Effort Engineering Days`
      * `Strategic Priority Coefficient`
      * `Business Value` (in future)
-     * `Time Sensitivity` / `Risk Level`
+  * `Time Sensitivity Score` / `Risk Level`
 
 2. **Flow 1 – Backlog Update (Sheet → DB)**
 

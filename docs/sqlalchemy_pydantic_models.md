@@ -107,23 +107,30 @@ class Initiative(Base):
     effort_engineering_days = Column(Float, nullable=True)
     effort_other_teams_days = Column(Float, nullable=True)
     infra_cost_estimate = Column(Float, nullable=True)
-    total_cost_estimate = Column(Float, nullable=True)
+    engineering_tokens = Column(Float, nullable=True)
+    engineering_tokens_mvp = Column(Float, nullable=True)
+    engineering_tokens_full = Column(Float, nullable=True)
+    scope_mode = Column(String(50), nullable=True)
 
     # G. Risk, dependencies, constraints
+    dependencies_initiatives = Column(JSON, nullable=True)
     dependencies_others = Column(Text, nullable=True)
-    is_mandatory = Column(Boolean, nullable=False, default=False)
+    program_key = Column(String(100), nullable=True)
     risk_level = Column(String(50), nullable=True)
     risk_description = Column(Text, nullable=True)
-    time_sensitivity = Column(String(50), nullable=True)
+    time_sensitivity_score = Column(Float, nullable=True)
+    earliest_start_date = Column(Date, nullable=True)
+    latest_finish_date = Column(Date, nullable=True)
     deadline_date = Column(Date, nullable=True)
 
     # H. Lifecycle & workflow
-    status = Column(String(50), nullable=False, default="new")
-    missing_fields = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(
-        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
-    )
+    status = Column(String(50), nullable=False, default="active")
+    lifecycle_status = Column(String(50), nullable=False, default="new")
+    is_archived = Column(Boolean, nullable=False, default=False, index=True)
+    archived_at = Column(DateTime(timezone=True), nullable=True)
+    archived_reason = Column(String(100), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     created_by_user_id = Column(String(100), nullable=True)
 
     # I. Scoring summary (framework-agnostic)
@@ -135,8 +142,16 @@ class Initiative(Base):
     score_approved_by_user = Column(Boolean, nullable=False, default=False)
 
     # J. LLM & math-model hooks
+    rice_value_score = Column(Float, nullable=True)
+    rice_effort_score = Column(Float, nullable=True)
+    rice_overall_score = Column(Float, nullable=True)
+    wsjf_value_score = Column(Float, nullable=True)
+    wsjf_effort_score = Column(Float, nullable=True)
+    wsjf_overall_score = Column(Float, nullable=True)
+    math_value_score = Column(Float, nullable=True)
+    math_effort_score = Column(Float, nullable=True)
+    math_overall_score = Column(Float, nullable=True)
     use_math_model = Column(Boolean, nullable=False, default=False)
-    llm_notes = Column(Text, nullable=True)
 
     # Relationships
     math_models = relationship("InitiativeMathModel", back_populates="initiative", cascade="all, delete-orphan")
@@ -362,16 +377,23 @@ class InitiativeBase(BaseModel):
     effort_engineering_days: Optional[float] = None
     effort_other_teams_days: Optional[float] = None
     infra_cost_estimate: Optional[float] = None
-    total_cost_estimate: Optional[float] = None
+    engineering_tokens: Optional[float] = None
+    engineering_tokens_mvp: Optional[float] = None
+    engineering_tokens_full: Optional[float] = None
+    scope_mode: Optional[str] = None
 
+    dependencies_initiatives: Optional[List[str]] = None
     dependencies_others: Optional[str] = None
-    is_mandatory: bool = False
+    program_key: Optional[str] = None
     risk_level: Optional[str] = None
     risk_description: Optional[str] = None
-    time_sensitivity: Optional[str] = None
+    time_sensitivity_score: Optional[float] = None
+    earliest_start_date: Optional[date] = None
+    latest_finish_date: Optional[date] = None
     deadline_date: Optional[date] = None
 
-    status: str = "new"
+    status: str = "active"
+    lifecycle_status: str = "new"
     active_scoring_framework: Optional[str] = None
 
     value_score: Optional[float] = None
@@ -380,8 +402,16 @@ class InitiativeBase(BaseModel):
     score_llm_suggested: bool = False
     score_approved_by_user: bool = False
 
+    rice_value_score: Optional[float] = None
+    rice_effort_score: Optional[float] = None
+    rice_overall_score: Optional[float] = None
+    wsjf_value_score: Optional[float] = None
+    wsjf_effort_score: Optional[float] = None
+    wsjf_overall_score: Optional[float] = None
+    math_value_score: Optional[float] = None
+    math_effort_score: Optional[float] = None
+    math_overall_score: Optional[float] = None
     use_math_model: bool = False
-    llm_notes: Optional[str] = None
 
 
 # ---- Create / update variants ----
@@ -407,38 +437,33 @@ class InitiativeUpdate(BaseModel):
     product_area: Optional[str] = None
 
     problem_statement: Optional[str] = None
-    current_pain: Optional[str] = None
-    desired_outcome: Optional[str] = None
-    target_metrics: Optional[str] = None
     hypothesis: Optional[str] = None
 
-    strategic_theme: Optional[str] = None
     customer_segment: Optional[str] = None
     initiative_type: Optional[str] = None
     strategic_priority_coefficient: Optional[float] = None
-    linked_objectives: Optional[Any] = None
-
-    expected_impact_description: Optional[str] = None
-    impact_metric: Optional[str] = None
-    impact_unit: Optional[str] = None
-    impact_low: Optional[float] = None
-    impact_expected: Optional[float] = None
-    impact_high: Optional[float] = None
 
     effort_tshirt_size: Optional[str] = None
     effort_engineering_days: Optional[float] = None
     effort_other_teams_days: Optional[float] = None
     infra_cost_estimate: Optional[float] = None
-    total_cost_estimate: Optional[float] = None
+    engineering_tokens: Optional[float] = None
+    engineering_tokens_mvp: Optional[float] = None
+    engineering_tokens_full: Optional[float] = None
+    scope_mode: Optional[str] = None
 
+    dependencies_initiatives: Optional[List[str]] = None
     dependencies_others: Optional[str] = None
-    is_mandatory: Optional[bool] = None
+    program_key: Optional[str] = None
     risk_level: Optional[str] = None
     risk_description: Optional[str] = None
-    time_sensitivity: Optional[str] = None
+    time_sensitivity_score: Optional[float] = None
+    earliest_start_date: Optional[date] = None
+    latest_finish_date: Optional[date] = None
     deadline_date: Optional[date] = None
 
     status: Optional[str] = None
+    lifecycle_status: Optional[str] = None
     active_scoring_framework: Optional[str] = None
 
     value_score: Optional[float] = None
@@ -447,6 +472,15 @@ class InitiativeUpdate(BaseModel):
     score_llm_suggested: Optional[bool] = None
     score_approved_by_user: Optional[bool] = None
 
+    rice_value_score: Optional[float] = None
+    rice_effort_score: Optional[float] = None
+    rice_overall_score: Optional[float] = None
+    wsjf_value_score: Optional[float] = None
+    wsjf_effort_score: Optional[float] = None
+    wsjf_overall_score: Optional[float] = None
+    math_value_score: Optional[float] = None
+    math_effort_score: Optional[float] = None
+    math_overall_score: Optional[float] = None
     use_math_model: Optional[bool] = None
     llm_notes: Optional[str] = None
 

@@ -143,6 +143,7 @@ def run_sync_for_sheet(
     db: Session,
     spreadsheet_id: str,
     tab_name: str,
+    source_sheet_key: Optional[str] = None,
     sheets_service=None,
     allow_status_override: bool = False,
     commit_every: Optional[int] = None,
@@ -187,6 +188,7 @@ def run_sync_for_sheet(
             initiative, was_created = intake_service.upsert_from_intake_row_with_status(
                 row=row_dict,
                 source_sheet_id=spreadsheet_id,
+                source_sheet_key=source_sheet_key,
                 source_tab_name=tab_name,
                 source_row_number=row_number,
                 allow_status_override=allow_status_override,
@@ -294,6 +296,7 @@ def run_sync_all_intake_sheets(
             result = run_sync_for_sheet(
                 db=db,
                 spreadsheet_id=tab.spreadsheet_id,
+                source_sheet_key=sheet_cfg.sheet_key,
                 tab_name=tab.tab_name,
                 sheets_service=service_obj,
                 allow_status_override=tab.allow_status_override or allow_status_override_global,

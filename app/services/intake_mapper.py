@@ -15,30 +15,19 @@ Assumed intake sheet headers (adjust as needed):
 - Country
 - Product Area
 - Problem Statement
-- Current Pain
-- Desired Outcome
-- Target Metrics
 - Hypothesis
-- Strategic Theme
 - Customer Segment
 - Initiative Type
-- Expected Impact Description
-- Impact Metric
-- Impact Unit
-- Impact Low
-- Impact Expected
-- Impact High
 - Effort T-shirt Size
 - Effort Engineering Days
 - Effort Other Teams Days
 - Infra Cost Estimate
 - Dependencies Others
-- Is Mandatory
 - Risk Level
 - Risk Description
 - Time Sensitivity
 - Deadline Date
-- Status
+- Lifecycle Status / Status
 """
 
 from __future__ import annotations
@@ -122,30 +111,19 @@ def map_sheet_row_to_initiative_create(row: Dict[str, Any]) -> InitiativeCreate:
 	- Country
 	- Product Area
 	- Problem Statement
-	- Current Pain
-	- Desired Outcome
-	- Target Metrics
 	- Hypothesis
-	- Strategic Theme
 	- Customer Segment
 	- Initiative Type
-	- Expected Impact Description
-	- Impact Metric
-	- Impact Unit
-	- Impact Low
-	- Impact Expected
-	- Impact High
 	- Effort T-shirt Size
 	- Effort Engineering Days
 	- Effort Other Teams Days
 	- Infra Cost Estimate
 	- Dependencies Others
-	- Is Mandatory
 	- Risk Level
 	- Risk Description
 	- Time Sensitivity
 	- Deadline Date
-	- Status
+	- Lifecycle Status / Status
 	"""
 
 	# Basic text fields: strip whitespace where relevant
@@ -160,46 +138,35 @@ def map_sheet_row_to_initiative_create(row: Dict[str, Any]) -> InitiativeCreate:
 		requester_email=row.get("Requester Email") or None,
 		country=row.get("Country") or None,
 		product_area=row.get("Product Area") or None,
+		market=row.get("Market") or None,
+		category=row.get("Category") or None,
 
 		# Problem & context
 		problem_statement=row.get("Problem Statement") or None,
-		current_pain=row.get("Current Pain") or None,
-		desired_outcome=row.get("Desired Outcome") or None,
-		target_metrics=row.get("Target Metrics") or None,
 		hypothesis=row.get("Hypothesis") or None,
 
 		# Strategic alignment & classification
-		strategic_theme=row.get("Strategic Theme") or None,
 		customer_segment=row.get("Customer Segment") or None,
 		initiative_type=row.get("Initiative Type") or None,
 		# strategic_priority_coefficient left at default 1.0
-
-		# Impact & value modeling
-		expected_impact_description=row.get("Expected Impact Description") or None,
-		impact_metric=row.get("Impact Metric") or None,
-		impact_unit=row.get("Impact Unit") or None,
-		impact_low=_to_float(row.get("Impact Low")),
-		impact_expected=_to_float(row.get("Impact Expected")),
-		impact_high=_to_float(row.get("Impact High")),
 
 		# Effort & cost
 		effort_tshirt_size=row.get("Effort T-shirt Size") or None,
 		effort_engineering_days=_to_float(row.get("Effort Engineering Days")),
 		effort_other_teams_days=_to_float(row.get("Effort Other Teams Days")),
 		infra_cost_estimate=_to_float(row.get("Infra Cost Estimate")),
-		# total_cost_estimate left empty; derived or filled later
+		engineering_tokens=_to_float(row.get("Engineering Tokens")),
 
 		# Risk, dependencies, constraints
 		dependencies_others=row.get("Dependencies Others") or None,
-		# Removed constraint fields: is_mandatory, mandate_reason, bundle_key, prerequisite_keys, exclusion_keys, synergy_group_keys
-		# Use Optimization Center Constraints tab for constraint entry
+		program_key=row.get("Program Key") or None,
 		risk_level=row.get("Risk Level") or None,
 		risk_description=row.get("Risk Description") or None,
-		time_sensitivity=row.get("Time Sensitivity") or None,
+		time_sensitivity_score=_to_float(row.get("Time Sensitivity")),
 		deadline_date=_to_date(row.get("Deadline Date")),
 
 		# Lifecycle
-		status=(row.get("Status") or row.get("Lifecycle_status") or "new").strip() or "new",
+		lifecycle_status=(row.get("Lifecycle Status") or row.get("Lifecycle_status") or row.get("Status") or "new").strip() or "new",
 		# active_scoring_framework left None at intake time
 	)
 

@@ -37,7 +37,7 @@ And, importantly, some fields are not really authored here directly because they
 
 * immediate KPI key
 * metric chain JSON
-* formula-related fields like engineering tokens / deadline / is mandatory if you use those as formula columns
+* formula-related fields like engineering tokens / deadline if you use those as formula columns
 
 So Central Backlog is partly an enrichment surface, but not the only entry surface.
 

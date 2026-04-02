@@ -429,6 +429,7 @@ CENTRAL_BACKLOG_HEADER: List[str] = [
     # Core identification
     "Initiative Key",
     "Title",
+    "Intake Source",
     # Team & requester info
     "Department",
     "Requesting Team",
@@ -484,6 +485,7 @@ CENTRAL_BACKLOG_HEADER: List[str] = [
 CENTRAL_HEADER_TO_FIELD: Dict[str, str] = {
     "Initiative Key": "initiative_key",
     "Title": "title",
+    "Intake Source": "intake_source",
     "Department": "department",
     "Requesting Team": "requesting_team",
     "Requester Name": "requester_name",

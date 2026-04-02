@@ -62,7 +62,7 @@ Some parameters are framework-agnostic and don't need prefixes:
 - `effort_engineering_days` (used as fallback/compatibility; can be populated from `rice_effort` or `wsjf_job_size`)
 - `strategic_priority_coefficient`
 - `risk_level`
-- `time_sensitivity`
+- `time_sensitivity_score`
 
 ## Migration Path
 

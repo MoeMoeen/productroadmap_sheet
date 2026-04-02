@@ -31,20 +31,6 @@ from app.utils.provenance import Provenance, token
 
 logger = logging.getLogger(__name__)
 
-
-def _to_float(value: object) -> Optional[float]:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    s = str(value).strip()
-    if not s:
-        return None
-    try:
-        return float(s)
-    except ValueError:
-        return None
-
 # Fields that are allowed to be written/updated from department intake sheets.
 # NOTE: Only includes fields that exist in current Initiative ORM schema.
 INTAKE_EDITABLE_FIELDS = {
@@ -73,8 +59,7 @@ INTAKE_EDITABLE_FIELDS = {
     "risk_description",
     "time_sensitivity_score",
     "deadline_date",
-    "lifecycle_status",  # ORM field name
-    "status",  # Input alias for lifecycle_status (kept for backward compatibility)
+    "lifecycle_status",
 }
 
 # Allowed statuses configured via settings
@@ -104,15 +89,13 @@ class IntakeService:
     ) -> dict[str, object]:
         """Build a safe Initiative ORM payload from intake DTO fields.
 
-        The intake schema intentionally contains some legacy fields that no longer
-        exist on the Initiative ORM model. Creation and updates must therefore
-        filter DTO data through the ORM-supported intake field list.
+        Creation and updates are filtered through the ORM-supported intake field list.
         """
         payload: dict[str, object] = {}
         data = dto.model_dump(exclude_unset=True)
 
         for field_name, value in data.items():
-            if field_name == "status":
+            if field_name == "lifecycle_status":
                 if str(value).strip().lower() not in {s.lower() for s in ALLOWED_INTAKE_STATUSES}:
                     continue
                 current = ((existing.lifecycle_status if existing else "") or "").strip().lower()
@@ -128,10 +111,6 @@ class IntakeService:
                     )
                     continue
                 payload["lifecycle_status"] = value
-                continue
-
-            if field_name == "time_sensitivity":
-                payload["time_sensitivity_score"] = _to_float(value)
                 continue
 
             if field_name not in INTAKE_EDITABLE_FIELDS:
@@ -165,6 +144,7 @@ class IntakeService:
         source_sheet_id: str,
         source_tab_name: str,
         source_row_number: int,
+        source_sheet_key: Optional[str] = None,
         allow_status_override: bool = False,
         auto_commit: bool = True,
     ) -> Initiative:
@@ -186,6 +166,7 @@ class IntakeService:
             initiative = self._create_from_intake(
                 dto=dto,
                 source_sheet_id=source_sheet_id,
+                source_sheet_key=source_sheet_key,
                 source_tab_name=source_tab_name,
                 source_row_number=source_row_number,
             )
@@ -203,7 +184,15 @@ class IntakeService:
                 },
             )
         else:
-            self._apply_intake_update(initiative, dto, allow_status_override=allow_status_override)
+            self._apply_intake_update(
+                initiative,
+                dto,
+                allow_status_override=allow_status_override,
+                source_sheet_id=source_sheet_id,
+                source_sheet_key=source_sheet_key,
+                source_tab_name=source_tab_name,
+                source_row_number=source_row_number,
+            )
             try:
                 setattr(initiative, "updated_source", token(Provenance.FLOW0_INTAKE_SYNC))
             except Exception:
@@ -239,6 +228,7 @@ class IntakeService:
         source_sheet_id: str,
         source_tab_name: str,
         source_row_number: int,
+        source_sheet_key: Optional[str] = None,
         allow_status_override: bool = False,
         auto_commit: bool = True,
     ) -> tuple[Initiative, bool]:
@@ -263,6 +253,7 @@ class IntakeService:
             initiative = self._create_from_intake(
                 dto=dto,
                 source_sheet_id=source_sheet_id,
+                source_sheet_key=source_sheet_key,
                 source_tab_name=source_tab_name,
                 source_row_number=source_row_number,
             )
@@ -280,7 +271,15 @@ class IntakeService:
                 },
             )
         else:
-            self._apply_intake_update(initiative, dto, allow_status_override=allow_status_override)
+            self._apply_intake_update(
+                initiative,
+                dto,
+                allow_status_override=allow_status_override,
+                source_sheet_id=source_sheet_id,
+                source_sheet_key=source_sheet_key,
+                source_tab_name=source_tab_name,
+                source_row_number=source_row_number,
+            )
             try:
                 setattr(initiative, "updated_source", token(Provenance.FLOW0_INTAKE_SYNC))
             except Exception:
@@ -315,6 +314,7 @@ class IntakeService:
         source_sheet_id: str,
         source_tab_name: str,
         start_row_number: int,
+        source_sheet_key: Optional[str] = None,
         commit_every: Optional[int] = None,
         allow_status_override: bool = False,
     ) -> list[Initiative]:
@@ -325,6 +325,7 @@ class IntakeService:
             initiative = self.upsert_from_intake_row(
                 row=row,
                 source_sheet_id=source_sheet_id,
+                source_sheet_key=source_sheet_key,
                 source_tab_name=source_tab_name,
                 source_row_number=row_num,
                 allow_status_override=allow_status_override,
@@ -392,6 +393,7 @@ class IntakeService:
         self,
         dto: InitiativeCreate,
         source_sheet_id: str,
+        source_sheet_key: Optional[str],
         source_tab_name: str,
         source_row_number: int,
     ) -> Initiative:
@@ -405,6 +407,7 @@ class IntakeService:
             initiative = Initiative(
                 initiative_key=initiative_key,
                 source_sheet_id=source_sheet_id,
+                source_sheet_key=source_sheet_key,
                 source_tab_name=source_tab_name,
                 source_row_number=source_row_number,
                 **initiative_data,
@@ -422,7 +425,14 @@ class IntakeService:
         return initiative  # defensive
 
     def _apply_intake_update(
-        self, initiative: Initiative, dto: InitiativeCreate, allow_status_override: bool = False
+        self,
+        initiative: Initiative,
+        dto: InitiativeCreate,
+        allow_status_override: bool = False,
+        source_sheet_id: Optional[str] = None,
+        source_sheet_key: Optional[str] = None,
+        source_tab_name: Optional[str] = None,
+        source_row_number: Optional[int] = None,
     ) -> None:
         payload = self._initiative_payload_from_dto(
             dto,
@@ -431,6 +441,15 @@ class IntakeService:
         )
         for field_name, value in payload.items():
             setattr(initiative, field_name, value)
+
+        if source_sheet_id is not None:
+            setattr(initiative, "source_sheet_id", source_sheet_id)
+        if source_sheet_key is not None:
+            setattr(initiative, "source_sheet_key", source_sheet_key)
+        if source_tab_name is not None:
+            setattr(initiative, "source_tab_name", source_tab_name)
+        if source_row_number is not None:
+            setattr(initiative, "source_row_number", source_row_number)
 
     def _backfill_initiative_key(
         self, sheet_id: str, tab_name: str, row_number: int, initiative_key: str

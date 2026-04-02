@@ -26,6 +26,7 @@ class Initiative(Base):
     # A. Identity & source
     initiative_key = Column(String(50), unique=True, index=True, nullable=False)
     source_sheet_id = Column(String(255), nullable=True)
+    source_sheet_key = Column(String(255), nullable=True)
     source_tab_name = Column(String(255), nullable=True)
     source_row_number = Column(Integer, nullable=True)
 

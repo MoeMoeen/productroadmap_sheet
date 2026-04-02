@@ -1,69 +1,96 @@
-# productroadmap_sheet_project/app/schemas/initiative.py
-
 from datetime import date, datetime
-from typing import Optional, Any, List
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class InitiativeBase(BaseModel):
     title: str = Field(..., min_length=3)
 
-    department: Optional[str] = None
-    requesting_team: Optional[str] = None
-    requester_name: Optional[str] = None
-    requester_email: Optional[str] = None
-    country: Optional[str] = None
-    product_area: Optional[str] = None
+    source_sheet_id: str | None = None
+    source_sheet_key: str | None = None
+    source_tab_name: str | None = None
+    source_row_number: int | None = None
 
-    problem_statement: Optional[str] = None
-    current_pain: Optional[str] = None
-    desired_outcome: Optional[str] = None
-    target_metrics: Optional[str] = None
-    hypothesis: Optional[str] = None
+    department: str | None = None
+    requesting_team: str | None = None
+    requester_name: str | None = None
+    requester_email: str | None = None
+    country: str | None = None
+    product_area: str | None = None
+    market: str | None = None
+    category: str | None = None
 
-    strategic_theme: Optional[str] = None
-    customer_segment: Optional[str] = None
-    initiative_type: Optional[str] = None
+    problem_statement: str | None = None
+    hypothesis: str | None = None
+    llm_summary: str | None = None
+
+    customer_segment: str | None = None
+    initiative_type: str | None = None
     strategic_priority_coefficient: float = 1.0
-    linked_objectives: Optional[Any] = None
 
-    expected_impact_description: Optional[str] = None
-    impact_metric: Optional[str] = None
-    impact_unit: Optional[str] = None
-    impact_low: Optional[float] = None
-    impact_expected: Optional[float] = None
-    impact_high: Optional[float] = None
+    immediate_kpi_key: str | None = None
+    kpi_contribution_json: Any | None = None
+    kpi_contribution_computed_json: Any | None = None
+    kpi_contribution_source: str | None = None
 
-    effort_tshirt_size: Optional[str] = None
-    effort_engineering_days: Optional[float] = None
-    effort_other_teams_days: Optional[float] = None
-    infra_cost_estimate: Optional[float] = None
-    total_cost_estimate: Optional[float] = None
+    rice_reach: float | None = None
+    rice_impact: float | None = None
+    rice_confidence: float | None = None
+    rice_effort: float | None = None
+    wsjf_business_value: float | None = None
+    wsjf_time_criticality: float | None = None
+    wsjf_risk_reduction: float | None = None
+    wsjf_job_size: float | None = None
 
-    # Dependencies / risk
-    dependencies_initiatives: Optional[List[str]] = None  # initiative_keys; switch to List[int] if using IDs
-    dependencies_others: Optional[str] = None
-    is_mandatory: bool = False
-    risk_level: Optional[str] = None
-    risk_description: Optional[str] = None
-    time_sensitivity: Optional[str] = None
-    deadline_date: Optional[date] = None
+    effort_tshirt_size: str | None = None
+    effort_engineering_days: float | None = None
+    effort_other_teams_days: float | None = None
+    infra_cost_estimate: float | None = None
+    engineering_tokens: float | None = None
+    engineering_tokens_mvp: float | None = None
+    engineering_tokens_full: float | None = None
+    scope_mode: str | None = None
 
-    status: str = "new"
-    active_scoring_framework: Optional[str] = None
+    dependencies_initiatives: list[str] | None = None
+    dependencies_others: str | None = None
+    program_key: str | None = None
+    risk_level: str | None = None
+    risk_description: str | None = None
+    time_sensitivity_score: float | None = None
+    earliest_start_date: date | None = None
+    latest_finish_date: date | None = None
+    deadline_date: date | None = None
 
-    value_score: Optional[float] = None
-    effort_score: Optional[float] = None
-    overall_score: Optional[float] = None
+    is_optimization_candidate: bool = False
+    candidate_period_key: str | None = None
+
+    status: str = "active"
+    lifecycle_status: str = "new"
+    is_archived: bool = False
+    archived_at: datetime | None = None
+    archived_reason: str | None = None
+    updated_source: str | None = None
+    scoring_updated_source: str | None = None
+    scoring_updated_at: datetime | None = None
+    created_by_user_id: str | None = None
+
+    active_scoring_framework: str | None = None
+    value_score: float | None = None
+    effort_score: float | None = None
+    overall_score: float | None = None
+    rice_value_score: float | None = None
+    rice_effort_score: float | None = None
+    rice_overall_score: float | None = None
+    wsjf_value_score: float | None = None
+    wsjf_effort_score: float | None = None
+    wsjf_overall_score: float | None = None
+    math_value_score: float | None = None
+    math_effort_score: float | None = None
+    math_overall_score: float | None = None
     score_llm_suggested: bool = False
     score_approved_by_user: bool = False
-
     use_math_model: bool = False
-    # Math Model per-framework scores
-    math_value_score: Optional[float] = None
-    math_effort_score: Optional[float] = None
-    math_overall_score: Optional[float] = None
-    llm_notes: Optional[str] = None
 
 
 class InitiativeCreate(InitiativeBase):
@@ -71,75 +98,98 @@ class InitiativeCreate(InitiativeBase):
 
 
 class InitiativeUpdate(BaseModel):
-    title: Optional[str] = None
+    title: str | None = None
 
-    department: Optional[str] = None
-    requesting_team: Optional[str] = None
-    requester_name: Optional[str] = None
-    requester_email: Optional[str] = None
-    country: Optional[str] = None
-    product_area: Optional[str] = None
+    source_sheet_id: str | None = None
+    source_sheet_key: str | None = None
+    source_tab_name: str | None = None
+    source_row_number: int | None = None
 
-    problem_statement: Optional[str] = None
-    current_pain: Optional[str] = None
-    desired_outcome: Optional[str] = None
-    target_metrics: Optional[str] = None
-    hypothesis: Optional[str] = None
+    department: str | None = None
+    requesting_team: str | None = None
+    requester_name: str | None = None
+    requester_email: str | None = None
+    country: str | None = None
+    product_area: str | None = None
+    market: str | None = None
+    category: str | None = None
 
-    strategic_theme: Optional[str] = None
-    customer_segment: Optional[str] = None
-    initiative_type: Optional[str] = None
-    strategic_priority_coefficient: Optional[float] = None
-    linked_objectives: Optional[Any] = None
+    problem_statement: str | None = None
+    hypothesis: str | None = None
+    llm_summary: str | None = None
 
-    expected_impact_description: Optional[str] = None
-    impact_metric: Optional[str] = None
-    impact_unit: Optional[str] = None
-    impact_low: Optional[float] = None
-    impact_expected: Optional[float] = None
-    impact_high: Optional[float] = None
+    customer_segment: str | None = None
+    initiative_type: str | None = None
+    strategic_priority_coefficient: float | None = None
 
-    effort_tshirt_size: Optional[str] = None
-    effort_engineering_days: Optional[float] = None
-    effort_other_teams_days: Optional[float] = None
-    infra_cost_estimate: Optional[float] = None
-    total_cost_estimate: Optional[float] = None
+    immediate_kpi_key: str | None = None
+    kpi_contribution_json: Any | None = None
+    kpi_contribution_computed_json: Any | None = None
+    kpi_contribution_source: str | None = None
 
-    dependencies_initiatives: Optional[List[str]] = None
-    dependencies_others: Optional[str] = None
-    is_mandatory: Optional[bool] = None
-    risk_level: Optional[str] = None
-    risk_description: Optional[str] = None
-    time_sensitivity: Optional[str] = None
-    deadline_date: Optional[date] = None
+    rice_reach: float | None = None
+    rice_impact: float | None = None
+    rice_confidence: float | None = None
+    rice_effort: float | None = None
+    wsjf_business_value: float | None = None
+    wsjf_time_criticality: float | None = None
+    wsjf_risk_reduction: float | None = None
+    wsjf_job_size: float | None = None
 
-    status: Optional[str] = None
-    active_scoring_framework: Optional[str] = None
+    effort_tshirt_size: str | None = None
+    effort_engineering_days: float | None = None
+    effort_other_teams_days: float | None = None
+    infra_cost_estimate: float | None = None
+    engineering_tokens: float | None = None
+    engineering_tokens_mvp: float | None = None
+    engineering_tokens_full: float | None = None
+    scope_mode: str | None = None
 
-    value_score: Optional[float] = None
-    effort_score: Optional[float] = None
-    overall_score: Optional[float] = None
-    score_llm_suggested: Optional[bool] = None
-    score_approved_by_user: Optional[bool] = None
+    dependencies_initiatives: list[str] | None = None
+    dependencies_others: str | None = None
+    program_key: str | None = None
+    risk_level: str | None = None
+    risk_description: str | None = None
+    time_sensitivity_score: float | None = None
+    earliest_start_date: date | None = None
+    latest_finish_date: date | None = None
+    deadline_date: date | None = None
 
-    use_math_model: Optional[bool] = None
-    math_value_score: Optional[float] = None
-    math_effort_score: Optional[float] = None
-    math_overall_score: Optional[float] = None
-    llm_notes: Optional[str] = None
+    is_optimization_candidate: bool | None = None
+    candidate_period_key: str | None = None
+
+    status: str | None = None
+    lifecycle_status: str | None = None
+    is_archived: bool | None = None
+    archived_at: datetime | None = None
+    archived_reason: str | None = None
+    updated_source: str | None = None
+    scoring_updated_source: str | None = None
+    scoring_updated_at: datetime | None = None
+    created_by_user_id: str | None = None
+
+    active_scoring_framework: str | None = None
+    value_score: float | None = None
+    effort_score: float | None = None
+    overall_score: float | None = None
+    rice_value_score: float | None = None
+    rice_effort_score: float | None = None
+    rice_overall_score: float | None = None
+    wsjf_value_score: float | None = None
+    wsjf_effort_score: float | None = None
+    wsjf_overall_score: float | None = None
+    math_value_score: float | None = None
+    math_effort_score: float | None = None
+    math_overall_score: float | None = None
+    score_llm_suggested: bool | None = None
+    score_approved_by_user: bool | None = None
+    use_math_model: bool | None = None
 
 
 class InitiativeRead(InitiativeBase):
     id: int
     initiative_key: str
-    source_sheet_id: Optional[str] = None
-    source_tab_name: Optional[str] = None
-    source_row_number: Optional[int] = None
-
-    llm_summary: Optional[str] = None
-    missing_fields: Optional[str] = None
     created_at: datetime
     updated_at: datetime
-    created_by_user_id: Optional[str] = None
 
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)

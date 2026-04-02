@@ -48,6 +48,16 @@ def _initiative_field_value(field: str, initiative: Initiative, now_ts: datetime
         return now_ts
     if field == "updated_source":
         return token(Provenance.FLOW1_BACKLOGSHEET_WRITE)
+    if field == "intake_source":
+        source_sheet_key = str(getattr(initiative, "source_sheet_key", "") or "").strip()
+        source_tab_name = str(getattr(initiative, "source_tab_name", "") or "").strip()
+        if source_sheet_key and source_tab_name:
+            return f"{source_sheet_key} / {source_tab_name}"
+        if source_sheet_key:
+            return source_sheet_key
+        if source_tab_name:
+            return source_tab_name
+        return ""
 
     # Special case: metric_chain_json lives on InitiativeMathModel, not Initiative
     # Fetch from primary math model (is_primary=True)
