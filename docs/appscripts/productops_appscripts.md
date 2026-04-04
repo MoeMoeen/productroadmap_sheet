@@ -170,6 +170,7 @@ function pollRunUntilDone(runId, tries = 60, sleepMs = 1000) {
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu("🧠 Roadmap AI")
+    .addItem("Populate Initiatives", "uiPopulateInitiatives")
     .addItem("Score selected initiatives", "uiScoreSelected")
     .addItem("Switch scoring framework", "uiSwitchFramework")
     .addItem("Save selected rows", "uiSaveSelected")
@@ -273,6 +274,44 @@ function getSelectedInitiativeKeys() {
 }
 
 
+function runActionAndHandleResult_(actionName, payload, config) {
+  const title = config?.title || actionName;
+  const startedMessage = config?.startedMessage || `Started. Run ID: `;
+  const pollTries = config?.pollTries || 90;
+  const pollSleepMs = config?.pollSleepMs || 1000;
+  const showDefaultToast = config?.showDefaultToast !== false;
+  const failureToast = config?.failureToast || "Failed to start";
+
+  try {
+    const started = postActionRun(actionName, payload);
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      startedMessage + started.run_id,
+      title,
+      8
+    );
+
+    const done = pollRunUntilDone(started.run_id, pollTries, pollSleepMs);
+    if (showDefaultToast) {
+      showRunToast_(done, title);
+    }
+
+    if (String(done?.status || "").toLowerCase() === "failed") {
+      const err = done?.error_text || done?.error || done?.detail || "Check ActionRuns";
+      SpreadsheetApp.getUi().alert("Job failed", String(err).slice(0, 800), SpreadsheetApp.getUi().ButtonSet.OK);
+    }
+
+    return done;
+  } catch (e) {
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      failureToast + ": " + (e && e.message ? e.message : e),
+      title,
+      8
+    );
+    return null;
+  }
+}
+
+
 
 // ui_scoring.gs
 // UI handler for PM Job #2: pm.score_selected
@@ -306,13 +345,11 @@ function uiScoreSelected() {
     },
   };
 
-  // Call backend
-  const result = postActionRun("pm.score_selected", payload);
-
-  // Show quick feedback
-  SpreadsheetApp.getActiveSpreadsheet().toast(
-    "Scoring started.\nRun ID: " + result.run_id + "\nStatus: " + result.status + "\n\nCheck Status column in the sheet.", "Roadmap AI", 5
-  );
+  runActionAndHandleResult_("pm.score_selected", payload, {
+    title: "Score selected initiatives",
+    startedMessage: "Scoring started.\nRun ID: ",
+    failureToast: "Failed to start",
+  });
 }
 
 // ui_framework.gs
@@ -351,21 +388,11 @@ function uiSwitchFramework() {
     },
   };
 
-  try {
-    const res = postActionRun("pm.switch_framework", payload);
-    SpreadsheetApp.getActiveSpreadsheet().toast(
-      "Switching framework started. Run ID: " + res.run_id,
-      "Roadmap AI",
-      8
-    );
-
-  } catch (e) {
-    SpreadsheetApp.getActiveSpreadsheet().toast(
-      "Failed to start: " + (e && e.message ? e.message : e),
-      "Roadmap AI",
-      8
-    );
-  }
+  runActionAndHandleResult_("pm.switch_framework", payload, {
+    title: "Switch scoring framework",
+    startedMessage: "Switching framework started. Run ID: ",
+    failureToast: "Failed to start",
+  });
 }
 
 
@@ -405,21 +432,11 @@ function uiSaveSelected() {
     },
   };
 
-  try {
-    const res = postActionRun("pm.save_selected", payload);
-
-    SpreadsheetApp.getActiveSpreadsheet().toast(
-      "Save started. Run ID: " + res.run_id + "\nCheck Status column.",
-      "Roadmap AI",
-      8
-    );
-  } catch (e) {
-    SpreadsheetApp.getActiveSpreadsheet().toast(
-      "Failed to start: " + (e && e.message ? e.message : e),
-      "Roadmap AI",
-      8
-    );
-  }
+  runActionAndHandleResult_("pm.save_selected", payload, {
+    title: "Save selected rows",
+    startedMessage: "Save started. Run ID: ",
+    failureToast: "Failed to start",
+  });
 }
 
 
@@ -436,10 +453,18 @@ function uiSaveSelected() {
  * 1) PM marks initiatives as optimization candidates in Central Backlog
  * 2) PM goes to Scoring_Inputs tab and runs "Populate Initiatives"
  * 3) Backend queries DB for initiatives where is_optimization_candidate=True and is_archived=False
- * 4) Backend appends new initiative keys to Scoring_Inputs (doesn't overwrite existing)
- * 5) PM can then edit framework parameters and run "Score Selected"
+ * 4) Backend appends missing initiative keys and writes initiative titles when the title column exists
+ * 5) Backend backfills blank existing initiative-title cells without overwriting non-empty titles
+ * 6) PM can then edit framework parameters and run "Score Selected"
  *
  * This action doesn't require a selection - it operates on all active optimization candidates.
+ *
+ * Recommended Scoring_Inputs workflow:
+ * 1) Run "Populate Initiatives"
+ * 2) Fill or adjust framework inputs on the rows you care about
+ * 3) Run "Save selected rows"
+ * 4) Run "Score selected initiatives"
+ * 5) Optionally run "Switch scoring framework"
  */
 function uiPopulateInitiatives() {
   const ss = SpreadsheetApp.getActive();
@@ -447,18 +472,21 @@ function uiPopulateInitiatives() {
   const tabName = sheet.getName();
   const spreadsheetId = ss.getId();
 
-  // Confirm with user
   const ui = SpreadsheetApp.getUi();
   const resp = ui.alert(
     "Populate Initiatives",
-    "This will add all active optimization candidate initiatives from the database to this sheet.\n\n" +
+    "If you just changed 'Is Optimization Candidate' in Central Backlog, you can sync backlog edits to DB first.\n\n" +
+      "YES = sync Central Backlog to DB first, then populate this tab\n" +
+      "NO = populate from current DB state without backlog pre-sync\n" +
+      "CANCEL = abort\n\n" +
+      "Important: this reads DB state, not unsaved edits in Central Backlog.\n\n" +
       "Archived initiatives are excluded automatically.\n\n" +
-      "Only new initiatives will be added - existing ones won't be duplicated.\n\n" +
-      "Continue?",
-    ui.ButtonSet.YES_NO
+      "Only new initiatives will be added - existing ones won't be duplicated.",
+    ui.ButtonSet.YES_NO_CANCEL
   );
-  
-  if (resp !== ui.Button.YES) return;
+
+  if (resp === ui.Button.CANCEL) return;
+  const autoSyncBacklogFirst = resp === ui.Button.YES;
 
   ss.toast("Fetching optimization candidates from database...", "Roadmap AI", -1);
 
@@ -468,34 +496,61 @@ function uiPopulateInitiatives() {
       tab: tabName,
     },
     scope: {},  // No scope needed - operates on all active optimization candidates
-    options: {},
+    options: {
+      auto_sync_backlog_first: autoSyncBacklogFirst,
+    },
     requested_by: {
       ui: "apps_script",
     },
   };
 
+  const done = runActionAndHandleResult_("pm.populate_initiatives", payload, {
+    title: "Populate Initiatives",
+    startedMessage: "Queued: ",
+    pollTries: 60,
+    showDefaultToast: false,
+    failureToast: "Failed to populate initiatives",
+  });
+
+  if (!done) return;
+
   try {
-    const started = postActionRun("pm.populate_initiatives", payload);
-    ss.toast(`Queued: ${started.run_id}`, "Roadmap AI", 5);
-    
-    const done = pollRunUntilDone(started.run_id, 60, 1000);
-    
-    // Show detailed result
-    if (String(done?.status || "").toLowerCase() === "success") {
-      const result = done.result || {};
-      const total = result.total_candidates || 0;
-      const existing = result.existing_in_sheet || 0;
-      const added = result.newly_added || 0;
-      
+    const payload = done?.result || {};
+    const result = payload.raw || {};
+    const summary = payload.summary || {};
+
+    if (String(result.status || "").toLowerCase() === "skipped") {
       ss.toast(
-        `✅ Population complete!\n\n` +
-        `Total candidates: ${total}\n` +
-        `Already in sheet: ${existing}\n` +
-        `Newly added: ${added}`,
+        String(result.message || `Go to ${result.target_tab || "Scoring_Inputs"} and try again.`).slice(0, 300),
         "Roadmap AI",
         8
       );
-    } else {
+      return;
+    }
+    
+    // Show detailed result
+    if (String(done?.status || "").toLowerCase() === "success") {
+      const total = result.total_candidates || summary.total || 0;
+      const existing = result.existing_in_sheet || summary.skipped || 0;
+      const added = result.newly_added || summary.success || 0;
+      const titlesBackfilled = result.titles_backfilled || summary.titles_backfilled || 0;
+      const hint = result.backlog_save_hint || "";
+      const presyncUpdated = result.backlog_presync_updated || 0;
+      
+      ss.toast(
+        `✅ Population complete!\n\n` +
+        (autoSyncBacklogFirst ? `Backlog rows synced to DB first: ${presyncUpdated}\n` : "") +
+        `Total candidates: ${total}\n` +
+        `Already in sheet: ${existing}\n` +
+        `Newly added: ${added}\n` +
+        `Titles backfilled: ${titlesBackfilled}` +
+        (hint ? `\n\n${hint}` : ""),
+        "Roadmap AI",
+        8
+      );
+    }
+
+    if (String(done?.status || "").toLowerCase() !== "success") {
       showRunToast_(done, "Populate Initiatives");
     }
   } catch (e) {
@@ -541,15 +596,6 @@ function uiSuggestMathModelLLM() {
   const sheet = ss.getActiveSheet();
   const tabName = sheet.getName();
 
-  if (tabName !== "MathModels") {
-    SpreadsheetApp.getUi().alert(
-      "Wrong tab",
-      'Go to the "MathModels" tab, select one or more initiative rows, then run this again.',
-      SpreadsheetApp.getUi().ButtonSet.OK
-    );
-    return;
-  }
-
   // ✅ reuse existing selection logic
   const keys = getSelectedInitiativeKeys();
   if (!keys.length) {
@@ -574,7 +620,7 @@ function uiSuggestMathModelLLM() {
   SpreadsheetApp.getActive().toast("Requesting LLM suggestions...", "🧠 Roadmap AI", -1);
 
   const payload = {
-    sheet_context: { spreadsheet_id: ss.getId(), tab: "MathModels" },
+    sheet_context: { spreadsheet_id: ss.getId(), tab: tabName },
 
     // Keep your current shape (type is optional; backend mainly needs initiative_keys)
     scope: { type: "selection", initiative_keys: keys },
@@ -584,17 +630,11 @@ function uiSuggestMathModelLLM() {
     requested_by: { ui: "apps_script" }
   };
 
-  const started = postActionRun("pm.suggest_math_model_llm", payload);
-  SpreadsheetApp.getActive().toast(`Queued: ${started.run_id}`, "🧠 Roadmap AI", 5);
-
-  const finalResult = pollRunUntilDone(started.run_id, 90, 1000);
-  showRunToast_(finalResult, "Suggest math model (LLM)");
-
-  // Optional: if failed, show error quickly
-  if (String(finalResult?.status || "").toLowerCase() === "failed") {
-    const err = finalResult?.error_text || finalResult?.error || finalResult?.detail || "Check ActionRuns";
-    SpreadsheetApp.getUi().alert("Job failed", String(err).slice(0, 800), SpreadsheetApp.getUi().ButtonSet.OK);
-  }
+  runActionAndHandleResult_("pm.suggest_math_model_llm", payload, {
+    title: "Suggest math model (LLM)",
+    startedMessage: "Queued: ",
+    failureToast: "Failed to start",
+  });
 }
 
 /**
@@ -610,15 +650,6 @@ function uiSeedMathParams() {
   const ss = SpreadsheetApp.getActive();
   const sheet = ss.getActiveSheet();
   const tabName = sheet.getName();
-
-  if (tabName !== "MathModels") {
-    SpreadsheetApp.getUi().alert(
-      "Wrong tab",
-      'Go to the "MathModels" tab, select one or more initiative rows, then run this again.',
-      SpreadsheetApp.getUi().ButtonSet.OK
-    );
-    return;
-  }
 
   // ✅ reuse existing selection logic
   const keys = getSelectedInitiativeKeys();
@@ -646,22 +677,17 @@ function uiSeedMathParams() {
   SpreadsheetApp.getActive().toast("Seeding params...", "🧠 Roadmap AI", -1);
 
   const payload = {
-    sheet_context: { spreadsheet_id: ss.getId(), tab: "MathModels" },
+    sheet_context: { spreadsheet_id: ss.getId(), tab: tabName },
     scope: { type: "selection", initiative_keys: keys },
     options: { max_llm_calls: 10 },
     requested_by: { ui: "apps_script" }
   };
 
-  const started = postActionRun("pm.seed_math_params", payload);
-  SpreadsheetApp.getActive().toast(`Queued: ${started.run_id}`, "🧠 Roadmap AI", 5);
-
-  const finalResult = pollRunUntilDone(started.run_id, 90, 1000);
-  showRunToast_(finalResult, "Seed math params");
-
-  if (String(finalResult?.status || "").toLowerCase() === "failed") {
-    const err = finalResult?.error_text || finalResult?.error || finalResult?.detail || "Check ActionRuns";
-    SpreadsheetApp.getUi().alert("Job failed", String(err).slice(0, 800), SpreadsheetApp.getUi().ButtonSet.OK);
-  }
+  runActionAndHandleResult_("pm.seed_math_params", payload, {
+    title: "Seed math params",
+    startedMessage: "Queued: ",
+    failureToast: "Failed to start",
+  });
 }
 
 /**
@@ -670,13 +696,20 @@ function uiSeedMathParams() {
  */
 function showRunToast_(run, title) {
   const status = String(run?.status || "").toLowerCase();
+  const payload = run?.result || {};
+  const raw = payload.raw || {};
 
+  if (status === "success" && String(raw.status || "").toLowerCase() === "skipped") {
+    const msg = raw.message || raw.reason || "Action skipped";
+    SpreadsheetApp.getActive().toast(String(msg).slice(0, 180), title, 8);
+    return;
+  }
   if (status === "success") {
     SpreadsheetApp.getActive().toast("Success ✅", title, 5);
     return;
   }
   if (status === "failed") {
-  const err = run?.error || run?.error_message || run?.raw || "Unknown error";
+  const err = run?.error_text || run?.error || run?.error_message || run?.raw || "Unknown error";
   SpreadsheetApp.getActive().toast(String(err).slice(0, 120), title + " ❌", 10);
   return;
   }

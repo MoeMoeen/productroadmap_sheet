@@ -297,7 +297,7 @@ function uiBacklogSync() {
         `Intake changed: ${summary.updated_count || 0}, ` +
         `backlog rows written: ${summary.initiatives_written || 0}, ` +
         `cells updated: ${summary.cells_updated || 0}, ` +
-        `archived hidden: ${summary.archived_rows_excluded || 0}`;
+        `archived excluded: ${summary.archived_rows_excluded || 0}`;
       ss.toast(msg, "🧠 Roadmap AI ✅", 8);
     }
   } catch (e) {

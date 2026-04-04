@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 
 # Batch size guardrail to avoid Sheets API payload/range limits
 _BATCH_UPDATE_CHUNK_SIZE = 200
+_SCORING_INPUTS_KEY_HEADERS = ["initiative_key", "Initiative Key", "initiative key", "key"]
+_SCORING_INPUTS_TITLE_HEADERS = ["initiative_title", "Initiative Title", "initiative title", "title_of_initiative"]
+_SCORING_INPUTS_KEY_HEADER_SET = {_normalize_header(h) for h in _SCORING_INPUTS_KEY_HEADERS}
+_SCORING_INPUTS_TITLE_HEADER_SET = {_normalize_header(h) for h in _SCORING_INPUTS_TITLE_HEADERS}
 
 
 def _now_iso() -> str:
@@ -441,6 +445,132 @@ def _col_index_to_a1(idx: int) -> str:
     return result
 
 
+def _resolve_scoring_inputs_columns(headers: List[Any]) -> tuple[int | None, int | None]:
+    key_col_idx: int | None = None
+    title_col_idx: int | None = None
+    for idx, header in enumerate(headers):
+        normalized = _normalize_header(str(header or ""))
+        if key_col_idx is None and normalized in _SCORING_INPUTS_KEY_HEADER_SET:
+            key_col_idx = idx
+            continue
+        if title_col_idx is None and normalized in _SCORING_INPUTS_TITLE_HEADER_SET:
+            title_col_idx = idx
+    return key_col_idx, title_col_idx
+
+
+def upsert_initiatives_to_scoring_inputs(
+    client: SheetsClient,
+    spreadsheet_id: str,
+    tab_name: str,
+    initiatives: List[Dict[str, Any]],
+) -> Dict[str, int]:
+    """Upsert initiative keys and titles into Scoring_Inputs using header-based column resolution.
+
+    Behavior:
+    - New initiatives are appended after the last non-empty initiative_key row.
+    - Existing initiatives are left in place.
+    - Existing title cells are only backfilled when blank.
+    - Existing non-empty title cells are never overwritten.
+    """
+    if not initiatives:
+        return {"appended": 0, "titles_backfilled": 0}
+
+    from app.services.optimization.optimization_compiler import normalize_initiative_key
+
+    header_values = client.get_values(spreadsheet_id, f"{tab_name}!1:1")
+    if not header_values or not header_values[0]:
+        raise RuntimeError(f"Sheet '{tab_name}' has no header row")
+
+    headers = header_values[0]
+    key_col_idx, title_col_idx = _resolve_scoring_inputs_columns(headers)
+    if key_col_idx is None:
+        raise RuntimeError(f"Sheet '{tab_name}' has no 'Initiative Key' column")
+    if title_col_idx is None:
+        logger.warning(
+            "productops_writer.upsert.title_column_missing",
+            extra={
+                "tab": tab_name,
+                "supported_title_headers": list(_SCORING_INPUTS_TITLE_HEADERS),
+            },
+        )
+
+    _dsr = data_start_row(tab_name)
+    key_col_a1 = _col_index_to_a1(key_col_idx + 1)
+    title_col_a1 = _col_index_to_a1(title_col_idx + 1) if title_col_idx is not None else None
+
+    data_ranges = [f"{tab_name}!{key_col_a1}{_dsr}:{key_col_a1}"]
+    if title_col_a1:
+        data_ranges.append(f"{tab_name}!{title_col_a1}{_dsr}:{title_col_a1}")
+    value_ranges = client.batch_get_values(spreadsheet_id, data_ranges)
+    key_values = value_ranges[0].get("values", []) if value_ranges else []
+    title_values = value_ranges[1].get("values", []) if len(value_ranges) > 1 else []
+
+    existing_by_norm: Dict[str, Dict[str, Any]] = {}
+    last_data_row = _dsr - 1
+    max_rows = max(len(key_values), len(title_values))
+    for offset in range(max_rows):
+        key_cell = key_values[offset][0] if offset < len(key_values) and key_values[offset] else None
+        key_text = str(key_cell or "").strip()
+        if not key_text:
+            continue
+        row_num = _dsr + offset
+        last_data_row = max(last_data_row, row_num)
+        normalized_key = normalize_initiative_key(key_text)
+        if normalized_key in existing_by_norm:
+            continue
+        title_cell = title_values[offset][0] if title_col_idx is not None and offset < len(title_values) and title_values[offset] else None
+        existing_by_norm[normalized_key] = {
+            "row_num": row_num,
+            "title": str(title_cell or "").strip(),
+        }
+
+    batch_updates: List[Dict[str, Any]] = []
+    appended = 0
+    titles_backfilled = 0
+    next_row = last_data_row + 1
+
+    for initiative in initiatives:
+        raw_key = str(initiative.get("initiative_key") or "").strip()
+        if not raw_key:
+            continue
+        title_text = str(initiative.get("title") or "").strip()
+        normalized_key = normalize_initiative_key(raw_key)
+        existing = existing_by_norm.get(normalized_key)
+        if existing:
+            if title_col_a1 and title_text and not str(existing.get("title") or "").strip():
+                batch_updates.append({
+                    "range": f"{tab_name}!{title_col_a1}{existing['row_num']}",
+                    "values": [[title_text]],
+                })
+                existing["title"] = title_text
+                titles_backfilled += 1
+            continue
+
+        row_num = next_row + appended
+        batch_updates.append({
+            "range": f"{tab_name}!{key_col_a1}{row_num}",
+            "values": [[raw_key]],
+        })
+        if title_col_a1 and title_text:
+            batch_updates.append({
+                "range": f"{tab_name}!{title_col_a1}{row_num}",
+                "values": [[title_text]],
+            })
+        appended += 1
+        existing_by_norm[normalized_key] = {"row_num": row_num, "title": title_text}
+
+    for idx in range(0, len(batch_updates), _BATCH_UPDATE_CHUNK_SIZE):
+        chunk = batch_updates[idx:idx + _BATCH_UPDATE_CHUNK_SIZE]
+        if chunk:
+            client.batch_update_values(spreadsheet_id, chunk)
+
+    logger.info(
+        "productops_writer.upsert.done",
+        extra={"tab": tab_name, "appended": appended, "titles_backfilled": titles_backfilled},
+    )
+    return {"appended": appended, "titles_backfilled": titles_backfilled}
+
+
 def append_initiative_keys_to_scoring_inputs(
     client: SheetsClient,
     spreadsheet_id: str,
@@ -450,7 +580,8 @@ def append_initiative_keys_to_scoring_inputs(
     """Append initiative keys to the end of Scoring_Inputs tab.
     
     This helper appends new initiative keys to the sheet, placing them after
-    the last non-empty row. Only writes the initiative_key column.
+    the last non-empty row. It delegates to the shared upsert path and only
+    supplies initiative keys, leaving titles blank.
     
     Uses robust row detection:
     - Reads full initiative_key column data
@@ -471,76 +602,20 @@ def append_initiative_keys_to_scoring_inputs(
     """
     if not initiative_keys:
         return 0
-    
-    # Read header to find initiative_key column
-    header_values = client.get_values(spreadsheet_id, f"{tab_name}!1:1")
-    if not header_values or not header_values[0]:
-        raise RuntimeError(f"Sheet '{tab_name}' has no header row")
-    
-    headers = header_values[0]
-    norm_headers = [_normalize_header(h) for h in headers]
-    
-    # Find initiative_key column
-    key_col_idx = None
-    for idx, nh in enumerate(norm_headers):
-        if nh == "initiative_key":
-            key_col_idx = idx
-            break
-    
-    if key_col_idx is None:
-        raise RuntimeError(f"Sheet '{tab_name}' has no 'Initiative Key' column")
-    
-    # Read the entire initiative_key column to find the last non-empty row
-    # This is more robust than using blank-run logic which can fail on sparse sheets
-    _dsr = data_start_row(tab_name)
-    key_col_a1 = _col_index_to_a1(key_col_idx + 1)
-    
-    # Get full column data (Sheets API returns only up to last non-empty cell in range)
-    key_values = client.get_values(spreadsheet_id, f"{tab_name}!{key_col_a1}{_dsr}:{key_col_a1}") or []
-    
-    # Find the actual last row with data by scanning backwards
-    # This handles sparse sheets with gaps
-    last_data_row = _dsr - 1  # Default: no data rows yet
-    for offset, row_cells in enumerate(key_values):
-        cell_val = row_cells[0] if row_cells else None
-        if cell_val is not None and str(cell_val).strip():
-            last_data_row = _dsr + offset  # This row has data
-    
-    # Append after the last data row
-    next_row = last_data_row + 1
-    
-    logger.info(
-        "productops_writer.append.start",
-        extra={"tab": tab_name, "count": len(initiative_keys), "start_row": next_row}
+    result = upsert_initiatives_to_scoring_inputs(
+        client=client,
+        spreadsheet_id=spreadsheet_id,
+        tab_name=tab_name,
+        initiatives=[{"initiative_key": key, "title": None} for key in initiative_keys],
     )
-    
-    # Build batch updates
-    updates = []
-    for idx, key in enumerate(initiative_keys):
-        row_num = next_row + idx
-        cell_range = f"{tab_name}!{key_col_a1}{row_num}"
-        updates.append({
-            "range": cell_range,
-            "values": [[key]]
-        })
-    
-    # Write in batches
-    for i in range(0, len(updates), _BATCH_UPDATE_CHUNK_SIZE):
-        chunk = updates[i:i + _BATCH_UPDATE_CHUNK_SIZE]
-        client.batch_update_values(spreadsheet_id, chunk)
-    
-    logger.info(
-        "productops_writer.append.done",
-        extra={"tab": tab_name, "written": len(initiative_keys)}
-    )
-    
-    return len(initiative_keys)
+    return int(result.get("appended", 0))
 
 
 __all__ = [
     "write_scores_to_productops_sheet",
     "write_status_to_productops_sheet",
     "write_status_to_sheet",
+    "upsert_initiatives_to_scoring_inputs",
     "append_initiative_keys_to_scoring_inputs",
     "PRODUCTOPS_SCORE_OUTPUT_COLUMNS",
     "SCORE_FIELD_TO_HEADERS",

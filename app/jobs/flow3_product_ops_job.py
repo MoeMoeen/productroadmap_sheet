@@ -289,7 +289,7 @@ def run_flow3_populate_initiatives(
     Production-grade implementation that:
     1. Uses ScoringInputsReader abstraction (handles header parsing, sparse sheets)
     2. Normalizes initiative keys for robust matching (INIT-4 == INIT-0004)
-    3. Uses dedicated writer helper for appending
+    3. Uses dedicated writer helper for header-based key/title upsert
     4. Accepts sheets_client from caller (no redundant client creation)
     
     This enables the PM workflow:
@@ -304,14 +304,19 @@ def run_flow3_populate_initiatives(
         spreadsheet_id: Product Ops spreadsheet ID
         tab_name: Scoring_Inputs tab name (must match configured tab)
         
+    Write behavior:
+    - Appends new initiative rows with initiative key and title when the title column exists.
+    - Backfills initiative title for existing rows only when the title cell is blank.
+    - Never overwrites a non-empty existing title.
+
     Returns:
-        Dict with counts: {total_candidates, existing_in_sheet, newly_added}
+        Dict with counts: {total_candidates, existing_in_sheet, newly_added, titles_backfilled}
         
     Raises:
         RuntimeError: On sheet read/write failures
     """
     from app.services.optimization.optimization_compiler import normalize_initiative_key
-    from app.sheets.productops_writer import append_initiative_keys_to_scoring_inputs
+    from app.sheets.productops_writer import upsert_initiatives_to_scoring_inputs
     
     # Step 1: Query optimization candidates from DB
     candidates = db.query(Initiative).filter(
@@ -324,20 +329,27 @@ def run_flow3_populate_initiatives(
     logger.info("flow3.populate.candidates_found", extra={"count": total_candidates})
     
     if not candidates:
-        return {"total_candidates": 0, "existing_in_sheet": 0, "newly_added": 0, "db_collisions": 0, "sheet_collisions": 0}
+        return {
+            "total_candidates": 0,
+            "existing_in_sheet": 0,
+            "newly_added": 0,
+            "titles_backfilled": 0,
+            "db_collisions": 0,
+            "sheet_collisions": 0,
+        }
     
     # Normalize DB keys for robust matching
     # This handles variants like INIT-4, INIT-0004, init_4, etc.
-    candidate_keys_raw: list[str] = [str(ini.initiative_key) for ini in candidates]
-    candidate_keys_raw = [k for k in candidate_keys_raw if k]  # Filter empty strings
-    
     # Duplicate detection: warn if multiple DB keys collapse to the same normalized key
-    candidate_keys_normalized: dict[str, str] = {}
+    candidate_rows_by_normalized: dict[str, dict[str, str]] = {}
     db_collisions = 0
-    for raw_key in candidate_keys_raw:
+    for initiative in candidates:
+        raw_key = str(getattr(initiative, "initiative_key", "") or "").strip()
+        if not raw_key:
+            continue
         norm_key = normalize_initiative_key(raw_key)
-        if norm_key in candidate_keys_normalized:
-            existing_raw = candidate_keys_normalized[norm_key]
+        if norm_key in candidate_rows_by_normalized:
+            existing_raw = candidate_rows_by_normalized[norm_key]["initiative_key"]
             db_collisions += 1
             logger.warning(
                 "flow3.populate.db_duplicate_collision",
@@ -349,7 +361,10 @@ def run_flow3_populate_initiatives(
                 }
             )
         else:
-            candidate_keys_normalized[norm_key] = raw_key
+            candidate_rows_by_normalized[norm_key] = {
+                "initiative_key": raw_key,
+                "title": str(getattr(initiative, "title", "") or "").strip(),
+            }
     
     # Step 2: Read existing keys from Scoring_Inputs using the reader abstraction
     # ScoringInputsReader already handles:
@@ -382,43 +397,27 @@ def run_flow3_populate_initiatives(
             existing_keys_normalized[norm_key] = row.initiative_key
     
     logger.info("flow3.populate.existing_keys", extra={"count": len(existing_keys_normalized)})
-    
-    # Step 3: Find new keys to add (compare normalized forms)
-    new_normalized_keys = set(candidate_keys_normalized.keys()) - set(existing_keys_normalized.keys())
-    
-    if not new_normalized_keys:
-        logger.info("flow3.populate.no_new_keys")
-        # Count matches using normalized comparison
-        matches = len(set(candidate_keys_normalized.keys()) & set(existing_keys_normalized.keys()))
-        return {
-            "total_candidates": total_candidates,
-            "existing_in_sheet": matches,
-            "newly_added": 0,
-            "db_collisions": db_collisions,
-            "sheet_collisions": sheet_collisions,
-        }
-    
-    # Map back to original (canonical) keys for writing
-    # Use the DB's canonical form (from candidate_keys_normalized mapping)
-    new_keys_to_write = sorted([
-        candidate_keys_normalized[nk] 
-        for nk in new_normalized_keys 
-        if nk in candidate_keys_normalized
-    ])
-    
-    # Step 4: Append new keys using the writer helper
-    # This handles:
-    # - Finding the correct append position (robust to gaps)
-    # - Batch writing for efficiency
-    written = append_initiative_keys_to_scoring_inputs(
+
+    # Step 3: Prepare canonical candidate rows for header-based upsert.
+    candidate_rows_to_write = [
+        candidate_rows_by_normalized[norm_key]
+        for norm_key in sorted(candidate_rows_by_normalized.keys())
+    ]
+
+    # Step 4: Upsert key/title data using alias-matched columns.
+    # - Appends brand-new initiatives
+    # - Backfills missing titles on existing rows
+    write_result = upsert_initiatives_to_scoring_inputs(
         client=client,
         spreadsheet_id=spreadsheet_id,
         tab_name=tab_name,
-        initiative_keys=new_keys_to_write,
+        initiatives=candidate_rows_to_write,
     )
+    written = int(write_result.get("appended", 0))
+    titles_backfilled = int(write_result.get("titles_backfilled", 0))
     
     # Count matches for the response
-    matches = len(set(candidate_keys_normalized.keys()) & set(existing_keys_normalized.keys()))
+    matches = len(set(candidate_rows_by_normalized.keys()) & set(existing_keys_normalized.keys()))
     
     logger.info(
         "flow3.populate.done",
@@ -426,6 +425,7 @@ def run_flow3_populate_initiatives(
             "total_candidates": total_candidates,
             "existing": matches,
             "newly_added": written,
+            "titles_backfilled": titles_backfilled,
             "db_collisions": db_collisions,
             "sheet_collisions": sheet_collisions,
         }
@@ -435,6 +435,7 @@ def run_flow3_populate_initiatives(
         "total_candidates": total_candidates,
         "existing_in_sheet": matches,
         "newly_added": written,
+        "titles_backfilled": titles_backfilled,
         "db_collisions": db_collisions,
         "sheet_collisions": sheet_collisions,
     }

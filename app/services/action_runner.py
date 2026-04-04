@@ -36,6 +36,7 @@ from app.services.product_ops.kpi_contributions_sync_service import KPIContribut
 from app.jobs.math_model_generation_job import run_math_model_generation_job
 from app.jobs.param_seeding_job import run_param_seeding_job
 from app.llm.client import LLMClient
+from app.utils.header_utils import normalize_tab_name
 
 # Note: optimization explainer imports are deferred inside functions to keep import graph light
 
@@ -61,6 +62,12 @@ class ActionContext:
 
 
 ActionFn = Callable[[Session, ActionContext], Dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class PMTabResolution:
+    kind: str
+    canonical_tab: str
 
 
 def _now() -> datetime:
@@ -248,6 +255,10 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         summary["intake_deleted"] = result.get("intake_deleted", 0)
     
     elif action == "pm.score_selected":
+        if result.get("status") == "skipped":
+            summary["total"] = 1
+            summary["skipped"] = 1
+            return summary
         selected_count = result.get("selected_count", 0)
         skipped = result.get("skipped_no_key", 0)
         failed = result.get("failed_count", 0)
@@ -257,6 +268,10 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         summary["failed"] = failed
     
     elif action == "pm.switch_framework":
+        if result.get("status") == "skipped":
+            summary["total"] = 1
+            summary["skipped"] = 1
+            return summary
         selected_count = result.get("selected_count", 0)
         skipped = result.get("skipped_no_key", 0)
         failed = result.get("failed_count", 0)
@@ -272,6 +287,10 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         summary["skipped"] = 1 if result.get("status") == "skipped" else 0
 
     elif action == "pm.save_selected":
+        if result.get("status") == "skipped":
+            summary["total"] = 1
+            summary["skipped"] = 1
+            return summary
         selected_count = result.get("selected_count", 0)
         skipped = result.get("skipped_no_key", 0)
         failed = result.get("failed_count", 0)
@@ -292,6 +311,10 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         summary["failed"] = len(errors)
 
     elif action == "pm.suggest_math_model_llm":
+        if result.get("status") == "skipped":
+            summary["total"] = 1
+            summary["skipped"] = 1
+            return summary
         selected_count = result.get("selected_count", 0)
         skipped_no_key = result.get("skipped_no_key", 0)
         ok_count = result.get("ok_count", 0)
@@ -304,6 +327,10 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         summary["failed"] = failed_count
 
     elif action == "pm.seed_math_params":
+        if result.get("status") == "skipped":
+            summary["total"] = 1
+            summary["skipped"] = 1
+            return summary
         selected_count = result.get("selected_count", 0)
         skipped_no_key = result.get("skipped_no_key", 0)
         ok_count = result.get("ok_count", 0)
@@ -316,14 +343,30 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         summary["failed"] = failed_count
 
     elif action == "pm.populate_initiatives":
-        # Total = all optimization candidates in DB
-        # Success = newly added to sheet
-        # Skipped = already existed in sheet
-        # Failed = failed_count (if any)
-        summary["total"] = result.get("total_candidates", 0)
-        summary["success"] = result.get("newly_added", 0)
-        summary["skipped"] = result.get("existing_in_sheet", 0)
-        summary["failed"] = result.get("failed_count", 0)
+        if result.get("status") == "skipped":
+            summary["total"] = 1
+            summary["skipped"] = 1
+        else:
+            # Total = all optimization candidates in DB
+            # Success = newly added to sheet
+            # Skipped = already existed in sheet
+            # titles_backfilled is tracked separately for PM-facing UX
+            # Failed = failed_count (if any)
+            summary["total"] = result.get("total_candidates", 0)
+            summary["success"] = result.get("newly_added", 0)
+            summary["skipped"] = result.get("existing_in_sheet", 0)
+            summary["failed"] = result.get("failed_count", 0)
+            summary["titles_backfilled"] = result.get("titles_backfilled", 0)
+
+    elif action == "pm.populate_candidates":
+        if result.get("status") == "skipped":
+            summary["total"] = 1
+            summary["skipped"] = 1
+        else:
+            summary["total"] = result.get("populated_count", 0) + result.get("skipped_no_key", 0)
+            summary["success"] = result.get("populated_count", 0)
+            summary["skipped"] = result.get("skipped_no_key", 0)
+            summary["failed"] = result.get("failed_count", 0)
     
     # PM optimization jobs (Flow 5)
     elif action == "pm.optimize_run_selected_candidates":
@@ -345,6 +388,106 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         summary["failed"] = 1 if opt_status == "failed" else 0
     
     return summary
+
+
+def _pm_guided_skip(
+    *,
+    pm_job: str,
+    reason: str,
+    message: str,
+    requested_tab: Optional[str] = None,
+    target_tab: Optional[str] = None,
+    target_tabs: Optional[List[str]] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "pm_job": pm_job,
+        "status": "skipped",
+        "reason": reason,
+        "message": message,
+        "substeps": [],
+    }
+    if requested_tab is not None:
+        result["requested_tab"] = requested_tab
+    if target_tab is not None:
+        result["target_tab"] = target_tab
+    if target_tabs is not None:
+        result["target_tabs"] = target_tabs
+    if extra:
+        result.update(extra)
+    return result
+
+
+def _matches_expected_tab(requested_tab: Optional[str], expected_tab: str) -> bool:
+    if not requested_tab:
+        return True
+    return normalize_tab_name(requested_tab).replace("_", "") == normalize_tab_name(expected_tab).replace("_", "")
+
+
+def _is_backlog_tab_name(tab_name: Optional[str]) -> bool:
+    return "backlog" in normalize_tab_name(tab_name or "").replace("_", "")
+
+
+def _resolve_pm_tab(requested_tab: Optional[str], cfg: Any, *, default_kind: str) -> PMTabResolution:
+    scoring_inputs_tab = (getattr(cfg, "scoring_inputs_tab", None) or "Scoring_Inputs") if cfg else "Scoring_Inputs"
+    mathmodels_tab = (getattr(cfg, "mathmodels_tab", None) or "MathModels") if cfg else "MathModels"
+    params_tab = (getattr(cfg, "params_tab", None) or "Params") if cfg else "Params"
+    metrics_config_tab = (getattr(cfg, "metrics_config_tab", None) or "Metrics_Config") if cfg else "Metrics_Config"
+    kpi_contributions_tab = (getattr(cfg, "kpi_contributions_tab", None) or "KPI_Contributions") if cfg else "KPI_Contributions"
+
+    if not requested_tab:
+        default_tabs = {
+            "scoring_inputs": scoring_inputs_tab,
+            "mathmodels": mathmodels_tab,
+            "params": params_tab,
+            "metrics_config": metrics_config_tab,
+            "kpi_contributions": kpi_contributions_tab,
+            "backlog": "Backlog",
+        }
+        return PMTabResolution(kind=default_kind, canonical_tab=str(default_tabs.get(default_kind, scoring_inputs_tab)))
+
+    if _matches_expected_tab(requested_tab, scoring_inputs_tab):
+        return PMTabResolution(kind="scoring_inputs", canonical_tab=str(scoring_inputs_tab))
+    if _matches_expected_tab(requested_tab, mathmodels_tab):
+        return PMTabResolution(kind="mathmodels", canonical_tab=str(mathmodels_tab))
+    if _matches_expected_tab(requested_tab, params_tab):
+        return PMTabResolution(kind="params", canonical_tab=str(params_tab))
+    if _matches_expected_tab(requested_tab, metrics_config_tab):
+        return PMTabResolution(kind="metrics_config", canonical_tab=str(metrics_config_tab))
+    if _matches_expected_tab(requested_tab, kpi_contributions_tab):
+        return PMTabResolution(kind="kpi_contributions", canonical_tab=str(kpi_contributions_tab))
+    if _is_backlog_tab_name(requested_tab):
+        return PMTabResolution(kind="backlog", canonical_tab=str(requested_tab))
+    return PMTabResolution(kind="unknown", canonical_tab=str(requested_tab))
+
+
+def _resolve_backlog_presync_target(product_org: Optional[str]) -> Dict[str, Optional[str]]:
+    if product_org:
+        return {"spreadsheet_id": None, "tab_name": None, "product_org": product_org}
+
+    if settings.CENTRAL_BACKLOG:
+        return {
+            "spreadsheet_id": settings.CENTRAL_BACKLOG.spreadsheet_id,
+            "tab_name": settings.CENTRAL_BACKLOG.tab_name,
+            "product_org": settings.CENTRAL_BACKLOG.product_org,
+        }
+
+    backlog_sheets = list(settings.CENTRAL_BACKLOG_SHEETS or [])
+    if len(backlog_sheets) == 1:
+        target = backlog_sheets[0]
+        return {
+            "spreadsheet_id": target.spreadsheet_id,
+            "tab_name": target.tab_name,
+            "product_org": target.product_org,
+        }
+
+    if len(backlog_sheets) > 1:
+        raise ValueError(
+            "pm.populate_initiatives backlog pre-sync is ambiguous with multiple backlog targets configured. "
+            "Pass options.product_org to choose which backlog to sync first."
+        )
+
+    raise ValueError("pm.populate_initiatives backlog pre-sync requires a configured backlog target.")
 
 
 # ----------------------------
@@ -774,7 +917,9 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
 
     cfg = settings.PRODUCT_OPS
     spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (cfg.spreadsheet_id if cfg else None)
-    tab = sheet_ctx.get("tab") or (cfg.scoring_inputs_tab if cfg else "Scoring_Inputs")
+    requested_tab = sheet_ctx.get("tab")
+    resolved_tab = _resolve_pm_tab(requested_tab, cfg, default_kind="scoring_inputs")
+    tab = resolved_tab.canonical_tab
     commit_every = int(options.get("commit_every", settings.SCORING_BATCH_COMMIT_EVERY))
 
     keys = scope.get("initiative_keys") or []
@@ -788,6 +933,17 @@ def _action_pm_score_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]
 
     if not spreadsheet_id:
         raise ValueError("sheet_context.spreadsheet_id missing and PRODUCT_OPS not configured")
+
+    expected_tab = cfg.scoring_inputs_tab if cfg else "Scoring_Inputs"
+    if resolved_tab.kind != "scoring_inputs":
+        logger.info("pm.score_selected.wrong_tab", extra={"requested_tab": requested_tab, "target_tab": expected_tab})
+        return _pm_guided_skip(
+            pm_job="pm.score_selected",
+            reason="wrong_tab",
+            message=f"Score selected initiatives only works on '{expected_tab}'. You ran it from '{requested_tab}'. Go to '{expected_tab}' and try again.",
+            requested_tab=str(requested_tab),
+            target_tab=expected_tab,
+        )
 
     # Early bail if no selected keys
     if not keys:
@@ -1000,7 +1156,10 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
         scope = {}
 
     spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (settings.PRODUCT_OPS.spreadsheet_id if settings.PRODUCT_OPS else None)
-    mathmodels_tab = settings.PRODUCT_OPS.mathmodels_tab if settings.PRODUCT_OPS else "MathModels"
+    requested_tab = sheet_ctx.get("tab")
+    configured_mathmodels_tab = settings.PRODUCT_OPS.mathmodels_tab if settings.PRODUCT_OPS else "MathModels"
+    resolved_tab = _resolve_pm_tab(requested_tab, settings.PRODUCT_OPS, default_kind="mathmodels")
+    mathmodels_tab = configured_mathmodels_tab
     max_llm_calls = int(options.get("max_llm_calls", 10))
 
     keys = scope.get("initiative_keys") or []
@@ -1013,6 +1172,16 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
 
     if not spreadsheet_id:
         raise ValueError("sheet_context.spreadsheet_id missing and PRODUCT_OPS not configured")
+
+    if resolved_tab.kind != "mathmodels":
+        logger.info("pm.suggest_math_model_llm.wrong_tab", extra={"requested_tab": requested_tab, "target_tab": mathmodels_tab})
+        return _pm_guided_skip(
+            pm_job="pm.suggest_math_model_llm",
+            reason="wrong_tab",
+            message=f"Suggest math model (LLM) only works on '{mathmodels_tab}'. You ran it from '{requested_tab}'. Go to '{mathmodels_tab}' and try again.",
+            requested_tab=str(requested_tab),
+            target_tab=mathmodels_tab,
+        )
 
     # Early bail if no selected keys
     if not keys:
@@ -1178,7 +1347,10 @@ def _action_pm_seed_math_params(db: Session, ctx: ActionContext) -> Dict[str, An
         scope = {}
 
     spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (settings.PRODUCT_OPS.spreadsheet_id if settings.PRODUCT_OPS else None)
-    mathmodels_tab = settings.PRODUCT_OPS.mathmodels_tab if settings.PRODUCT_OPS else "MathModels"
+    requested_tab = sheet_ctx.get("tab")
+    configured_mathmodels_tab = settings.PRODUCT_OPS.mathmodels_tab if settings.PRODUCT_OPS else "MathModels"
+    resolved_tab = _resolve_pm_tab(requested_tab, settings.PRODUCT_OPS, default_kind="mathmodels")
+    mathmodels_tab = configured_mathmodels_tab
     params_tab = settings.PRODUCT_OPS.params_tab if settings.PRODUCT_OPS else "Params"
     max_llm_calls = int(options.get("max_llm_calls", 10))
 
@@ -1192,6 +1364,16 @@ def _action_pm_seed_math_params(db: Session, ctx: ActionContext) -> Dict[str, An
 
     if not spreadsheet_id:
         raise ValueError("sheet_context.spreadsheet_id missing and PRODUCT_OPS not configured")
+
+    if resolved_tab.kind != "mathmodels":
+        logger.info("pm.seed_math_params.wrong_tab", extra={"requested_tab": requested_tab, "target_tab": mathmodels_tab})
+        return _pm_guided_skip(
+            pm_job="pm.seed_math_params",
+            reason="wrong_tab",
+            message=f"Seed math params only works on '{mathmodels_tab}'. You ran it from '{requested_tab}'. Go to '{mathmodels_tab}' and try again.",
+            requested_tab=str(requested_tab),
+            target_tab=mathmodels_tab,
+        )
 
     # Early bail if no selected keys
     if not keys:
@@ -1415,7 +1597,9 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
     cfg = settings.PRODUCT_OPS
 
     spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (cfg.spreadsheet_id if cfg else None)
-    tab = sheet_ctx.get("tab") or (cfg.scoring_inputs_tab if cfg else "Scoring_Inputs")
+    requested_tab = sheet_ctx.get("tab")
+    resolved_tab = _resolve_pm_tab(requested_tab, cfg, default_kind="scoring_inputs")
+    tab = resolved_tab.canonical_tab
     commit_every = int(options.get("commit_every", settings.SCORING_BATCH_COMMIT_EVERY))
 
     keys = scope.get("initiative_keys") or []
@@ -1429,6 +1613,20 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
 
     if not spreadsheet_id:
         raise ValueError("sheet_context.spreadsheet_id missing and PRODUCT_OPS not configured")
+
+    expected_scoring_tab = cfg.scoring_inputs_tab if cfg else "Scoring_Inputs"
+    if resolved_tab.kind not in {"scoring_inputs", "backlog"}:
+        logger.info(
+            "pm.switch_framework.wrong_tab",
+            extra={"requested_tab": requested_tab, "target_tabs": [expected_scoring_tab, "Backlog"]},
+        )
+        return _pm_guided_skip(
+            pm_job="pm.switch_framework",
+            reason="wrong_tab",
+            message=f"Switch scoring framework works on '{expected_scoring_tab}' or 'Backlog'. You ran it from '{requested_tab}'. Go to one of those tabs and try again.",
+            requested_tab=str(requested_tab),
+            target_tabs=[expected_scoring_tab, "Backlog"],
+        )
 
     # Early bail if no selected keys
     if not keys:
@@ -1450,7 +1648,7 @@ def _action_pm_switch_framework(db: Session, ctx: ActionContext) -> Dict[str, An
     status_by_key: Dict[str, Optional[str]] = {k: None for k in keys}
 
     # Detect branch based on tab
-    is_backlog_tab = "backlog" in str(tab).lower()
+    is_backlog_tab = resolved_tab.kind == "backlog"
 
     if is_backlog_tab:
         # ========== BRANCH B: Central_Backlog ==========
@@ -1646,7 +1844,9 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
 
     cfg = settings.PRODUCT_OPS
     spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (cfg.spreadsheet_id if cfg else None)
-    tab = sheet_ctx.get("tab") or (cfg.scoring_inputs_tab if cfg else "Scoring_Inputs")
+    requested_tab = sheet_ctx.get("tab")
+    resolved_tab = _resolve_pm_tab(requested_tab, cfg, default_kind="scoring_inputs")
+    tab = resolved_tab.canonical_tab
     commit_every = int(options.get("commit_every", settings.SCORING_BATCH_COMMIT_EVERY))
 
     keys = scope.get("initiative_keys") or []
@@ -1667,8 +1867,26 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
     if not spreadsheet_id:
         raise ValueError("sheet_context.spreadsheet_id missing and PRODUCT_OPS not configured")
 
-    is_metrics_config_tab = bool(cfg and tab == cfg.metrics_config_tab)
-    is_kpi_contrib_tab = bool(cfg and tab == getattr(cfg, "kpi_contributions_tab", None))
+    supported_tabs = [
+        cfg.scoring_inputs_tab if cfg else "Scoring_Inputs",
+        cfg.mathmodels_tab if cfg else "MathModels",
+        cfg.params_tab if cfg else "Params",
+        getattr(cfg, "metrics_config_tab", "Metrics_Config") if cfg else "Metrics_Config",
+        getattr(cfg, "kpi_contributions_tab", "KPI_Contributions") if cfg else "KPI_Contributions",
+        "Backlog",
+    ]
+    if resolved_tab.kind == "unknown":
+        logger.info("pm.save_selected.wrong_tab", extra={"requested_tab": requested_tab, "target_tabs": supported_tabs})
+        return _pm_guided_skip(
+            pm_job="pm.save_selected",
+            reason="wrong_tab",
+            message=f"Save selected rows does not support '{requested_tab}'. Use one of: {', '.join(supported_tabs[:-1])}, or Backlog.",
+            requested_tab=str(requested_tab),
+            target_tabs=supported_tabs,
+        )
+
+    is_metrics_config_tab = resolved_tab.kind == "metrics_config"
+    is_kpi_contrib_tab = resolved_tab.kind == "kpi_contributions"
 
     # Early bail if no selected keys (unless Metrics_Config/KPI_Contributions or explicit all-scope)
     if not keys and not is_metrics_config_tab and not is_kpi_contrib_tab and not is_scope_all:
@@ -1688,10 +1906,7 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
 
     status_by_key: Dict[str, Optional[str]] = {k: None for k in keys}
 
-    # Safer tab detection: prefer exact config matches, fallback to substring for Backlog
-    tab_lc = str(tab).lower()
-
-    if cfg and tab == getattr(cfg, "metrics_config_tab", None):
+    if resolved_tab.kind == "metrics_config":
         # ---------- Branch M: Metrics_Config ----------
         try:
             svc = MetricsConfigSyncService(ctx.sheets_client)
@@ -1720,7 +1935,7 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
             ],
         }
 
-    if cfg and tab == getattr(cfg, "kpi_contributions_tab", None):
+    if resolved_tab.kind == "kpi_contributions":
         # ---------- Branch K: KPI_Contributions ----------
         row_count_processed = 0
         writeback_count = 0
@@ -1778,7 +1993,7 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
             ],
         }
 
-    if cfg and tab == cfg.mathmodels_tab:
+    if resolved_tab.kind == "mathmodels":
         # ---------- Branch B: MathModels ----------
         try:
             svc = MathModelSyncService(ctx.sheets_client)
@@ -1832,7 +2047,7 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
             ],
         }
 
-    if cfg and tab == cfg.params_tab:
+    if resolved_tab.kind == "params":
         # ---------- Branch C: Params ----------
         try:
             svc = ParamsSyncService(ctx.sheets_client)
@@ -1886,7 +2101,7 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
             ],
         }
 
-    if "backlog" in tab_lc:
+    if resolved_tab.kind == "backlog":
         # ---------- Branch D: Central Backlog ----------
         try:
             saved = run_backlog_update(
@@ -1942,13 +2157,15 @@ def _action_pm_save_selected(db: Session, ctx: ActionContext) -> Dict[str, Any]:
         }
 
     # ---------- Branch A: Scoring_Inputs (default) ----------
+    initiative_keys_arg = None if is_scope_all else keys
+
     try:
         saved = run_flow3_sync_inputs_to_initiatives(
             db=db,
             commit_every=commit_every,
             spreadsheet_id=str(spreadsheet_id),
             tab_name=str(tab),
-            initiative_keys=(keys if keys else None) if is_scope_all else keys,
+            initiative_keys=initiative_keys_arg,
         )
     except Exception as e:
         logger.exception("pm.save_selected.inputs_sync_failed")
@@ -2008,10 +2225,9 @@ def _action_pm_populate_initiatives(db: Session, ctx: ActionContext) -> Dict[str
       1. PM marks initiatives as optimization candidates in Central Backlog
       2. PM runs "Populate Initiatives" action on Scoring_Inputs tab
       3. Backend queries DB for initiatives where is_optimization_candidate=True
-      4. Backend writes new initiative keys to Scoring_Inputs tab (appends, doesn't overwrite existing)
-      5. PM can then edit framework parameters and run "Score Selected"
-    
-    This action only writes the initiative_key column; other columns remain blank for PM input/computation.
+    4. Backend appends missing initiative keys to Scoring_Inputs and writes initiative titles when the column exists
+    5. Backend backfills blank existing initiative-title cells without overwriting non-empty titles
+    6. PM can then edit framework parameters and run "Score Selected"
     
     Payload:
       - sheet_context: {spreadsheet_id, tab} (defaults to config.PRODUCT_OPS)
@@ -2022,33 +2238,87 @@ def _action_pm_populate_initiatives(db: Session, ctx: ActionContext) -> Dict[str
       - total_candidates: Number of initiatives with is_optimization_candidate=True in DB
       - existing_in_sheet: Number of those already present in Scoring_Inputs
       - newly_added: Number of new initiatives added to sheet
+            - titles_backfilled: Number of existing rows that received a previously blank initiative title
     
-    Raises:
-      ValueError: if PRODUCT_OPS not configured or tab mismatch
-      RuntimeError: if job fails (ensures STATUS_FAILED is set by execute_next_queued_run)
+            Returns a guided no-op instead of failing when called from the wrong tab.
+
+        Raises:
+                ValueError: if PRODUCT_OPS not configured
+                RuntimeError: if the populate job itself fails
     """
     sheet_ctx = ctx.payload.get("sheet_context") or {}
+    options = ctx.payload.get("options") or {}
+    if not isinstance(options, dict):
+        options = {}
     
     cfg = settings.PRODUCT_OPS
     if not cfg:
         raise ValueError("PRODUCT_OPS not configured")
     
-    from app.utils.header_utils import normalize_tab_name
-    
     spreadsheet_id = sheet_ctx.get("spreadsheet_id") or cfg.spreadsheet_id
     requested_tab = sheet_ctx.get("tab")
+    resolved_tab = _resolve_pm_tab(requested_tab, cfg, default_kind="scoring_inputs")
     configured_tab = cfg.scoring_inputs_tab or "Scoring_Inputs"
+    auto_sync_backlog_first = bool(options.get("auto_sync_backlog_first", False))
     
-    # Tab validation: either use configured tab or validate requested tab matches (normalized)
-    if requested_tab and normalize_tab_name(requested_tab) != normalize_tab_name(configured_tab):
-        raise ValueError(
-            f"Tab mismatch: requested '{requested_tab}' but configured scoring_inputs_tab is '{configured_tab}'. "
-            f"pm.populate_initiatives must target the configured Scoring_Inputs tab."
+    backlog_save_hint = (
+        "Populate Initiatives reads DB state only. If you just changed 'Is Optimization Candidate' in Central Backlog, "
+        "run 'Save selected rows' in Central Backlog first, then return here and try again."
+    )
+
+    # Tab validation: guide PMs back to the correct tab instead of failing the whole run.
+    if resolved_tab.kind != "scoring_inputs":
+        logger.info(
+            "pm.populate_initiatives.wrong_tab",
+            extra={"requested_tab": requested_tab, "configured_tab": configured_tab},
         )
-    tab = configured_tab
+        return _pm_guided_skip(
+            pm_job="pm.populate_initiatives",
+            reason="wrong_tab",
+            message=(
+                f"Populate Initiatives only works on '{configured_tab}'. You ran it from '{requested_tab}'. "
+                f"Go to '{configured_tab}' and try again. {backlog_save_hint}"
+            ),
+            requested_tab=str(requested_tab),
+            target_tab=configured_tab,
+            extra={
+                "backlog_save_hint": backlog_save_hint,
+                "total_candidates": 0,
+                "existing_in_sheet": 0,
+                "newly_added": 0,
+                "titles_backfilled": 0,
+                "db_collisions": 0,
+                "sheet_collisions": 0,
+                "backlog_presync_requested": auto_sync_backlog_first,
+                "backlog_presync_updated": 0,
+            },
+        )
+    tab = resolved_tab.canonical_tab
     
     if not spreadsheet_id:
         raise ValueError("sheet_context.spreadsheet_id missing and PRODUCT_OPS not configured")
+
+    backlog_presync_updated = 0
+    if auto_sync_backlog_first:
+        try:
+            presync_target = _resolve_backlog_presync_target(options.get("product_org"))
+            backlog_presync_updated = int(
+                run_backlog_update(
+                    db,
+                    spreadsheet_id=presync_target["spreadsheet_id"],
+                    tab_name=presync_target["tab_name"],
+                    product_org=presync_target["product_org"],
+                )
+            )
+            logger.info(
+                "pm.populate_initiatives.backlog_presync.done",
+                extra={"updated": backlog_presync_updated},
+            )
+        except Exception as e:
+            logger.exception("pm.populate_initiatives.backlog_presync_failed")
+            raise RuntimeError(
+                f"pm.populate_initiatives backlog pre-sync failed: {str(e)[:150]}"
+            ) from e
     
     # Pass the existing sheets_client from context instead of creating a new one
     result = run_flow3_populate_initiatives(
@@ -2064,19 +2334,28 @@ def _action_pm_populate_initiatives(db: Session, ctx: ActionContext) -> Dict[str
             "total_candidates": result["total_candidates"],
             "existing": result["existing_in_sheet"],
             "newly_added": result["newly_added"],
+            "titles_backfilled": result.get("titles_backfilled", 0),
             "db_collisions": result.get("db_collisions", 0),
             "sheet_collisions": result.get("sheet_collisions", 0),
         }
     )
     return {
         "pm_job": "pm.populate_initiatives",
+        "status": "ok",
         "tab": tab,
         "total_candidates": result["total_candidates"],
         "existing_in_sheet": result["existing_in_sheet"],
         "newly_added": result["newly_added"],
+        "titles_backfilled": result.get("titles_backfilled", 0),
         "db_collisions": result.get("db_collisions", 0),
         "sheet_collisions": result.get("sheet_collisions", 0),
+        "backlog_save_hint": backlog_save_hint,
+        "backlog_presync_requested": auto_sync_backlog_first,
+        "backlog_presync_updated": backlog_presync_updated,
         "substeps": [
+            *([
+                {"step": "backlog_presync", "status": "ok", "count": backlog_presync_updated},
+            ] if auto_sync_backlog_first else []),
             {"step": "populate_from_db", "status": "ok", "count": result["newly_added"]},
         ],
     }
@@ -2307,13 +2586,48 @@ def _action_pm_populate_candidates(db: Session, ctx: ActionContext) -> Dict[str,
     sheet_ctx = ctx.payload.get("sheet_context") or {}
     options = ctx.payload.get("options") or {}
     scope = ctx.payload.get("scope") or {}
+    if not isinstance(sheet_ctx, dict):
+        sheet_ctx = {}
+    if not isinstance(options, dict):
+        options = {}
+    if not isinstance(scope, dict):
+        scope = {}
+
+    oc = settings.OPTIMIZATION_CENTER
+    if not oc:
+        raise ValueError("Optimization Center sheet not configured for pm.populate_candidates")
     
     # Get spreadsheet_id and tab from sheet_context (required)
-    spreadsheet_id = sheet_ctx.get("spreadsheet_id")
-    tab = sheet_ctx.get("tab") or "Candidates"
+    spreadsheet_id = sheet_ctx.get("spreadsheet_id") or oc.spreadsheet_id
+    requested_tab = sheet_ctx.get("tab")
+    configured_tab = oc.candidates_tab or "Candidates"
     
     if not spreadsheet_id:
         raise ValueError("sheet_context.spreadsheet_id is required for pm.populate_candidates")
+
+    if not _matches_expected_tab(requested_tab, configured_tab):
+        logger.info(
+            "pm.populate_candidates.wrong_tab",
+            extra={"requested_tab": requested_tab, "target_tab": configured_tab},
+        )
+        return _pm_guided_skip(
+            pm_job="pm.populate_candidates",
+            reason="wrong_tab",
+            message=(
+                f"Populate candidates only works on '{configured_tab}'. You ran it from '{requested_tab}'. "
+                f"Go to '{configured_tab}' and try again."
+            ),
+            requested_tab=str(requested_tab),
+            target_tab=configured_tab,
+            extra={
+                "populated_count": 0,
+                "skipped_no_key": 0,
+                "failed_count": 0,
+                "scenario_name": options.get("scenario_name"),
+                "constraint_set_name": options.get("constraint_set_name"),
+            },
+        )
+    tab = configured_tab
     
     # Extract scenario_name + constraint_set_name from options (required)
     scenario_name = options.get("scenario_name")
