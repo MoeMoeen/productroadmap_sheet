@@ -1128,17 +1128,20 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
     """PM Job #4a: Suggest math model formulas via LLM.
 
     For selected initiatives without approved math models:
-    - Reads initiative context (description, KPIs, etc.)
-    - Calls LLM to suggest: formula_text, assumptions_text, model_name, model_description
-    - Writes suggestions back to MathModels tab (sheet only, does not set approved_by_user)
+    - Reads MathModels row inputs directly from the sheet
+    - Reads initiative context (description, problem statement, hypothesis, etc.) from the DB
+    - Reads shared prompt enrichment from the LLM_Context and Metrics_Config tabs
+    - Calls LLM to suggest: llm_suggested_formula_text, llm_suggested_metric_chain_text, llm_notes
+    - Writes those LLM-owned suggestion fields back to MathModels (sheet only, does not set approved_by_user)
     - PM reviews/edits, then sets approved_by_user = TRUE to trigger pm.seed_math_params
 
     Does not seed params (that's pm.seed_math_params).
     Does not compute scores.
+    Does not auto-sync sheet data into the DB before suggesting.
     
     Workflow:
       1. PM selects initiatives on MathModels tab
-      2. Runs pm.suggest_math_model_llm → LLM generates formula + assumptions suggestions
+            2. Runs pm.suggest_math_model_llm → LLM generates formula, metric-chain, and notes suggestions
       3. PM reviews/edits/approves (sets approved_by_user = TRUE)
       4. Runs pm.seed_math_params → Parameters seeded with LLM metadata
       5. PM fills param values on Params tab
@@ -1246,7 +1249,18 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
             # Fetch initiative from DB for context
             initiative = db.query(Initiative).filter(Initiative.initiative_key == key).one_or_none()
             if not initiative:
-                status_by_key[key] = "SKIPPED: Initiative not found in DB"
+                logger.info(
+                    "pm.suggest_math_model_llm.skip_missing_initiative",
+                    extra={
+                        "initiative_key": key,
+                        "row_number": row_number,
+                        "reason": "sheet row found but initiative context missing in DB",
+                    },
+                )
+                status_by_key[key] = (
+                    "SKIPPED: Sheet row found, but initiative context is missing in DB "
+                    "(run the relevant sync/save step first)"
+                )
                 continue
             
             # Guard: check if we have sufficient context for LLM
