@@ -93,6 +93,7 @@ class ProductOpsConfig(BaseModel):
     spreadsheet_id: str
     scoring_inputs_tab: str = "Scoring_Inputs"
     mathmodels_tab: str = "MathModels"
+    llm_context_tab: str = "LLM_Context"
     params_tab: str = "Params"
     metrics_config_tab: str = "Metrics_Config"
     kpi_contributions_tab: str = "KPI_Contributions"

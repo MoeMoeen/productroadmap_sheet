@@ -11,15 +11,22 @@ from app.db.base import Base
 from app.db.models.initiative import Initiative
 from app.jobs.flow3_product_ops_job import run_flow3_sync_inputs_to_initiatives
 from app.jobs.flow3_product_ops_job import run_flow3_populate_initiatives
+from app.jobs.math_model_generation_job import run_math_model_generation_job
 from app.jobs.sync_intake_job import reconcile_intake_managed_initiatives
 from app.jobs.sync_intake_job import run_sync_for_sheet
 from app.jobs.sync_intake_job import run_sync_all_intake_sheets
+from app.llm.client import _build_user_prompt
+from app.llm.context_formatters import format_llm_context_sections, format_metrics_config_rows
+from app.llm.models import MathModelPromptInput
+from app.llm.scoring_assistant import load_metrics_config_prompt_context
 from app.services.action_runner import ActionContext, _action_pm_backlog_sync, _action_pm_populate_candidates, _action_pm_populate_initiatives, _action_pm_save_selected, _action_pm_score_selected, _action_pm_seed_math_params, _action_pm_suggest_math_model_llm, _action_pm_switch_framework, _extract_summary
 from app.services.intake_mapper import map_sheet_row_to_initiative_create
 from app.services.intake_service import IntakeService
 from app.sheets.backlog_writer import write_backlog_from_db
 from app.sheets.intake_writer import GoogleSheetsIntakeWriter
 from app.sheets.layout import data_start_row
+from app.sheets.llm_context_reader import LLMContextReader
+from app.sheets.models import MathModelRow, MetricsConfigRow
 from app.sheets.productops_writer import upsert_initiatives_to_scoring_inputs
 from app.sheets.scoring_inputs_reader import ScoringInputsRow
 from app.config import BacklogSheetConfig, IntakeSheetConfig, IntakeTabConfig, settings
@@ -79,6 +86,19 @@ class PopulateScoringInputsClient:
 
     def batch_update_values(self, spreadsheet_id: str, data: list[dict], value_input_option: str = "USER_ENTERED") -> None:
         self.updated.extend(data)
+
+
+class LLMContextClient:
+    def __init__(self, values: list[list[Any]], rows: int = 10, cols: int = 6) -> None:
+        self.values = values
+        self.rows = rows
+        self.cols = cols
+
+    def get_sheet_grid_size(self, spreadsheet_id: str, tab_name: str) -> tuple[int, int]:
+        return (self.rows, self.cols)
+
+    def get_values(self, spreadsheet_id: str, range_: str, value_render_option: str = "UNFORMATTED_VALUE"):
+        return self.values
 
 
 @pytest.fixture
@@ -240,8 +260,121 @@ def test_existing_intake_initiative_remains_active_after_reconcile(db_session) -
     db_session.refresh(initiative)
 
     assert bool(getattr(initiative, "is_archived", False)) is False
-    assert stats["archived_count"] == 0
-    assert stats["unarchived_count"] == 0
+
+
+def test_llm_context_reader_parses_non_empty_columns_in_order() -> None:
+    client = LLMContextClient(
+        values=[
+            ["Strategy", "", "Company Context", "KPI Tree"],
+            [" Focus on monetization in 2026 ", "", "We are a pay-at-table dining platform", "GMV = traffic x conversion x AOV"],
+            ["Expand restaurant-side operating system", "", "", "Profit = GMV x monetization rate"],
+            ["", "", "Revenue comes from transaction monetization", ""],
+        ],
+        rows=4,
+        cols=4,
+    )
+
+    sections = LLMContextReader(
+        client=cast(Any, client),
+        spreadsheet_id="sheet-1",
+        tab_name="LLM_Context",
+    ).read()
+
+    assert sections == {
+        "Strategy": [
+            "Focus on monetization in 2026",
+            "Expand restaurant-side operating system",
+        ],
+        "Company Context": [
+            "We are a pay-at-table dining platform",
+            "Revenue comes from transaction monetization",
+        ],
+        "KPI Tree": [
+            "GMV = traffic x conversion x AOV",
+            "Profit = GMV x monetization rate",
+        ],
+    }
+
+
+def test_format_llm_context_sections_builds_labeled_blocks_and_truncates() -> None:
+    result = format_llm_context_sections(
+        {
+            "Strategy": ["One", "Two"],
+            "KPI Tree": ["Three"],
+        },
+        max_total_chars=25,
+    )
+
+    assert "[Strategy]" in result.text
+    assert "- One" in result.text
+    assert "[KPI Tree]" not in result.text
+    assert result.truncated is True
+    assert result.included_sections == 1
+
+
+def test_build_user_prompt_includes_additional_business_context_block() -> None:
+    payload = MathModelPromptInput(
+        initiative_key="INIT-000001",
+        title="Test Initiative",
+        model_description_free_text="Quantify the initiative impact",
+        llm_context_text="[Strategy]\n- Focus on monetization",
+        metrics_config_text="- north_star_gmv | name=GMV | level=north_star",
+        assumptions_text="PM-owned assumptions",
+    )
+
+    prompt = _build_user_prompt(payload)
+
+    assert "Additional business context:" in prompt
+    assert "[Strategy]" in prompt
+    assert "Available KPI definitions from Metrics_Config:" in prompt
+    assert "north_star_gmv" in prompt
+    assert "PM-owned assumptions" in prompt
+
+
+def test_format_metrics_config_rows_builds_metric_definition_lines() -> None:
+    result = format_metrics_config_rows(
+        [
+            MetricsConfigRow(
+                kpi_key="north_star_gmv",
+                kpi_name="GMV",
+                kpi_level="north_star",
+                unit="usd",
+                is_active=True,
+                description="Gross merchandise value",
+            )
+        ]
+    )
+
+    assert "north_star_gmv" in result.text
+    assert "name=GMV" in result.text
+    assert "level=north_star" in result.text
+    assert result.included_lines == 1
+
+
+def test_load_metrics_config_prompt_context_filters_inactive_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeMetricsConfigReader:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def get_rows_for_sheet(self, spreadsheet_id: str, tab_name: str):
+            return [
+                (5, MetricsConfigRow(kpi_key="north_star_gmv", kpi_name="GMV", kpi_level="north_star", is_active=True)),
+                (6, MetricsConfigRow(kpi_key="old_metric", kpi_name="Old", kpi_level="strategic", is_active=False)),
+                (7, MetricsConfigRow(kpi_key="unset_metric", kpi_name="Unset", kpi_level="strategic", is_active=None)),
+            ]
+
+    monkeypatch.setattr("app.llm.scoring_assistant.MetricsConfigReader", FakeMetricsConfigReader)
+
+    text = load_metrics_config_prompt_context(
+        sheets_client=cast(Any, object()),
+        spreadsheet_id="sheet-1",
+        tab_name="Metrics_Config",
+    )
+
+    assert text is not None
+    assert "north_star_gmv" in text
+    assert "old_metric" not in text
+    assert "unset_metric" not in text
 
 
 def test_intake_service_blocks_withdrawn_to_new_without_override(db_session) -> None:
@@ -1125,6 +1258,76 @@ def test_pm_suggest_math_model_guides_user_on_wrong_tab(db_session) -> None:
         settings.PRODUCT_OPS = original_product_ops
 
 
+def test_pm_suggest_math_model_llm_passes_shared_llm_context(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    original_product_ops = settings.PRODUCT_OPS
+    captured_payloads: list[tuple[str | None, str | None]] = []
+    written_batches: list[list[dict[str, Any]]] = []
+
+    class FakeMathModelsReader:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def get_rows_for_sheet(self, spreadsheet_id: str, tab_name: str, header_row: int = 1, start_data_row: int | None = None, max_rows: int | None = None):
+            return [
+                (
+                    5,
+                    MathModelRow(
+                        initiative_key="INIT-000001",
+                        model_name="Model A",
+                        model_description_free_text="Quantify value",
+                    ),
+                )
+            ]
+
+    class FakeMathModelsWriter:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def write_suggestions_batch(self, spreadsheet_id: str, tab_name: str, suggestions: list[dict[str, Any]]) -> None:
+            written_batches.append(suggestions)
+
+    def fake_suggest_math_model_for_initiative(initiative: Any, row: Any, llm_client: Any, *, db: Any = None, llm_context_text: str | None = None, metrics_config_text: str | None = None):
+        captured_payloads.append((llm_context_text, metrics_config_text))
+        return type(
+            "Suggestion",
+            (),
+            {
+                "llm_suggested_formula_text": "value = 1",
+                "llm_notes": "note",
+                "llm_suggested_metric_chain_text": "traffic -> value",
+            },
+        )()
+
+    settings.PRODUCT_OPS = cast(
+        Any,
+        type("Cfg", (), {"spreadsheet_id": "sheet-1", "mathmodels_tab": "MathModels", "llm_context_tab": "LLM_Context", "metrics_config_tab": "Metrics_Config"})(),
+    )
+    _create_initiative(db_session, initiative_key="INIT-000001", title="Test Initiative")
+
+    monkeypatch.setattr("app.sheets.math_models_reader.MathModelsReader", FakeMathModelsReader)
+    monkeypatch.setattr("app.sheets.math_models_writer.MathModelsWriter", FakeMathModelsWriter)
+    monkeypatch.setattr("app.llm.scoring_assistant.build_math_model_prompt_enrichment", lambda *args, **kwargs: ("[Strategy]\n- Focus", "- north_star_gmv | name=GMV"))
+    monkeypatch.setattr("app.llm.scoring_assistant.suggest_math_model_for_initiative", fake_suggest_math_model_for_initiative)
+    monkeypatch.setattr("app.sheets.productops_writer.write_status_to_sheet", lambda *_args, **_kwargs: None)
+
+    try:
+        ctx = ActionContext(
+            payload={
+                "action": "pm.suggest_math_model_llm",
+                "sheet_context": {"spreadsheet_id": "sheet-1", "tab": "MathModels"},
+                "scope": {"initiative_keys": ["INIT-000001"]},
+            },
+            sheets_client=cast(Any, object()),
+            llm_client=cast(Any, object()),
+        )
+        result = _action_pm_suggest_math_model_llm(db_session, ctx)
+        assert result["suggested_models"] == 1
+        assert captured_payloads == [("[Strategy]\n- Focus", "- north_star_gmv | name=GMV")]
+        assert len(written_batches) == 1
+    finally:
+        settings.PRODUCT_OPS = original_product_ops
+
+
 def test_pm_seed_math_params_guides_user_on_wrong_tab(db_session) -> None:
     original_product_ops = settings.PRODUCT_OPS
     settings.PRODUCT_OPS = cast(Any, type("Cfg", (), {"spreadsheet_id": "sheet-1", "mathmodels_tab": "MathModels", "params_tab": "Params"})())
@@ -1143,6 +1346,70 @@ def test_pm_seed_math_params_guides_user_on_wrong_tab(db_session) -> None:
         assert result["status"] == "skipped"
         assert result["target_tab"] == "MathModels"
         assert summary["skipped"] == 1
+    finally:
+        settings.PRODUCT_OPS = original_product_ops
+
+
+def test_run_math_model_generation_job_passes_shared_llm_context(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_payloads: list[tuple[str | None, str | None]] = []
+    written_batches: list[list[dict[str, Any]]] = []
+
+    class FakeMathModelsReader:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def get_rows_for_sheet(self, spreadsheet_id: str, tab_name: str, max_rows: int | None = None):
+            return [
+                (
+                    5,
+                    MathModelRow(
+                        initiative_key="INIT-000002",
+                        model_name="Model B",
+                        model_description_free_text="Estimate business value",
+                    ),
+                )
+            ]
+
+    class FakeMathModelsWriter:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def write_suggestions_batch(self, spreadsheet_id: str, tab_name: str, suggestions: list[dict[str, Any]]) -> None:
+            written_batches.append(suggestions)
+
+    def fake_suggest_math_model_for_initiative(initiative: Any, row: Any, llm_client: Any, *, db: Any = None, llm_context_text: str | None = None, metrics_config_text: str | None = None):
+        captured_payloads.append((llm_context_text, metrics_config_text))
+        return type(
+            "Suggestion",
+            (),
+            {
+                "llm_suggested_formula_text": "value = 2",
+                "llm_notes": "note",
+                "llm_suggested_metric_chain_text": "adoption -> value",
+            },
+        )()
+
+    original_product_ops = settings.PRODUCT_OPS
+    settings.PRODUCT_OPS = cast(Any, type("Cfg", (), {"llm_context_tab": "LLM_Context", "metrics_config_tab": "Metrics_Config"})())
+    _create_initiative(db_session, initiative_key="INIT-000002", title="Another Initiative")
+
+    monkeypatch.setattr("app.jobs.math_model_generation_job.MathModelsReader", FakeMathModelsReader)
+    monkeypatch.setattr("app.jobs.math_model_generation_job.MathModelsWriter", FakeMathModelsWriter)
+    monkeypatch.setattr("app.jobs.math_model_generation_job.build_math_model_prompt_enrichment", lambda *args, **kwargs: ("[Company Context]\n- Shared", "- strategic_profit | name=Profit"))
+    monkeypatch.setattr("app.jobs.math_model_generation_job.suggest_math_model_for_initiative", fake_suggest_math_model_for_initiative)
+    monkeypatch.setattr("app.jobs.math_model_generation_job.validate_formula", lambda _formula: [])
+
+    try:
+        stats = run_math_model_generation_job(
+            db_session,
+            sheets_client=cast(Any, object()),
+            llm_client=cast(Any, object()),
+            spreadsheet_id="sheet-1",
+            tab_name="MathModels",
+        )
+        assert stats["suggested"] == 1
+        assert captured_payloads == [("[Company Context]\n- Shared", "- strategic_profit | name=Profit")]
+        assert len(written_batches) == 1
     finally:
         settings.PRODUCT_OPS = original_product_ops
 

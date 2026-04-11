@@ -1201,7 +1201,7 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
 
     from app.sheets.math_models_reader import MathModelsReader
     from app.sheets.math_models_writer import MathModelsWriter
-    from app.llm.scoring_assistant import suggest_math_model_for_initiative
+    from app.llm.scoring_assistant import build_math_model_prompt_enrichment, suggest_math_model_for_initiative
     from app.db.models.initiative import Initiative
     
     status_by_key: Dict[str, Optional[str]] = {k: None for k in keys}
@@ -1221,6 +1221,11 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
         missing_in_sheet = [k for k in keys if k not in found_keys]
         for k in missing_in_sheet:
             status_by_key[k] = "SKIPPED: Not found in MathModels tab"
+
+        llm_context_text, metrics_config_text = build_math_model_prompt_enrichment(
+            ctx.sheets_client,
+            spreadsheet_id=str(spreadsheet_id),
+        )
 
         models_suggested = 0
         llm_calls = 0
@@ -1260,7 +1265,14 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
 
             # Call LLM to suggest model
             try:
-                suggestion = suggest_math_model_for_initiative(initiative, math_row, llm_client)
+                suggestion = suggest_math_model_for_initiative(
+                    initiative,
+                    math_row,
+                    llm_client,
+                    db=db,
+                    llm_context_text=llm_context_text,
+                    metrics_config_text=metrics_config_text,
+                )
                 llm_calls += 1
                 
                 # Queue for batch write (LLM-owned columns only; assumptions_text is user-owned)

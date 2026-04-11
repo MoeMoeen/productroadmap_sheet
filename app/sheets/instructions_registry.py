@@ -258,13 +258,14 @@ INSTRUCTIONS_REGISTRY: Dict[Tuple[SheetType, TabName], TabInstructions] = {
         title="Scoring_Inputs",
         lines=(
             "Primary scoring surface. First populate candidate initiatives, then fill framework inputs, run scoring, and compare results.",
-            "initiative_key (A) is system-managed and appended from DB by 'Populate Initiatives' — read-only.",
+            "initiative_key (A) is system-managed and managed by 'Populate Initiatives' — read-only.",
+            "If an initiative title column exists, 'Populate Initiatives' also fills new titles and backfills blank existing title cells.",
             "Framework inputs (RICE: M-P, WSJF: Q-T) = PM input → DB.",
             "Score columns (F-L, U-Z) = Backend writes — read-only.",
         ),
         steps=(
-            "1. If this tab is empty or missing initiatives, run 'Populate Initiatives' from this tab. It appends active optimization candidates from DB.",
-            "2. Review system-managed initiative_key column (A). Do not edit it manually.",
+            "1. If this tab is empty or missing initiatives, run 'Populate Initiatives' from this tab. It appends active optimization candidates from DB and fills initiative titles when that column exists.",
+            "2. Review system-managed initiative_key column (A). Do not edit it manually. If initiative titles were blank on existing rows, Populate Initiatives may backfill them.",
             "3. Set 'active_scoring_framework' (C): 'RICE', 'WSJF', or 'MATH_MODEL'. PM input → DB.",
             "4. Set 'use_math_model' (D) = TRUE if using math model scoring. PM input → DB.",
             "5. Fill RICE inputs (M-P): rice_reach, rice_impact, rice_confidence, rice_effort. PM input → DB.",
@@ -283,6 +284,7 @@ INSTRUCTIONS_REGISTRY: Dict[Tuple[SheetType, TabName], TabInstructions] = {
         warnings=(
             "Column A (initiative_key) is system-managed — do not edit.",
             "Only initiatives marked 'Is Optimization Candidate' = TRUE in Central Backlog are eligible for 'Populate Initiatives'.",
+            "If an initiative title column exists, Populate Initiatives may fill it for new rows and backfill blank existing title cells.",
             "Score columns (F-L, U-Z) are Backend writes — do not edit.",
             "For Math Model: complete MathModels → Params workflow first, then return here to score.",
             "KPI contributions only computed for MATH_MODEL framework — RICE/WSJF scoring does not populate KPI_Contributions.",

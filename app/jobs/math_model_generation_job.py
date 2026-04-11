@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models.initiative import Initiative
 from app.llm.client import LLMClient
-from app.llm.scoring_assistant import suggest_math_model_for_initiative
+from app.llm.scoring_assistant import build_math_model_prompt_enrichment, suggest_math_model_for_initiative
 from app.sheets.math_models_reader import MathModelsReader, MathModelRowPair
 from app.sheets.math_models_writer import MathModelsWriter
 from app.sheets.client import SheetsClient
@@ -53,6 +53,10 @@ def run_math_model_generation_job(
 		tab_name=tab_name,
 		max_rows=max_rows,
 	)
+	llm_context_text, metrics_config_text = build_math_model_prompt_enrichment(
+		sheets_client,
+		spreadsheet_id=spreadsheet_id,
+	)
 
 	suggestions_to_write: List[Dict[str, object]] = []
 	suggested = 0
@@ -87,7 +91,14 @@ def run_math_model_generation_job(
 			continue
 
 		try:
-			suggestion = suggest_math_model_for_initiative(initiative, mm, llm_client)
+			suggestion = suggest_math_model_for_initiative(
+				initiative,
+				mm,
+				llm_client,
+				db=db,
+				llm_context_text=llm_context_text,
+				metrics_config_text=metrics_config_text,
+			)
 			# COST LOGGING: Log LLM call metadata
 			logger.info(
 				"math_model.llm_call_made",
