@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, AliasChoices, model_validator
 
@@ -28,7 +28,44 @@ class MathModelPromptInput(BaseModel):
     model_prompt_to_llm: Optional[str] = None
     llm_context_text: Optional[str] = None
     metrics_config_text: Optional[str] = None
+    metrics_config_json: Optional[List[dict[str, Optional[str]]]] = None
     assumptions_text: Optional[str] = None
+
+
+class InitiativeSummaryMathModelInput(BaseModel):
+    model_name: Optional[str] = None
+    target_kpi_key: Optional[str] = None
+    metric_chain_text: Optional[str] = None
+    formula_text: Optional[str] = None
+    assumptions_text: Optional[str] = None
+    model_description_free_text: Optional[str] = None
+
+
+class InitiativeSummaryPromptInput(BaseModel):
+    initiative_key: str
+    title: str
+    requesting_team: Optional[str] = None
+    product_area: Optional[str] = None
+    customer_segment: Optional[str] = None
+    initiative_type: Optional[str] = None
+    immediate_kpi_key: Optional[str] = None
+    problem_statement: Optional[str] = None
+    hypothesis: Optional[str] = None
+    sheet_description: Optional[str] = None
+    dependencies_others: Optional[str] = None
+    risk_description: Optional[str] = None
+    approved_math_model: Optional[InitiativeSummaryMathModelInput] = None
+    llm_context_text: Optional[str] = None
+
+
+class InitiativeSummaryOutput(BaseModel):
+    headline: str
+    opportunity: str
+    proposed_solution: str
+    expected_impact: str
+    math_model_basis: Optional[str] = None
+    risks_and_dependencies: List[str] = Field(default_factory=list)
+    open_questions: List[str] = Field(default_factory=list)
 
 
 class MathModelSuggestion(BaseModel):
@@ -66,6 +103,29 @@ class MathModelSuggestion(BaseModel):
     @property
     def notes(self) -> Optional[str]:
         return self.llm_notes
+
+
+class MathModelEvaluation(BaseModel):
+    score: int = Field(ge=0, le=100)
+    verdict: Literal["accept", "needs_revision", "reject"]
+
+    issues: List[str] = Field(default_factory=list)
+    strengths: List[str] = Field(default_factory=list)
+    suggested_improvements: List[str] = Field(default_factory=list)
+
+    selected_target_kpi: Optional[str] = None
+    target_kpi_reasoning: Optional[str] = None
+
+
+class MathModelRevision(BaseModel):
+    llm_suggested_formula_text: str
+    llm_suggested_metric_chain_text: Optional[str] = None
+    llm_notes: Optional[str] = None
+
+
+class MathModelSuggestionWithEvaluation(BaseModel):
+    suggestion: MathModelSuggestion
+    evaluation: MathModelEvaluation
 
 
 class ParamSuggestion(BaseModel):

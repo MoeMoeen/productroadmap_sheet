@@ -143,6 +143,14 @@ class MathModelsWriter:
             "llm_notes": Optional[str],
             "llm_suggested_metric_chain_text": Optional[str],
             "constructed_llm_prompt": Optional[str],
+            "llm_evaluation_score": Optional[int],
+            "llm_evaluation_verdict": Optional[str],
+            "llm_evaluation_issues": Optional[str],
+            "llm_evaluation_strengths": Optional[str],
+            "llm_evaluation_suggested_improvements": Optional[str],
+            "llm_selected_target_kpi": Optional[str],
+            "llm_target_kpi_reasoning": Optional[str],
+            "llm_revision_attempts": Optional[int],
         }
         
         NOTE: We do NOT write assumptions_text—that is user-owned. PM edits assumptions manually.
@@ -155,11 +163,32 @@ class MathModelsWriter:
         notes_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_notes")
         metric_chain_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_suggested_metric_chain_text")
         prompt_col_idx = self._find_column_index(spreadsheet_id, tab_name, "constructed_llm_prompt")
+        evaluation_score_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_evaluation_score")
+        evaluation_verdict_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_evaluation_verdict")
+        evaluation_issues_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_evaluation_issues")
+        evaluation_strengths_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_evaluation_strengths")
+        evaluation_improvements_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_evaluation_suggested_improvements")
+        selected_target_kpi_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_selected_target_kpi")
+        target_kpi_reasoning_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_target_kpi_reasoning")
+        revision_attempts_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_revision_attempts")
         approved_col_idx = self._find_column_index(spreadsheet_id, tab_name, "approved_by_user")
         suggested_by_llm_col_idx = self._find_column_index(spreadsheet_id, tab_name, "suggested_by_llm")
         
         # Guard: require at least one suggestion column
-        if not (formula_col_idx or notes_col_idx or metric_chain_col_idx or prompt_col_idx):
+        if not (
+            formula_col_idx
+            or notes_col_idx
+            or metric_chain_col_idx
+            or prompt_col_idx
+            or evaluation_score_col_idx
+            or evaluation_verdict_col_idx
+            or evaluation_issues_col_idx
+            or evaluation_strengths_col_idx
+            or evaluation_improvements_col_idx
+            or selected_target_kpi_col_idx
+            or target_kpi_reasoning_col_idx
+            or revision_attempts_col_idx
+        ):
             logger.warning(f"Could not find suggestion columns in {tab_name}")
             return
         
@@ -197,9 +226,31 @@ class MathModelsWriter:
             notes_sugg = suggestion.get("llm_notes")
             metric_chain_sugg = suggestion.get("llm_suggested_metric_chain_text")
             constructed_prompt = suggestion.get("constructed_llm_prompt")
+            evaluation_score = suggestion.get("llm_evaluation_score")
+            evaluation_verdict = suggestion.get("llm_evaluation_verdict")
+            evaluation_issues = suggestion.get("llm_evaluation_issues")
+            evaluation_strengths = suggestion.get("llm_evaluation_strengths")
+            evaluation_improvements = suggestion.get("llm_evaluation_suggested_improvements")
+            selected_target_kpi = suggestion.get("llm_selected_target_kpi")
+            target_kpi_reasoning = suggestion.get("llm_target_kpi_reasoning")
+            revision_attempts = suggestion.get("llm_revision_attempts")
 
             row_is_approved = approved_map.get(row_number, False)
-            if row_is_approved and not constructed_prompt:
+            has_audit_only_write = any(
+                value is not None and value != ""
+                for value in (
+                    constructed_prompt,
+                    evaluation_score,
+                    evaluation_verdict,
+                    evaluation_issues,
+                    evaluation_strengths,
+                    evaluation_improvements,
+                    selected_target_kpi,
+                    target_kpi_reasoning,
+                    revision_attempts,
+                )
+            )
+            if row_is_approved and not has_audit_only_write:
                 logger.info("mathmodels.write.skip_approved", extra={"row": row_number})
                 continue
             
@@ -239,9 +290,64 @@ class MathModelsWriter:
                 })
                 updated_rows.add(row_number)
 
+            if evaluation_score_col_idx and evaluation_score is not None:
+                col_a1 = _col_index_to_a1(evaluation_score_col_idx)
+                cell_a1 = f"{tab_name}!{col_a1}{row_number}"
+                batch_data.append({"range": cell_a1, "values": [[evaluation_score]]})
+                updated_rows.add(row_number)
+
+            if evaluation_verdict_col_idx and evaluation_verdict:
+                col_a1 = _col_index_to_a1(evaluation_verdict_col_idx)
+                cell_a1 = f"{tab_name}!{col_a1}{row_number}"
+                batch_data.append({"range": cell_a1, "values": [[evaluation_verdict]]})
+                updated_rows.add(row_number)
+
+            if evaluation_issues_col_idx and evaluation_issues is not None:
+                col_a1 = _col_index_to_a1(evaluation_issues_col_idx)
+                cell_a1 = f"{tab_name}!{col_a1}{row_number}"
+                batch_data.append({"range": cell_a1, "values": [[evaluation_issues]]})
+                updated_rows.add(row_number)
+
+            if evaluation_strengths_col_idx and evaluation_strengths is not None:
+                col_a1 = _col_index_to_a1(evaluation_strengths_col_idx)
+                cell_a1 = f"{tab_name}!{col_a1}{row_number}"
+                batch_data.append({"range": cell_a1, "values": [[evaluation_strengths]]})
+                updated_rows.add(row_number)
+
+            if evaluation_improvements_col_idx and evaluation_improvements is not None:
+                col_a1 = _col_index_to_a1(evaluation_improvements_col_idx)
+                cell_a1 = f"{tab_name}!{col_a1}{row_number}"
+                batch_data.append({"range": cell_a1, "values": [[evaluation_improvements]]})
+                updated_rows.add(row_number)
+
+            if selected_target_kpi_col_idx and selected_target_kpi is not None:
+                col_a1 = _col_index_to_a1(selected_target_kpi_col_idx)
+                cell_a1 = f"{tab_name}!{col_a1}{row_number}"
+                batch_data.append({"range": cell_a1, "values": [[selected_target_kpi]]})
+                updated_rows.add(row_number)
+
+            if target_kpi_reasoning_col_idx and target_kpi_reasoning is not None:
+                col_a1 = _col_index_to_a1(target_kpi_reasoning_col_idx)
+                cell_a1 = f"{tab_name}!{col_a1}{row_number}"
+                batch_data.append({"range": cell_a1, "values": [[target_kpi_reasoning]]})
+                updated_rows.add(row_number)
+
+            if revision_attempts_col_idx and revision_attempts is not None:
+                col_a1 = _col_index_to_a1(revision_attempts_col_idx)
+                cell_a1 = f"{tab_name}!{col_a1}{row_number}"
+                batch_data.append({"range": cell_a1, "values": [[revision_attempts]]})
+                updated_rows.add(row_number)
+
 
             # Mark as suggested by LLM if any suggestion was provided
-            if suggested_by_llm_col_idx and (formula_sugg or notes_sugg or metric_chain_sugg or constructed_prompt):
+            if suggested_by_llm_col_idx and (
+                formula_sugg
+                or notes_sugg
+                or metric_chain_sugg
+                or constructed_prompt
+                or evaluation_score is not None
+                or evaluation_verdict
+            ):
                 col_a1 = _col_index_to_a1(suggested_by_llm_col_idx)
                 cell_a1 = f"{tab_name}!{col_a1}{row_number}"
                 batch_data.append({

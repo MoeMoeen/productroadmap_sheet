@@ -131,6 +131,94 @@ def _col_index_to_a1(idx: int) -> str:
     return result
 
 
+def write_llm_summaries_to_backlog_sheet(
+    client: SheetsClient,
+    spreadsheet_id: str,
+    tab_name: str = "Backlog",
+    *,
+    summaries_by_key: Dict[str, str],
+) -> int:
+    """Write LLM summaries to selected backlog rows only."""
+    if not summaries_by_key:
+        return 0
+
+    header_values = client.get_values(spreadsheet_id, f"{tab_name}!1:1")
+    if not header_values or not header_values[0]:
+        logger.warning("backlog_writer.summary.empty_sheet", extra={"tab": tab_name})
+        return 0
+
+    headers = header_values[0]
+    norm_headers = [normalize_header(str(h)) for h in headers]
+
+    key_col = None
+    summary_col = None
+    updated_source_col = None
+    updated_at_col = None
+    for idx, normalized in enumerate(norm_headers):
+        if normalized == "initiative_key":
+            key_col = idx
+        elif normalized == "llm_summary":
+            summary_col = idx
+        elif normalized == "updated_source":
+            updated_source_col = idx
+        elif normalized == "updated_at":
+            updated_at_col = idx
+
+    if key_col is None or summary_col is None:
+        logger.warning(
+            "backlog_writer.summary.missing_columns",
+            extra={"tab": tab_name, "has_key": key_col is not None, "has_summary": summary_col is not None},
+        )
+        return 0
+
+    start_row = data_start_row(tab_name)
+    key_col_a1 = _col_index_to_a1(key_col + 1)
+    key_values = client.get_values(spreadsheet_id, f"{tab_name}!{key_col_a1}{start_row}:{key_col_a1}")
+
+    batch_updates: List[Dict[str, Any]] = []
+    updated_keys: set[str] = set()
+    now_ts = datetime.now(timezone.utc).isoformat()
+    updated_source = token(Provenance.FLOW1_BACKLOGSHEET_WRITE)
+
+    for row_number, row in enumerate(key_values, start=start_row):
+        key = str(row[0]).strip() if row else ""
+        if not key or key not in summaries_by_key:
+            continue
+
+        summary_a1 = _col_index_to_a1(summary_col + 1)
+        batch_updates.append(
+            {
+                "range": f"{tab_name}!{summary_a1}{row_number}",
+                "values": [[summaries_by_key[key]]],
+            }
+        )
+
+        if updated_source_col is not None:
+            updated_source_a1 = _col_index_to_a1(updated_source_col + 1)
+            batch_updates.append(
+                {
+                    "range": f"{tab_name}!{updated_source_a1}{row_number}",
+                    "values": [[updated_source]],
+                }
+            )
+
+        if updated_at_col is not None:
+            updated_at_a1 = _col_index_to_a1(updated_at_col + 1)
+            batch_updates.append(
+                {
+                    "range": f"{tab_name}!{updated_at_a1}{row_number}",
+                    "values": [[now_ts]],
+                }
+            )
+
+        updated_keys.add(key)
+
+    if batch_updates:
+        client.batch_update_values(spreadsheet_id, batch_updates)
+
+    return len(updated_keys)
+
+
 def write_backlog_from_db(
     db: Session,
     client: SheetsClient,

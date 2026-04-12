@@ -36,14 +36,14 @@ from app.services.product_ops.kpi_contributions_sync_service import KPIContribut
 from app.jobs.math_model_generation_job import run_math_model_generation_job
 from app.jobs.param_seeding_job import run_param_seeding_job
 from app.llm.client import LLMClient
+from app.services.initiative_summary_service import InitiativeSummaryService
 from app.utils.header_utils import normalize_tab_name
+from app.utils.model_evaluation import evaluation_acceptance_status, run_math_model_quality_cycle
 
 # Note: optimization explainer imports are deferred inside functions to keep import graph light
 
 
 logger = logging.getLogger("app.services.action_runner")
-
-
 # ----------------------------
 # Status constants (v1)
 # ----------------------------
@@ -326,6 +326,18 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         summary["skipped"] = skipped_no_key + skipped_count
         summary["failed"] = failed_count
 
+    elif action == "pm.generate_llm_summary":
+        if result.get("status") == "skipped":
+            summary["total"] = 1
+            summary["skipped"] = 1
+            return summary
+        selected_count = result.get("selected_count", 0)
+        skipped_no_key = result.get("skipped_no_key", 0)
+        summary["total"] = selected_count + skipped_no_key
+        summary["success"] = result.get("ok_count", 0)
+        summary["skipped"] = skipped_no_key + result.get("skipped_count", 0)
+        summary["failed"] = result.get("failed_count", 0)
+
     elif action == "pm.seed_math_params":
         if result.get("status") == "skipped":
             summary["total"] = 1
@@ -603,7 +615,7 @@ def _build_action_context(payload: Dict[str, Any]) -> ActionContext:
     
     # Only instantiate LLM when needed
     # Use exact equality for PM jobs (safer), startswith for Flow 4 (multiple variants)
-    if action in {"pm.seed_math_params", "pm.suggest_math_model_llm"} or any(action.startswith(prefix) for prefix in ["flow4.suggest_mathmodels", "flow4.seed_params"]):
+    if action in {"pm.seed_math_params", "pm.suggest_math_model_llm", "pm.generate_llm_summary"} or any(action.startswith(prefix) for prefix in ["flow4.suggest_mathmodels", "flow4.seed_params"]):
         llm_client = LLMClient()
 
     return ActionContext(payload=payload, sheets_client=sheets_client, llm_client=llm_client)
@@ -1205,7 +1217,7 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
     from app.sheets.math_models_reader import MathModelsReader
     from app.sheets.math_models_writer import MathModelsWriter
     from app.llm.client import build_constructed_math_model_prompt
-    from app.llm.scoring_assistant import build_math_model_prompt_enrichment, build_math_model_prompt_input, suggest_math_model_for_initiative
+    from app.llm.scoring_assistant import build_math_model_prompt_enrichment, build_math_model_prompt_input, load_metrics_config_prompt_json
     from app.db.models.initiative import Initiative
     
     status_by_key: Dict[str, Optional[str]] = {k: None for k in keys}
@@ -1225,6 +1237,16 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
         missing_in_sheet = [k for k in keys if k not in found_keys]
         for k in missing_in_sheet:
             status_by_key[k] = "SKIPPED: Not found in MathModels tab"
+
+        llm_context_text, metrics_config_text = build_math_model_prompt_enrichment(
+            ctx.sheets_client,
+            spreadsheet_id=str(spreadsheet_id),
+        )
+        metrics_config_json = load_metrics_config_prompt_json(
+            ctx.sheets_client,
+            spreadsheet_id=str(spreadsheet_id),
+            tab_name=getattr(settings.PRODUCT_OPS, "metrics_config_tab", None) if settings.PRODUCT_OPS else None,
+        )
 
         models_suggested = 0
         llm_calls = 0
@@ -1273,32 +1295,40 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
                 status_by_key[key] = "SKIPPED: Insufficient context (add model_prompt_to_llm or fill initiative fields)"
                 continue
 
-            llm_context_text, metrics_config_text = build_math_model_prompt_enrichment(
-                ctx.sheets_client,
-                spreadsheet_id=str(spreadsheet_id),
+            payload = build_math_model_prompt_input(
+                initiative,
+                math_row,
+                db=db,
+                llm_context_text=llm_context_text,
+                metrics_config_text=metrics_config_text,
+                metrics_config_json=metrics_config_json,
             )
 
             # Call LLM to suggest model
             try:
-                suggestion = suggest_math_model_for_initiative(
-                    initiative,
-                    math_row,
+                quality_result = run_math_model_quality_cycle(
                     llm_client,
-                    db=db,
-                    llm_context_text=llm_context_text,
-                    metrics_config_text=metrics_config_text,
+                    payload,
+                    max_revision_attempts=2,
                 )
-                llm_calls += 1
+                llm_calls += quality_result.llm_calls_made
 
-                constructed_prompt = build_constructed_math_model_prompt(
-                    build_math_model_prompt_input(
-                        initiative,
-                        math_row,
-                        db=db,
-                        llm_context_text=llm_context_text,
-                        metrics_config_text=metrics_config_text,
-                    )
-                )
+                if quality_result.validation_errors:
+                    status_by_key[key] = f"FAILED: Rule validation failed: {'; '.join(quality_result.validation_errors[:2])}"
+                    continue
+
+                if quality_result.suggestion is None or quality_result.evaluation is None:
+                    status_by_key[key] = f"FAILED: {quality_result.rejection_reason or 'evaluation pipeline failed'}"
+                    continue
+
+                suggestion = quality_result.suggestion
+                evaluation = quality_result.evaluation
+                if quality_result.acceptance_status == "rejected":
+                    status_by_key[key] = f"FAILED: Rejected by evaluator (score={evaluation.score})"
+                    continue
+
+                constructed_prompt = build_constructed_math_model_prompt(payload)
+                evaluation_status = evaluation_acceptance_status(evaluation.score, evaluation.verdict)
                 
                 # Queue for batch write (LLM-owned columns only; assumptions_text is user-owned)
                 suggestions_to_write.append({
@@ -1307,9 +1337,17 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
                     "llm_notes": suggestion.llm_notes,
                     "llm_suggested_metric_chain_text": suggestion.llm_suggested_metric_chain_text,
                     "constructed_llm_prompt": constructed_prompt,
+                    "llm_evaluation_score": evaluation.score,
+                    "llm_evaluation_verdict": evaluation.verdict,
+                    "llm_evaluation_issues": "\n".join(evaluation.issues),
+                    "llm_evaluation_strengths": "\n".join(evaluation.strengths),
+                    "llm_evaluation_suggested_improvements": "\n".join(evaluation.suggested_improvements),
+                    "llm_selected_target_kpi": evaluation.selected_target_kpi,
+                    "llm_target_kpi_reasoning": evaluation.target_kpi_reasoning,
+                    "llm_revision_attempts": quality_result.revision_attempts,
                 })
                 
-                status_by_key[key] = "OK: Suggested formula (review and approve before seeding params)"
+                status_by_key[key] = f"OK: Suggested formula ({evaluation_status}; score={evaluation.score}; revisions={quality_result.revision_attempts})"
                 models_suggested += 1
 
             except Exception as exc:
@@ -1360,6 +1398,95 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
         "failed_count": failed_count,
         "substeps": [
             {"step": "model_suggestion", "status": "ok", "suggested": models_suggested, "llm_calls": llm_calls},
+        ],
+    }
+
+
+def _action_pm_generate_llm_summary(db: Session, ctx: ActionContext) -> Dict[str, Any]:
+    """Generate and overwrite selected initiative summaries on Central Backlog."""
+    sheet_ctx = ctx.payload.get("sheet_context") or {}
+    scope = ctx.payload.get("scope") or {}
+    if not isinstance(sheet_ctx, dict):
+        sheet_ctx = {}
+    if not isinstance(scope, dict):
+        scope = {}
+
+    cfg = settings.PRODUCT_OPS
+    spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (cfg.spreadsheet_id if cfg else None)
+    requested_tab = sheet_ctx.get("tab")
+    resolved_tab = _resolve_pm_tab(requested_tab, cfg, default_kind="backlog")
+    tab = resolved_tab.canonical_tab
+
+    keys = scope.get("initiative_keys") or []
+    if not isinstance(keys, list):
+        keys = []
+    keys = [k for k in keys if isinstance(k, str) and k.strip()]
+    keys = list(dict.fromkeys(keys))
+    original_keys = scope.get("initiative_keys")
+    skipped_no_key = (len(original_keys) - len(keys)) if isinstance(original_keys, list) else 0
+
+    if not spreadsheet_id:
+        raise ValueError("sheet_context.spreadsheet_id missing and PRODUCT_OPS not configured")
+
+    if resolved_tab.kind != "backlog":
+        logger.info("pm.generate_llm_summary.wrong_tab", extra={"requested_tab": requested_tab, "target_tab": "Backlog"})
+        return _pm_guided_skip(
+            pm_job="pm.generate_llm_summary",
+            reason="wrong_tab",
+            message="Generate LLM Summary only runs from Backlog. Go to 'Backlog' and try again.",
+            requested_tab=str(requested_tab),
+            target_tab="Backlog",
+        )
+
+    if not keys:
+        logger.info("pm.generate_llm_summary.no_keys_selected", extra={"skipped_no_key": skipped_no_key})
+        return {
+            "pm_job": "pm.generate_llm_summary",
+            "tab": tab,
+            "selected_count": 0,
+            "ok_count": 0,
+            "skipped_count": 0,
+            "skipped_no_key": skipped_no_key,
+            "failed_count": 0,
+            "substeps": [
+                {"step": "generate_summary", "status": "skipped", "reason": "no keys selected"},
+                {"step": "status_write", "status": "skipped", "reason": "no keys selected"},
+            ],
+        }
+
+    assert ctx.llm_client is not None, "LLM client required for pm.generate_llm_summary"
+    service = InitiativeSummaryService(ctx.sheets_client, ctx.llm_client)
+    result = service.generate_for_initiatives(
+        db=db,
+        spreadsheet_id=str(spreadsheet_id),
+        tab_name=str(tab),
+        initiative_keys=keys,
+    )
+
+    try:
+        from app.sheets.productops_writer import write_status_to_sheet
+
+        write_status_to_sheet(
+            ctx.sheets_client,
+            str(spreadsheet_id),
+            str(tab),
+            result.get("status_by_key", {}),
+        )
+    except Exception:
+        logger.warning("pm.generate_llm_summary.status_write_failed")
+
+    return {
+        "pm_job": "pm.generate_llm_summary",
+        "tab": tab,
+        "selected_count": len(keys),
+        "ok_count": int(result.get("ok_count", 0)),
+        "skipped_count": int(result.get("skipped_count", 0)),
+        "skipped_no_key": skipped_no_key,
+        "failed_count": int(result.get("failed_count", 0)),
+        "sheet_updated": int(result.get("sheet_updated", 0)),
+        "substeps": [
+            {"step": "generate_summary", "status": "ok", "count": int(result.get("ok_count", 0))},
+            {"step": "status_write", "status": "ok"},
         ],
     }
 
@@ -3423,6 +3550,7 @@ _ACTION_REGISTRY: Dict[str, ActionFn] = {
     "pm.save_selected": _action_pm_save_selected,
     "pm.populate_initiatives": _action_pm_populate_initiatives,
     "pm.suggest_math_model_llm": _action_pm_suggest_math_model_llm,
+    "pm.generate_llm_summary": _action_pm_generate_llm_summary,
     "pm.seed_math_params": _action_pm_seed_math_params,
     
     # PM Jobs (V3 Optimization)

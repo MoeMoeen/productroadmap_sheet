@@ -11,6 +11,7 @@ It provides PM actions for syncing initiatives between the sheet and database.
 |-----------|--------|-----------|-------------|
 | Sync intake → backlog | `pm.backlog_sync` | Intake sheets → DB → backlog | Reconciles intake into DB, then refreshes backend-owned backlog columns |
 | Save selected rows | `pm.save_selected` | Sheet → DB | Syncs CENTRAL_EDITABLE_FIELDS to DB |
+| Generate LLM Summary | `pm.generate_llm_summary` | DB + Backlog context → DB + backlog | Overwrites `LLM Summary` using DB fields, sheet-only Description, and approved math model context |
 | Switch scoring framework | `pm.switch_framework` | DB → Sheet | Activates per-framework scores |
 
 **IMPORTANT**: Run "Save selected rows" before "Sync intake → backlog" to persist PM edits,
@@ -192,6 +193,7 @@ function onOpen() {
     .createMenu("🧠 Roadmap AI")
     .addItem("Sync intake → backlog", "uiBacklogSync")
     .addItem("Save selected rows", "uiSaveSelected")
+    .addItem("Generate LLM Summary", "uiGenerateLLMSummary")
     .addItem("Switch scoring framework", "uiSwitchFramework")
     .addSeparator()
     .addItem("Refresh tab instructions", "uiRefreshTabInstructions")
@@ -370,6 +372,88 @@ function uiSaveSelected() {
 }
 ```
 
+### ui_llm_summary.gs
+
+```javascript
+// ui_llm_summary.gs
+// PM Job: pm.generate_llm_summary (DB + Backlog context → DB + backlog)
+//
+// For selected initiatives on Central Backlog:
+// - Reads DB initiative context
+// - Reads sheet-only Backlog Description
+// - Uses approved math model context when available
+// - Overwrites the LLM Summary column and DB summary fields
+
+function uiGenerateLLMSummary() {
+  const keys = getSelectedInitiativeKeys();
+
+  if (!keys.length) {
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      "No initiative_key found in your selection.",
+      "🧠 Roadmap AI",
+      5
+    );
+    return;
+  }
+
+  const ss = SpreadsheetApp.getActive();
+  const spreadsheetId = ss.getId();
+  const tabName = ss.getActiveSheet().getName();
+  const ui = SpreadsheetApp.getUi();
+
+  const resp = ui.alert(
+    "Generate LLM Summary",
+    "This will overwrite the LLM Summary field for the selected rows using DB context, Backlog Description, and approved math model context when available.\n\nContinue?",
+    ui.ButtonSet.YES_NO
+  );
+  if (resp !== ui.Button.YES) return;
+
+  const payload = {
+    sheet_context: {
+      spreadsheet_id: spreadsheetId,
+      tab: tabName,
+    },
+    scope: {
+      type: "selection",
+      initiative_keys: keys,
+    },
+    options: {},
+    requested_by: {
+      ui: "apps_script",
+      source: "central_backlog",
+    },
+  };
+
+  try {
+    const res = postActionRun("pm.generate_llm_summary", payload);
+
+    ss.toast(
+      `Generating summaries for ${keys.length} row(s)...\nRun ID: ${res.run_id}`,
+      "🧠 Roadmap AI",
+      5
+    );
+
+    const finalResult = pollRunUntilDone(res.run_id, 90, 1000);
+    showRunToast_(finalResult, "Generate LLM Summary");
+
+    if (String(finalResult?.status || "").toLowerCase() === "success") {
+      const summary = finalResult?.result?.summary || {};
+      ss.toast(
+        `Summaries updated: ${summary.success || 0}, skipped: ${summary.skipped || 0}, failed: ${summary.failed || 0}`,
+        "🧠 Roadmap AI ✅",
+        8
+      );
+    }
+  } catch (e) {
+    ss.toast(
+      "Failed: " + (e?.message || e),
+      "🧠 Roadmap AI ❌",
+      8
+    );
+  }
+}
+```
+
 ### ui_framework.gs
 
 ```javascript
@@ -517,7 +601,8 @@ function showRunToast_(run, title) {
 1. **View data**: Open Central Backlog sheet
 2. **Edit PM fields**: Modify Title, Hypothesis, Problem Statement, etc.
 3. **Save edits**: Select edited rows → Roadmap AI → "Save selected rows"
-4. **Sync latest**: Roadmap AI → "Sync intake → backlog" (intake sheets → DB → backlog)
+4. **Generate summary**: Select rows → Roadmap AI → "Generate LLM Summary"
+5. **Sync latest**: Roadmap AI → "Sync intake → backlog" (intake sheets → DB → backlog)
 
 ### Warning: Unsaved Edits
 
@@ -539,3 +624,13 @@ These CENTRAL_EDITABLE_FIELDS flow Sheet → DB:
 - LLM Summary
 - Strategic Priority Coefficient
 - Is Optimization Candidate, Candidate Period Key
+
+### When to Use "Generate LLM Summary"
+
+Use "Generate LLM Summary" when you want the backend to overwrite the summary for selected initiatives from the latest structured context.
+
+- Reads DB initiative fields
+- Reads the sheet-only `Description` column from Backlog
+- Uses the approved math model only, when one exists
+- Writes plain-text summary to the Backlog `LLM Summary` column
+- Persists structured summary JSON in the DB for the same initiative

@@ -141,7 +141,7 @@ def evaluate_script(script: str, initial_env: Dict[str, float], timeout_secs: fl
 
 
 def validate_formula(script: str, max_lines: int = 10) -> List[str]:
-	"""Validate script for length, syntax, and required `value` assignment."""
+	"""Validate script for length, syntax, required `value`, and delta-oriented variable naming."""
 
 	errors: List[str] = []
 	real_lines = [ln for ln in script.splitlines() if ln.strip() and not ln.strip().startswith("#")]
@@ -156,6 +156,7 @@ def validate_formula(script: str, max_lines: int = 10) -> List[str]:
 
 	# Ensure only Assign statements are present and expressions are safe
 	assigned: Set[str] = set()
+	dependencies: Dict[str, Set[str]] = {}
 	for stmt in tree.body:
 		if not isinstance(stmt, ast.Assign):
 			errors.append("Only assignment statements are allowed")
@@ -163,10 +164,42 @@ def validate_formula(script: str, max_lines: int = 10) -> List[str]:
 		if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
 			errors.append("Assignment target must be a single name")
 			continue
-		assigned.add(stmt.targets[0].id)
+		target_name = stmt.targets[0].id
+		assigned.add(target_name)
 		_SafeExprValidator().visit(ast.Expression(stmt.value))
+
+		used_names: Set[str] = set()
+
+		class _NameCollector(ast.NodeVisitor):
+			def visit_Name(self, node: ast.Name) -> None:
+				if isinstance(node.ctx, ast.Load) and node.id not in SAFE_FUNCS:
+					used_names.add(node.id)
+
+		_NameCollector().visit(stmt.value)
+		dependencies[target_name] = used_names
 
 	if "value" not in assigned:
 		errors.append("Formula must assign 'value'")
+
+	if not any(name.startswith("delta_") for name in assigned if name != "value"):
+		errors.append("Formula must assign at least one variable with a 'delta_' prefix")
+
+	def _depends_on_delta(name: str, seen: Set[str] | None = None) -> bool:
+		if name.startswith("delta_"):
+			return True
+		if seen is None:
+			seen = set()
+		if name in seen:
+			return False
+		seen.add(name)
+		for dep in dependencies.get(name, set()):
+			if dep.startswith("delta_"):
+				return True
+			if dep in dependencies and _depends_on_delta(dep, seen):
+				return True
+		return False
+
+	if "value" in assigned and not _depends_on_delta("value"):
+		errors.append("'value' must be derived from one or more 'delta_' variables")
 
 	return errors

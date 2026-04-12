@@ -24,6 +24,7 @@ class InitiativeBase(BaseModel):
     problem_statement: str | None = None
     hypothesis: str | None = None
     llm_summary: str | None = None
+    llm_summary_json: Any | None = None
 
     customer_segment: str | None = None
     initiative_type: str | None = None
@@ -117,6 +118,7 @@ class InitiativeUpdate(BaseModel):
     problem_statement: str | None = None
     hypothesis: str | None = None
     llm_summary: str | None = None
+    llm_summary_json: Any | None = None
 
     customer_segment: str | None = None
     initiative_type: str | None = None

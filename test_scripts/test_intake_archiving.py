@@ -10,20 +10,23 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
 from app.db.models.initiative import Initiative
+from app.db.models.scoring import InitiativeMathModel
 from app.jobs.flow3_product_ops_job import run_flow3_sync_inputs_to_initiatives
 from app.jobs.flow3_product_ops_job import run_flow3_populate_initiatives
 from app.jobs.math_model_generation_job import run_math_model_generation_job
 from app.jobs.sync_intake_job import reconcile_intake_managed_initiatives
 from app.jobs.sync_intake_job import run_sync_for_sheet
 from app.jobs.sync_intake_job import run_sync_all_intake_sheets
-from app.llm.client import _build_system_prompt, _build_user_prompt, build_constructed_math_model_prompt
+from app.llm.client import _build_math_model_evaluator_system_prompt, _build_math_model_evaluator_user_prompt, _build_math_model_revision_system_prompt, _build_math_model_revision_user_prompt, _build_system_prompt, _build_user_prompt, build_constructed_math_model_prompt
 from app.llm.context_formatters import format_llm_context_sections, format_metrics_config_rows
-from app.llm.models import MathModelPromptInput
-from app.llm.scoring_assistant import load_metrics_config_prompt_context
-from app.services.action_runner import ActionContext, _action_pm_backlog_sync, _action_pm_populate_candidates, _action_pm_populate_initiatives, _action_pm_save_selected, _action_pm_score_selected, _action_pm_seed_math_params, _action_pm_suggest_math_model_llm, _action_pm_switch_framework, _extract_summary
+from app.llm.models import InitiativeSummaryOutput, MathModelEvaluation, MathModelPromptInput, MathModelSuggestion
+from app.llm.scoring_assistant import build_math_model_prompt_input, load_metrics_config_prompt_context
+from app.services.initiative_summary_service import InitiativeSummaryService, build_initiative_summary_prompt_input, choose_approved_math_model, compute_summary_input_hash, format_initiative_summary_text
+from app.utils.safe_eval import validate_formula
+from app.services.action_runner import ActionContext, _action_pm_backlog_sync, _action_pm_generate_llm_summary, _action_pm_populate_candidates, _action_pm_populate_initiatives, _action_pm_save_selected, _action_pm_score_selected, _action_pm_seed_math_params, _action_pm_suggest_math_model_llm, _action_pm_switch_framework, _extract_summary
 from app.services.intake_mapper import map_sheet_row_to_initiative_create
 from app.services.intake_service import IntakeService
-from app.sheets.backlog_writer import write_backlog_from_db
+from app.sheets.backlog_writer import write_backlog_from_db, write_llm_summaries_to_backlog_sheet
 from app.sheets.intake_writer import GoogleSheetsIntakeWriter
 from app.sheets.layout import data_start_row
 from app.sheets.llm_context_reader import LLMContextReader
@@ -100,6 +103,21 @@ class LLMContextClient:
 
     def get_values(self, spreadsheet_id: str, range_: str, value_render_option: str = "UNFORMATTED_VALUE"):
         return self.values
+
+
+class BacklogSummaryClient:
+    def __init__(self, header: list[str], keys: list[str]) -> None:
+        self.header = header
+        self.keys = keys
+        self.updated: list[dict[str, Any]] = []
+
+    def get_values(self, spreadsheet_id: str, range_: str, value_render_option: str = "UNFORMATTED_VALUE"):
+        if range_.endswith("!1:1"):
+            return [self.header]
+        return [[key] for key in self.keys]
+
+    def batch_update_values(self, spreadsheet_id: str, data: list[dict], value_input_option: str = "USER_ENTERED") -> None:
+        self.updated.extend(data)
 
 
 @pytest.fixture
@@ -253,7 +271,7 @@ def test_existing_intake_initiative_remains_active_after_reconcile(db_session) -
         source_row_number=2,
     )
 
-    stats = reconcile_intake_managed_initiatives(
+    reconcile_intake_managed_initiatives(
         db_session,
         {"INIT-000001"},
         managed_scopes=[("sheet-1", "Marketing_EMEA")],
@@ -322,20 +340,46 @@ def test_build_user_prompt_includes_additional_business_context_block() -> None:
         model_description_free_text="Quantify the initiative impact",
         llm_context_text="[Strategy]\n- Focus on monetization",
         metrics_config_text="- north_star_gmv | name=GMV | level=north_star",
+        metrics_config_json=[{"kpi_key": "north_star_gmv", "kpi_level": "north_star"}],
         assumptions_text="PM-owned assumptions",
     )
 
     prompt = _build_user_prompt(payload)
 
-    assert "Target KPI: onboarding_conversion_rate" in prompt
-    assert "Your goal is to model the DELTA (change) in 'onboarding_conversion_rate'" in prompt
+    assert "Target KPI: active_restaurants" in prompt
+    assert "Immediate KPI: onboarding_conversion_rate" in prompt
+    assert "Your goal is to model the DELTA (change) in 'active_restaurants'" in prompt
+    assert "The final 'value' must represent delta in 'active_restaurants'" in prompt
+    assert "'onboarding_conversion_rate' is the first KPI directly affected" in prompt
     assert "=== TASK ===" in prompt
     assert "=== THINKING FRAMEWORK ===" in prompt
     assert "[Strategy]" in prompt
     assert "=== COMPANY CONTEXT ===" in prompt
     assert "=== KPI DEFINITIONS ===" in prompt
+    assert "=== TARGET KPI SELECTION INSTRUCTION ===" in prompt
     assert "north_star_gmv" in prompt
     assert "=== IMPORTANT CONSTRAINTS ===" in prompt
+
+
+def test_build_user_prompt_warns_when_target_kpi_missing_and_requires_metric_chain_construction() -> None:
+    payload = MathModelPromptInput(
+        initiative_key="INIT-000002",
+        title="Test Initiative Without Explicit Target",
+        immediate_kpi_key="checkout_conversion_rate",
+        metrics_config_text="- north_star_gmv | name=GMV | level=north_star\n- checkout_conversion_rate | name=Checkout Conversion | level=operational",
+        metrics_config_json=[
+            {"kpi_key": "north_star_gmv", "kpi_level": "north_star"},
+            {"kpi_key": "checkout_conversion_rate", "kpi_level": "operational"},
+        ],
+    )
+
+    prompt = _build_user_prompt(payload)
+
+    assert "Target KPI: NOT PROVIDED" in prompt
+    assert "You MUST select the appropriate target KPI from KPI definitions." in prompt
+    assert "WARNING: No explicit target KPI provided" in prompt
+    assert "If no metric chain is provided, you MUST explicitly construct one before writing formulas." in prompt
+    assert "Prefer North Star or Strategic KPIs" in prompt
 
 
 def test_build_system_prompt_requires_delta_on_target_kpi() -> None:
@@ -344,8 +388,71 @@ def test_build_system_prompt_requires_delta_on_target_kpi() -> None:
     assert "You MUST model IMPACT as a DELTA" in prompt
     assert "REASONING PROCESS (MANDATORY)" in prompt
     assert "DO NOT model effort, cost, or implementation complexity" in prompt
+    assert "TARGET KPI SELECTION RULE" in prompt
+    assert "the formula MUST follow the same causal structure" in prompt
+    assert "The model MUST include at least 2-3 steps" in prompt
+    assert "Only choose from:" in prompt
+    assert "North Star KPIs" in prompt
+    assert "Strategic KPIs" in prompt
+    assert "State which KPI you selected as Target KPI" in prompt
     assert "Initiative: Improve checkout UX" in prompt
     assert "delta_gmv" in prompt
+
+
+def test_build_math_model_evaluator_prompts_include_structured_review_fields() -> None:
+    payload = MathModelPromptInput(
+        initiative_key="INIT-000003",
+        title="Evaluator Test",
+        target_kpi_key="qlub_revenue",
+        immediate_kpi_key="checkout_conversion_rate",
+        metric_chain_text="checkout_conversion_rate -> completed_transactions -> qlub_revenue",
+        metrics_config_text="- qlub_revenue | name=Revenue | level=strategic",
+        metrics_config_json=[{"kpi_key": "qlub_revenue", "kpi_level": "strategic"}],
+    )
+    suggestion = MathModelSuggestion(
+        llm_suggested_formula_text="delta_checkout_conversion = 0.1\ndelta_revenue = delta_checkout_conversion * average_order_value\nvalue = delta_revenue",
+        llm_suggested_metric_chain_text="checkout_conversion_rate -> completed_transactions -> qlub_revenue",
+        llm_notes="Uses revenue as the target KPI.",
+    )
+
+    system_prompt = _build_math_model_evaluator_system_prompt()
+    user_prompt = _build_math_model_evaluator_user_prompt(payload, suggestion)
+
+    assert "Causal correctness" in system_prompt
+    assert '"selected_target_kpi": string | null' in system_prompt
+    assert "each step in the chain MUST appear in the formula" in system_prompt
+    assert "Explicit Target KPI: qlub_revenue" in user_prompt
+    assert "Suggested formula:" in user_prompt
+    assert "Uses revenue as the target KPI." in user_prompt
+    assert "Structured KPI definitions JSON:" in user_prompt
+
+
+def test_build_math_model_revision_prompts_include_evaluation_feedback() -> None:
+    payload = MathModelPromptInput(
+        initiative_key="INIT-000004",
+        title="Revision Test",
+        target_kpi_key="qlub_revenue",
+        immediate_kpi_key="checkout_conversion_rate",
+        metrics_config_json=[{"kpi_key": "qlub_revenue", "kpi_level": "strategic"}],
+    )
+    suggestion = MathModelSuggestion(
+        llm_suggested_formula_text="delta_transactions = 1\nvalue = delta_transactions",
+        llm_suggested_metric_chain_text="checkout_conversion_rate -> completed_transactions",
+        llm_notes="Weak model.",
+    )
+    evaluation = MathModelEvaluation(
+        score=62,
+        verdict="needs_revision",
+        issues=["Missing GMV step"],
+        suggested_improvements=["Add delta_gmv"],
+    )
+
+    system_prompt = _build_math_model_revision_system_prompt()
+    user_prompt = _build_math_model_revision_user_prompt(payload, suggestion, evaluation)
+
+    assert "revising a causal, delta-based mathematical model" in system_prompt
+    assert "Evaluation feedback:" in user_prompt
+    assert "Suggested improvements: ['Add delta_gmv']" in user_prompt
 
 
 def test_build_constructed_math_model_prompt_combines_system_and_user_sections() -> None:
@@ -360,7 +467,7 @@ def test_build_constructed_math_model_prompt_combines_system_and_user_sections()
 
     assert "[system]" in prompt
     assert "[user]" in prompt
-    assert "Target KPI: onboarding_conversion_rate" in prompt
+    assert "Target KPI: active_restaurants" in prompt
 
 
 def test_format_metrics_config_rows_builds_metric_definition_lines() -> None:
@@ -381,6 +488,28 @@ def test_format_metrics_config_rows_builds_metric_definition_lines() -> None:
     assert "name=GMV" in result.text
     assert "level=north_star" in result.text
     assert result.included_lines == 1
+
+
+def test_validate_formula_requires_delta_prefixed_variable() -> None:
+    errors = validate_formula("traffic = 10\nvalue = traffic")
+
+    assert "Formula must assign at least one variable with a 'delta_' prefix" in errors
+
+
+def test_validate_formula_requires_value_to_depend_on_delta_variable() -> None:
+    errors = validate_formula("delta_checkout_conversion = 0.1\ntraffic = 100\nvalue = traffic")
+
+    assert "'value' must be derived from one or more 'delta_' variables" in errors
+
+
+def test_validate_formula_accepts_transitive_delta_dependency_for_value() -> None:
+    errors = validate_formula(
+        "delta_checkout_conversion = 0.1\n"
+        "delta_transactions = traffic * delta_checkout_conversion\n"
+        "value = delta_transactions"
+    )
+
+    assert "'value' must be derived from one or more 'delta_' variables" not in errors
 
 
 def test_load_metrics_config_prompt_context_filters_inactive_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -407,6 +536,38 @@ def test_load_metrics_config_prompt_context_filters_inactive_metrics(monkeypatch
     assert "north_star_gmv" in text
     assert "old_metric" not in text
     assert "unset_metric" not in text
+
+
+def test_build_math_model_prompt_input_normalizes_kpi_names_from_metrics_config() -> None:
+    initiative = SimpleNamespace(
+        initiative_key="INIT-000099",
+        title="Normalize KPI Names",
+        problem_statement="Increase checkout monetization",
+        desired_outcome=None,
+        hypothesis=None,
+        llm_summary=None,
+        expected_impact_description=None,
+        impact_metric=None,
+        impact_unit=None,
+        immediate_kpi_key=None,
+    )
+    row = MathModelRow(
+        initiative_key="INIT-000099",
+        target_kpi_key="Qlub Revenue",
+        immediate_kpi_key="Checkout Conversion Rate",
+    )
+
+    payload = build_math_model_prompt_input(
+        initiative,
+        row,
+        metrics_config_json=[
+            {"kpi_key": "qlub_revenue", "kpi_name": "Qlub Revenue", "kpi_level": "north_star"},
+            {"kpi_key": "checkout_conversion_rate", "kpi_name": "Checkout Conversion Rate", "kpi_level": "operational"},
+        ],
+    )
+
+    assert payload.target_kpi_key == "qlub_revenue"
+    assert payload.immediate_kpi_key == "checkout_conversion_rate"
 
 
 def test_intake_service_blocks_withdrawn_to_new_without_override(db_session) -> None:
@@ -730,6 +891,217 @@ def test_backlog_writer_preserves_non_owned_columns(db_session) -> None:
         f"Backlog!B{dsr}:B50",
     ]
     assert all("C" not in clear_range for clear_range in client.cleared_ranges)
+
+
+def test_write_llm_summaries_to_backlog_sheet_updates_selected_rows() -> None:
+    client = BacklogSummaryClient(
+        ["Initiative Key", "LLM Summary", "Updated Source", "Updated At"],
+        ["INIT-000001", "INIT-000002"],
+    )
+
+    updated = write_llm_summaries_to_backlog_sheet(
+        cast(Any, client),
+        "sheet-1",
+        "Backlog",
+        summaries_by_key={"INIT-000002": "New summary"},
+    )
+
+    assert updated == 1
+    assert [item["range"] for item in client.updated] == ["Backlog!B6", "Backlog!C6", "Backlog!D6"]
+    assert client.updated[0]["values"] == [["New summary"]]
+
+
+def test_build_initiative_summary_prompt_input_uses_sheet_description_and_approved_model(db_session) -> None:
+    initiative = _create_initiative(
+        db_session,
+        initiative_key="INIT-000001",
+        title="Improve onboarding",
+    )
+    initiative.problem_statement = "Setup is too manual"
+    initiative.hypothesis = "Automation increases activation"
+    initiative.immediate_kpi_key = "onboarding_conversion_rate"
+    approved_model = InitiativeMathModel(
+        initiative_id=initiative.id,
+        model_name="onboarding_uplift_model",
+        formula_text="delta_active_restaurants = eligible_restaurants * uplift\nvalue = delta_active_restaurants",
+        target_kpi_key="active_restaurants",
+        metric_chain_text="onboarding_conversion_rate -> active_restaurants",
+        approved_by_user=True,
+        is_primary=True,
+    )
+    initiative.math_models.append(approved_model)
+    db_session.add(approved_model)
+    db_session.commit()
+
+    prompt = build_initiative_summary_prompt_input(
+        initiative,
+        {"Initiative Key": "INIT-000001", "Description": "PM-added backlog description"},
+        choose_approved_math_model(initiative),
+        llm_context_text="[Company]\nPrioritize activation clarity",
+    )
+
+    assert prompt.sheet_description == "PM-added backlog description"
+    assert prompt.llm_context_text == "[Company]\nPrioritize activation clarity"
+    assert prompt.approved_math_model is not None
+    assert prompt.approved_math_model.target_kpi_key == "active_restaurants"
+
+
+def test_format_initiative_summary_text_includes_optional_sections() -> None:
+    summary = InitiativeSummaryOutput(
+        headline="Reduce onboarding friction",
+        opportunity="Manual steps slow merchant activation.",
+        proposed_solution="Automate key onboarding steps.",
+        expected_impact="Faster activation should raise active restaurants.",
+        math_model_basis="Approved model targets active_restaurants via onboarding conversion.",
+        risks_and_dependencies=["Needs integration with Ops tooling"],
+        open_questions=["What share of restaurants are eligible for self-serve onboarding?"],
+    )
+
+    text = format_initiative_summary_text(summary)
+
+    assert "Headline: Reduce onboarding friction" in text
+    assert "Math Model Basis: Approved model targets active_restaurants via onboarding conversion." in text
+    assert "- Needs integration with Ops tooling" in text
+    assert "- What share of restaurants are eligible for self-serve onboarding?" in text
+
+
+def test_initiative_summary_service_overwrites_db_and_sheet(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    initiative = _create_initiative(
+        db_session,
+        initiative_key="INIT-000001",
+        title="Improve onboarding",
+    )
+    initiative.problem_statement = "Setup is too manual"
+    initiative.hypothesis = "Automation increases activation"
+    initiative.llm_summary = "Old summary"
+    approved_model = InitiativeMathModel(
+        initiative_id=initiative.id,
+        model_name="onboarding_uplift_model",
+        formula_text="delta_active_restaurants = eligible_restaurants * uplift\nvalue = delta_active_restaurants",
+        target_kpi_key="active_restaurants",
+        approved_by_user=True,
+        is_primary=True,
+    )
+    initiative.math_models.append(approved_model)
+    db_session.add(approved_model)
+    db_session.commit()
+
+    class FakeBacklogReader:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def get_rows(self, spreadsheet_id: str, tab_name: str = "Backlog", header_row: int = 1, start_data_row: int | None = None, max_rows: int | None = None):
+            return [(5, {"Initiative Key": "INIT-000001", "Description": "Sheet-only context"})]
+
+    class FakeLLMClient:
+        def generate_initiative_summary(self, payload: Any) -> InitiativeSummaryOutput:
+            assert payload.sheet_description == "Sheet-only context"
+            assert payload.llm_context_text == "[Context]\nUse concise PM language"
+            assert payload.approved_math_model is not None
+            assert payload.approved_math_model.target_kpi_key == "active_restaurants"
+            return InitiativeSummaryOutput(
+                headline="Reduce onboarding friction",
+                opportunity="Manual onboarding slows activation.",
+                proposed_solution="Automate activation steps for merchants.",
+                expected_impact="Higher activation should increase active restaurants.",
+                math_model_basis="Approved model links onboarding conversion to active restaurants.",
+                risks_and_dependencies=["Needs enablement with Ops"],
+                open_questions=[],
+            )
+
+    written_summaries: list[dict[str, str]] = []
+
+    monkeypatch.setattr("app.services.initiative_summary_service.BacklogReader", FakeBacklogReader)
+    monkeypatch.setattr(
+        "app.services.initiative_summary_service.load_sheet_level_llm_context",
+        lambda sheets_client, spreadsheet_id, tab_name=None: "[Context]\nUse concise PM language",
+    )
+    monkeypatch.setattr(
+        "app.services.initiative_summary_service.write_llm_summaries_to_backlog_sheet",
+        lambda client, spreadsheet_id, tab_name, summaries_by_key: written_summaries.append(summaries_by_key) or len(summaries_by_key),
+    )
+
+    service = InitiativeSummaryService(cast(Any, object()), cast(Any, FakeLLMClient()))
+    result = service.generate_for_initiatives(
+        db=db_session,
+        spreadsheet_id="sheet-1",
+        tab_name="Backlog",
+        initiative_keys=["INIT-000001"],
+    )
+
+    db_session.refresh(initiative)
+    assert result["ok_count"] == 1
+    assert result["sheet_updated"] == 1
+    assert initiative.llm_summary is not None and "Headline: Reduce onboarding friction" in initiative.llm_summary
+    assert initiative.llm_summary_json is not None
+    assert initiative.llm_summary_json["headline"] == "Reduce onboarding friction"
+    assert initiative.llm_summary_json["_meta"]["input_hash"]
+    assert written_summaries == [{"INIT-000001": initiative.llm_summary}]
+
+
+def test_initiative_summary_service_skips_when_input_hash_matches(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    initiative = _create_initiative(
+        db_session,
+        initiative_key="INIT-000001",
+        title="Improve onboarding",
+    )
+    initiative.problem_statement = "Setup is too manual"
+    initiative.hypothesis = "Automation increases activation"
+
+    backlog_row = {"Initiative Key": "INIT-000001", "Description": "Sheet-only context"}
+    prompt = build_initiative_summary_prompt_input(
+        initiative,
+        backlog_row,
+        None,
+        llm_context_text="[Context]\nUse concise PM language",
+    )
+    input_hash = compute_summary_input_hash(prompt)
+    initiative.llm_summary = "Existing summary"
+    initiative.llm_summary_json = {
+        "headline": "Existing headline",
+        "_meta": {"input_hash": input_hash},
+    }
+    db_session.commit()
+
+    class FakeBacklogReader:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def get_rows(self, spreadsheet_id: str, tab_name: str = "Backlog", header_row: int = 1, start_data_row: int | None = None, max_rows: int | None = None):
+            return [(5, backlog_row)]
+
+    class FakeLLMClient:
+        def generate_initiative_summary(self, payload: Any) -> InitiativeSummaryOutput:
+            raise AssertionError("summary generation should be skipped when input hash matches")
+
+    written_summaries: list[dict[str, str]] = []
+
+    monkeypatch.setattr("app.services.initiative_summary_service.BacklogReader", FakeBacklogReader)
+    monkeypatch.setattr(
+        "app.services.initiative_summary_service.load_sheet_level_llm_context",
+        lambda sheets_client, spreadsheet_id, tab_name=None: "[Context]\nUse concise PM language",
+    )
+    monkeypatch.setattr(
+        "app.services.initiative_summary_service.write_llm_summaries_to_backlog_sheet",
+        lambda client, spreadsheet_id, tab_name, summaries_by_key: written_summaries.append(summaries_by_key) or len(summaries_by_key),
+    )
+
+    service = InitiativeSummaryService(cast(Any, object()), cast(Any, FakeLLMClient()))
+    result = service.generate_for_initiatives(
+        db=db_session,
+        spreadsheet_id="sheet-1",
+        tab_name="Backlog",
+        initiative_keys=["INIT-000001"],
+    )
+
+    db_session.refresh(initiative)
+    assert result["ok_count"] == 0
+    assert result["skipped_count"] == 1
+    assert result["skipped_unchanged_count"] == 1
+    assert result["sheet_updated"] == 0
+    assert result["status_by_key"]["INIT-000001"] == "SKIPPED: Summary input unchanged"
+    assert initiative.llm_summary == "Existing summary"
+    assert written_summaries == []
 
 
 def test_flow3_populate_excludes_archived_candidates(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1290,9 +1662,68 @@ def test_pm_suggest_math_model_guides_user_on_wrong_tab(db_session) -> None:
         settings.PRODUCT_OPS = original_product_ops
 
 
+def test_pm_generate_llm_summary_guides_user_on_wrong_tab(db_session) -> None:
+    original_product_ops = settings.PRODUCT_OPS
+    settings.PRODUCT_OPS = cast(Any, type("Cfg", (), {"spreadsheet_id": "sheet-1", "scoring_inputs_tab": "Scoring_Inputs"})())
+    try:
+        ctx = ActionContext(
+            payload={
+                "action": "pm.generate_llm_summary",
+                "sheet_context": {"spreadsheet_id": "sheet-1", "tab": "Scoring_Inputs"},
+                "scope": {"initiative_keys": ["INIT-000001"]},
+            },
+            sheets_client=cast(Any, object()),
+            llm_client=None,
+        )
+        result = _action_pm_generate_llm_summary(db_session, ctx)
+        summary = _extract_summary("pm.generate_llm_summary", result)
+        assert result["status"] == "skipped"
+        assert result["target_tab"] == "Backlog"
+        assert summary["skipped"] == 1
+    finally:
+        settings.PRODUCT_OPS = original_product_ops
+
+
+def test_pm_generate_llm_summary_returns_counts(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    original_product_ops = settings.PRODUCT_OPS
+    settings.PRODUCT_OPS = cast(Any, type("Cfg", (), {"spreadsheet_id": "sheet-1", "scoring_inputs_tab": "Scoring_Inputs"})())
+    monkeypatch.setattr(
+        "app.services.action_runner.InitiativeSummaryService",
+        lambda sheets_client, llm_client: SimpleNamespace(
+            generate_for_initiatives=lambda **kwargs: {
+                "ok_count": 1,
+                "skipped_count": 0,
+                "failed_count": 0,
+                "sheet_updated": 1,
+                "status_by_key": {"INIT-000001": "OK"},
+            }
+        ),
+    )
+    monkeypatch.setattr("app.sheets.productops_writer.write_status_to_sheet", lambda *_args, **_kwargs: 1)
+
+    try:
+        ctx = ActionContext(
+            payload={
+                "action": "pm.generate_llm_summary",
+                "sheet_context": {"spreadsheet_id": "sheet-1", "tab": "Backlog"},
+                "scope": {"initiative_keys": ["INIT-000001"]},
+            },
+            sheets_client=cast(Any, object()),
+            llm_client=cast(Any, object()),
+        )
+        result = _action_pm_generate_llm_summary(db_session, ctx)
+        summary = _extract_summary("pm.generate_llm_summary", result)
+        assert result["ok_count"] == 1
+        assert result["sheet_updated"] == 1
+        assert summary["success"] == 1
+        assert summary["failed"] == 0
+    finally:
+        settings.PRODUCT_OPS = original_product_ops
+
+
 def test_pm_suggest_math_model_llm_passes_shared_llm_context(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
     original_product_ops = settings.PRODUCT_OPS
-    captured_payloads: list[tuple[str | None, str | None]] = []
+    captured_payloads: list[tuple[str | None, str | None, str | None, str | None]] = []
     written_batches: list[list[dict[str, Any]]] = []
 
     class FakeMathModelsReader:
@@ -1307,6 +1738,8 @@ def test_pm_suggest_math_model_llm_passes_shared_llm_context(db_session, monkeyp
                         initiative_key="INIT-000001",
                         model_name="Model A",
                         model_description_free_text="Quantify value",
+                        target_kpi_key="active_restaurants",
+                        immediate_kpi_key="onboarding_conversion_rate",
                     ),
                 )
             ]
@@ -1318,17 +1751,192 @@ def test_pm_suggest_math_model_llm_passes_shared_llm_context(db_session, monkeyp
         def write_suggestions_batch(self, spreadsheet_id: str, tab_name: str, suggestions: list[dict[str, Any]]) -> None:
             written_batches.append(suggestions)
 
-    def fake_suggest_math_model_for_initiative(initiative: Any, row: Any, llm_client: Any, *, db: Any = None, llm_context_text: str | None = None, metrics_config_text: str | None = None):
-        captured_payloads.append((llm_context_text, metrics_config_text))
-        return type(
-            "Suggestion",
-            (),
-            {
-                "llm_suggested_formula_text": "value = 1",
-                "llm_notes": "note",
-                "llm_suggested_metric_chain_text": "traffic -> value",
+    enrichment_call_count = 0
+    llm_payload_ids: list[int] = []
+    constructed_payload_ids: list[int] = []
+    revision_payload_ids: list[int] = []
+    evaluation_formulas: list[str] = []
+
+    class FakeLLMClient:
+        def suggest_math_model(self, payload: Any):
+            llm_payload_ids.append(id(payload))
+            captured_payloads.append((payload.target_kpi_key, payload.immediate_kpi_key, payload.llm_context_text, payload.metrics_config_text))
+            return type(
+                "Suggestion",
+                (),
+                {
+                    "llm_suggested_formula_text": "delta_active_restaurants = 1\nvalue = delta_active_restaurants",
+                    "llm_notes": "note",
+                    "llm_suggested_metric_chain_text": "traffic -> value",
+                },
+            )()
+
+        def evaluate_math_model(self, payload: Any, suggestion: Any):
+            evaluation_formulas.append(suggestion.llm_suggested_formula_text)
+            if len(evaluation_formulas) == 1:
+                assert suggestion.llm_suggested_formula_text == "delta_active_restaurants = 1\nvalue = delta_active_restaurants"
+                return type(
+                    "Evaluation",
+                    (),
+                    {
+                        "score": 72,
+                        "verdict": "needs_revision",
+                        "issues": ["Value does not clearly map to target KPI"],
+                        "strengths": ["Reasonable causal direction"],
+                        "suggested_improvements": ["Add final KPI propagation step"],
+                        "selected_target_kpi": "active_restaurants",
+                        "target_kpi_reasoning": "Matches the explicit target KPI.",
+                    },
+                )()
+            assert suggestion.llm_suggested_formula_text == (
+                "delta_active_restaurants = 1\n"
+                "activation_rate = delta_active_restaurants * onboarding_conversion_rate\n"
+                "value = activation_rate"
+            )
+            return type(
+                "Evaluation",
+                (),
+                {
+                    "score": 88,
+                    "verdict": "accept",
+                    "issues": [],
+                    "strengths": ["Clear KPI propagation to target"],
+                    "suggested_improvements": [],
+                    "selected_target_kpi": "active_restaurants",
+                    "target_kpi_reasoning": "Matches the explicit target KPI.",
+                },
+            )()
+
+        def revise_math_model(self, payload: Any, suggestion: Any, evaluation: Any):
+            revision_payload_ids.append(id(payload))
+            assert suggestion.llm_suggested_formula_text == "delta_active_restaurants = 1\nvalue = delta_active_restaurants"
+            assert evaluation.verdict == "needs_revision"
+            return type(
+                "Suggestion",
+                (),
+                {
+                    "llm_suggested_formula_text": (
+                        "delta_active_restaurants = 1\n"
+                        "activation_rate = delta_active_restaurants * onboarding_conversion_rate\n"
+                        "value = activation_rate"
+                    ),
+                    "llm_notes": "revised note",
+                    "llm_suggested_metric_chain_text": "traffic -> onboarding_conversion_rate -> active_restaurants",
+                },
+            )()
+
+    settings.PRODUCT_OPS = cast(
+        Any,
+        type("Cfg", (), {"spreadsheet_id": "sheet-1", "mathmodels_tab": "MathModels", "llm_context_tab": "LLM_Context", "metrics_config_tab": "Metrics_Config"})(),
+    )
+    _create_initiative(db_session, initiative_key="INIT-000001", title="Test Initiative")
+
+    monkeypatch.setattr("app.sheets.math_models_reader.MathModelsReader", FakeMathModelsReader)
+    monkeypatch.setattr("app.sheets.math_models_writer.MathModelsWriter", FakeMathModelsWriter)
+    def fake_build_math_model_prompt_enrichment(*args: Any, **kwargs: Any):
+        nonlocal enrichment_call_count
+        enrichment_call_count += 1
+        return ("[Strategy]\n- Focus", "- north_star_gmv | name=GMV")
+
+    def fake_build_constructed_math_model_prompt(payload: Any) -> str:
+        constructed_payload_ids.append(id(payload))
+        return "[system]\nTest system\n\n[user]\nTest user"
+
+    monkeypatch.setattr("app.llm.scoring_assistant.build_math_model_prompt_enrichment", fake_build_math_model_prompt_enrichment)
+    monkeypatch.setattr("app.llm.scoring_assistant.load_metrics_config_prompt_json", lambda *args, **kwargs: [{"kpi_key": "active_restaurants", "kpi_level": "north_star"}])
+    monkeypatch.setattr("app.llm.client.build_constructed_math_model_prompt", fake_build_constructed_math_model_prompt)
+    monkeypatch.setattr("app.sheets.productops_writer.write_status_to_sheet", lambda *_args, **_kwargs: None)
+
+    try:
+        ctx = ActionContext(
+            payload={
+                "action": "pm.suggest_math_model_llm",
+                "sheet_context": {"spreadsheet_id": "sheet-1", "tab": "MathModels"},
+                "scope": {"initiative_keys": ["INIT-000001"]},
             },
-        )()
+            sheets_client=cast(Any, object()),
+            llm_client=cast(Any, FakeLLMClient()),
+        )
+        result = _action_pm_suggest_math_model_llm(db_session, ctx)
+        assert result["suggested_models"] == 1
+        assert enrichment_call_count == 1
+        assert captured_payloads == [("active_restaurants", "onboarding_conversion_rate", "[Strategy]\n- Focus", "- north_star_gmv | name=GMV")]
+        assert llm_payload_ids == constructed_payload_ids
+        assert llm_payload_ids == revision_payload_ids
+        assert len(evaluation_formulas) == 2
+        assert len(written_batches) == 1
+        assert written_batches[0][0]["constructed_llm_prompt"] == "[system]\nTest system\n\n[user]\nTest user"
+        assert written_batches[0][0]["llm_suggested_formula_text"] == (
+            "delta_active_restaurants = 1\n"
+            "activation_rate = delta_active_restaurants * onboarding_conversion_rate\n"
+            "value = activation_rate"
+        )
+        assert written_batches[0][0]["llm_evaluation_score"] == 88
+        assert written_batches[0][0]["llm_evaluation_verdict"] == "accept"
+        assert written_batches[0][0]["llm_selected_target_kpi"] == "active_restaurants"
+        assert written_batches[0][0]["llm_revision_attempts"] == 1
+    finally:
+        settings.PRODUCT_OPS = original_product_ops
+
+
+def test_pm_suggest_math_model_llm_rejects_without_writing(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    original_product_ops = settings.PRODUCT_OPS
+    written_batches: list[list[dict[str, Any]]] = []
+
+    class FakeMathModelsReader:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def get_rows_for_sheet(self, spreadsheet_id: str, tab_name: str, header_row: int = 1, start_data_row: int | None = None, max_rows: int | None = None):
+            return [
+                (
+                    5,
+                    MathModelRow(
+                        initiative_key="INIT-000001",
+                        model_name="Model A",
+                        model_description_free_text="Quantify value",
+                        target_kpi_key="active_restaurants",
+                        immediate_kpi_key="onboarding_conversion_rate",
+                    ),
+                )
+            ]
+
+    class FakeMathModelsWriter:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def write_suggestions_batch(self, spreadsheet_id: str, tab_name: str, suggestions: list[dict[str, Any]]) -> None:
+            written_batches.append(suggestions)
+
+    class FakeLLMClient:
+        def suggest_math_model(self, payload: Any):
+            return type(
+                "Suggestion",
+                (),
+                {
+                    "llm_suggested_formula_text": "delta_active_restaurants = 1\nvalue = delta_active_restaurants",
+                    "llm_notes": "note",
+                    "llm_suggested_metric_chain_text": "traffic -> value",
+                },
+            )()
+
+        def evaluate_math_model(self, payload: Any, suggestion: Any):
+            return type(
+                "Evaluation",
+                (),
+                {
+                    "score": 34,
+                    "verdict": "reject",
+                    "issues": ["Weak business linkage"],
+                    "strengths": [],
+                    "suggested_improvements": ["Rebuild the causal chain"],
+                    "selected_target_kpi": "active_restaurants",
+                    "target_kpi_reasoning": "Matches the explicit target KPI.",
+                },
+            )()
+
+        def revise_math_model(self, payload: Any, suggestion: Any, evaluation: Any):
+            raise AssertionError("rejected suggestions must not be revised")
 
     settings.PRODUCT_OPS = cast(
         Any,
@@ -1339,7 +1947,7 @@ def test_pm_suggest_math_model_llm_passes_shared_llm_context(db_session, monkeyp
     monkeypatch.setattr("app.sheets.math_models_reader.MathModelsReader", FakeMathModelsReader)
     monkeypatch.setattr("app.sheets.math_models_writer.MathModelsWriter", FakeMathModelsWriter)
     monkeypatch.setattr("app.llm.scoring_assistant.build_math_model_prompt_enrichment", lambda *args, **kwargs: ("[Strategy]\n- Focus", "- north_star_gmv | name=GMV"))
-    monkeypatch.setattr("app.llm.scoring_assistant.suggest_math_model_for_initiative", fake_suggest_math_model_for_initiative)
+    monkeypatch.setattr("app.llm.scoring_assistant.load_metrics_config_prompt_json", lambda *args, **kwargs: [{"kpi_key": "active_restaurants", "kpi_level": "north_star"}])
     monkeypatch.setattr("app.llm.client.build_constructed_math_model_prompt", lambda payload: "[system]\nTest system\n\n[user]\nTest user")
     monkeypatch.setattr("app.sheets.productops_writer.write_status_to_sheet", lambda *_args, **_kwargs: None)
 
@@ -1351,13 +1959,13 @@ def test_pm_suggest_math_model_llm_passes_shared_llm_context(db_session, monkeyp
                 "scope": {"initiative_keys": ["INIT-000001"]},
             },
             sheets_client=cast(Any, object()),
-            llm_client=cast(Any, object()),
+            llm_client=cast(Any, FakeLLMClient()),
         )
         result = _action_pm_suggest_math_model_llm(db_session, ctx)
-        assert result["suggested_models"] == 1
-        assert captured_payloads == [("[Strategy]\n- Focus", "- north_star_gmv | name=GMV")]
-        assert len(written_batches) == 1
-        assert written_batches[0][0]["constructed_llm_prompt"] == "[system]\nTest system\n\n[user]\nTest user"
+        assert result["suggested_models"] == 0
+        assert result["ok_count"] == 0
+        assert result["failed_count"] == 1
+        assert written_batches == []
     finally:
         settings.PRODUCT_OPS = original_product_ops
 
@@ -1536,7 +2144,7 @@ def test_pm_seed_math_params_backfills_model_name_for_existing_params(db_session
 
 
 def test_run_math_model_generation_job_passes_shared_llm_context(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
-    captured_payloads: list[tuple[str | None, str | None]] = []
+    captured_payloads: list[tuple[str | None, str | None, str | None, str | None, list[dict[str, str | None]] | None]] = []
     written_batches: list[list[dict[str, Any]]] = []
 
     class FakeMathModelsReader:
@@ -1550,7 +2158,8 @@ def test_run_math_model_generation_job_passes_shared_llm_context(db_session, mon
                     MathModelRow(
                         initiative_key="INIT-000002",
                         model_name="Model B",
-                        model_description_free_text="Estimate business value",
+                        target_kpi_key="Qlub Revenue",
+                        immediate_kpi_key="Checkout Conversion Rate",
                     ),
                 )
             ]
@@ -1562,17 +2171,37 @@ def test_run_math_model_generation_job_passes_shared_llm_context(db_session, mon
         def write_suggestions_batch(self, spreadsheet_id: str, tab_name: str, suggestions: list[dict[str, Any]]) -> None:
             written_batches.append(suggestions)
 
-    def fake_suggest_math_model_for_initiative(initiative: Any, row: Any, llm_client: Any, *, db: Any = None, llm_context_text: str | None = None, metrics_config_text: str | None = None):
-        captured_payloads.append((llm_context_text, metrics_config_text))
-        return type(
-            "Suggestion",
-            (),
-            {
-                "llm_suggested_formula_text": "value = 2",
-                "llm_notes": "note",
-                "llm_suggested_metric_chain_text": "adoption -> value",
-            },
-        )()
+    class FakeLLMClient:
+        def suggest_math_model(self, payload: Any):
+            captured_payloads.append((payload.target_kpi_key, payload.immediate_kpi_key, payload.llm_context_text, payload.metrics_config_text, payload.metrics_config_json))
+            return type(
+                "Suggestion",
+                (),
+                {
+                    "llm_suggested_formula_text": "delta_qlub_revenue = 1\nvalue = delta_qlub_revenue",
+                    "llm_notes": "note",
+                    "llm_suggested_metric_chain_text": "checkout_conversion_rate -> qlub_revenue",
+                },
+            )()
+
+        def evaluate_math_model(self, payload: Any, suggestion: Any):
+            assert payload.target_kpi_key == "qlub_revenue"
+            return type(
+                "Evaluation",
+                (),
+                {
+                    "score": 91,
+                    "verdict": "accept",
+                    "issues": [],
+                    "strengths": ["Clear KPI alignment"],
+                    "suggested_improvements": [],
+                    "selected_target_kpi": "qlub_revenue",
+                    "target_kpi_reasoning": "Explicit target KPI provided.",
+                },
+            )()
+
+        def revise_math_model(self, payload: Any, suggestion: Any, evaluation: Any):
+            raise AssertionError("accepted suggestions must not be revised")
 
     original_product_ops = settings.PRODUCT_OPS
     settings.PRODUCT_OPS = cast(Any, type("Cfg", (), {"llm_context_tab": "LLM_Context", "metrics_config_tab": "Metrics_Config"})())
@@ -1581,22 +2210,120 @@ def test_run_math_model_generation_job_passes_shared_llm_context(db_session, mon
     monkeypatch.setattr("app.jobs.math_model_generation_job.MathModelsReader", FakeMathModelsReader)
     monkeypatch.setattr("app.jobs.math_model_generation_job.MathModelsWriter", FakeMathModelsWriter)
     monkeypatch.setattr("app.jobs.math_model_generation_job.build_math_model_prompt_enrichment", lambda *args, **kwargs: ("[Company Context]\n- Shared", "- strategic_profit | name=Profit"))
-    monkeypatch.setattr("app.jobs.math_model_generation_job.suggest_math_model_for_initiative", fake_suggest_math_model_for_initiative)
+    monkeypatch.setattr("app.jobs.math_model_generation_job.load_metrics_config_prompt_json", lambda *args, **kwargs: [{"kpi_key": "qlub_revenue", "kpi_name": "Qlub Revenue", "kpi_level": "strategic"}, {"kpi_key": "checkout_conversion_rate", "kpi_name": "Checkout Conversion Rate", "kpi_level": "operational"}])
     monkeypatch.setattr("app.jobs.math_model_generation_job.build_constructed_math_model_prompt", lambda payload: "[system]\nBatch system\n\n[user]\nBatch user")
-    monkeypatch.setattr("app.jobs.math_model_generation_job.validate_formula", lambda _formula: [])
 
     try:
         stats = run_math_model_generation_job(
             db_session,
             sheets_client=cast(Any, object()),
-            llm_client=cast(Any, object()),
+            llm_client=cast(Any, FakeLLMClient()),
             spreadsheet_id="sheet-1",
             tab_name="MathModels",
         )
         assert stats["suggested"] == 1
-        assert captured_payloads == [("[Company Context]\n- Shared", "- strategic_profit | name=Profit")]
+        assert stats["llm_calls"] == 2
+        assert stats["evaluation_accept_count"] == 1
+        assert stats["rejected_details"] == []
+        assert captured_payloads == [("qlub_revenue", "checkout_conversion_rate", "[Company Context]\n- Shared", "- strategic_profit | name=Profit", [{"kpi_key": "qlub_revenue", "kpi_name": "Qlub Revenue", "kpi_level": "strategic"}, {"kpi_key": "checkout_conversion_rate", "kpi_name": "Checkout Conversion Rate", "kpi_level": "operational"}])]
         assert len(written_batches) == 1
         assert written_batches[0][0]["constructed_llm_prompt"] == "[system]\nBatch system\n\n[user]\nBatch user"
+        assert written_batches[0][0]["llm_evaluation_score"] == 91
+        assert written_batches[0][0]["llm_evaluation_verdict"] == "accept"
+        assert written_batches[0][0]["llm_revision_attempts"] == 0
+    finally:
+        settings.PRODUCT_OPS = original_product_ops
+
+
+def test_run_math_model_generation_job_surfaces_rejections_in_stats(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    written_batches: list[list[dict[str, Any]]] = []
+
+    class FakeMathModelsReader:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def get_rows_for_sheet(self, spreadsheet_id: str, tab_name: str, max_rows: int | None = None):
+            return [
+                (
+                    7,
+                    MathModelRow(
+                        initiative_key="INIT-000003",
+                        model_name="Model Reject",
+                        model_description_free_text="Estimate business value",
+                        target_kpi_key="qlub_revenue",
+                        immediate_kpi_key="checkout_conversion_rate",
+                    ),
+                )
+            ]
+
+    class FakeMathModelsWriter:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def write_suggestions_batch(self, spreadsheet_id: str, tab_name: str, suggestions: list[dict[str, Any]]) -> None:
+            written_batches.append(suggestions)
+
+    class FakeLLMClient:
+        def suggest_math_model(self, payload: Any):
+            return type(
+                "Suggestion",
+                (),
+                {
+                    "llm_suggested_formula_text": "delta_qlub_revenue = 1\nvalue = delta_qlub_revenue",
+                    "llm_notes": "note",
+                    "llm_suggested_metric_chain_text": "checkout_conversion_rate -> qlub_revenue",
+                },
+            )()
+
+        def evaluate_math_model(self, payload: Any, suggestion: Any):
+            return type(
+                "Evaluation",
+                (),
+                {
+                    "score": 42,
+                    "verdict": "reject",
+                    "issues": ["Weak business linkage"],
+                    "strengths": [],
+                    "suggested_improvements": ["Rebuild the causal chain"],
+                    "selected_target_kpi": "qlub_revenue",
+                    "target_kpi_reasoning": "Explicit target KPI provided.",
+                },
+            )()
+
+        def revise_math_model(self, payload: Any, suggestion: Any, evaluation: Any):
+            raise AssertionError("rejected suggestions must not be revised")
+
+    original_product_ops = settings.PRODUCT_OPS
+    settings.PRODUCT_OPS = cast(Any, type("Cfg", (), {"llm_context_tab": "LLM_Context", "metrics_config_tab": "Metrics_Config"})())
+    _create_initiative(db_session, initiative_key="INIT-000003", title="Rejected Initiative")
+
+    monkeypatch.setattr("app.jobs.math_model_generation_job.MathModelsReader", FakeMathModelsReader)
+    monkeypatch.setattr("app.jobs.math_model_generation_job.MathModelsWriter", FakeMathModelsWriter)
+    monkeypatch.setattr("app.jobs.math_model_generation_job.build_math_model_prompt_enrichment", lambda *args, **kwargs: ("[Company Context]\n- Shared", "- strategic_profit | name=Profit"))
+    monkeypatch.setattr("app.jobs.math_model_generation_job.load_metrics_config_prompt_json", lambda *args, **kwargs: [{"kpi_key": "qlub_revenue", "kpi_level": "strategic"}])
+    monkeypatch.setattr("app.jobs.math_model_generation_job.build_constructed_math_model_prompt", lambda payload: "[system]\nBatch system\n\n[user]\nBatch user")
+
+    try:
+        stats = run_math_model_generation_job(
+            db_session,
+            sheets_client=cast(Any, object()),
+            llm_client=cast(Any, FakeLLMClient()),
+            spreadsheet_id="sheet-1",
+            tab_name="MathModels",
+        )
+        assert stats["suggested"] == 0
+        assert stats["llm_calls"] == 2
+        assert stats["evaluation_reject_count"] == 1
+        assert stats["rejected_details"] == [
+            {
+                "initiative_key": "INIT-000003",
+                "row_number": 7,
+                "reason": "rejected_by_evaluator",
+                "score": 42,
+                "verdict": "reject",
+            }
+        ]
+        assert written_batches == []
     finally:
         settings.PRODUCT_OPS = original_product_ops
 
@@ -1651,6 +2378,54 @@ def test_pm_save_selected_routes_normalized_mathmodels_tab_to_canonical_branch(d
         assert status_writes == [("status", "MathModels")]
     finally:
         settings.PRODUCT_OPS = original_product_ops
+
+
+def test_math_model_sync_normalizes_kpi_names_to_canonical_keys(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    _create_initiative(db_session, initiative_key="INIT-000050", title="Canonical KPI Sync")
+
+    class FakeMathModelsReader:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def get_rows_for_sheet(self, spreadsheet_id: str, tab_name: str, max_rows: int | None = None):
+            return [
+                (
+                    8,
+                    MathModelRow(
+                        initiative_key="INIT-000050",
+                        model_name="Upsell Revenue Model",
+                        target_kpi_key="Qlub Revenue",
+                        immediate_kpi_key="Checkout Conversion Rate",
+                        formula_text="delta_qlub_revenue = 1\nvalue = delta_qlub_revenue",
+                        approved_by_user=True,
+                    ),
+                )
+            ]
+
+    monkeypatch.setattr("app.services.product_ops.math_model_service.MathModelsReader", FakeMathModelsReader)
+    monkeypatch.setattr(
+        "app.services.product_ops.math_model_service.load_metrics_config_prompt_json",
+        lambda *args, **kwargs: [
+            {"kpi_key": "qlub_revenue", "kpi_name": "Qlub Revenue", "kpi_level": "north_star"},
+            {"kpi_key": "checkout_conversion_rate", "kpi_name": "Checkout Conversion Rate", "kpi_level": "operational"},
+        ],
+    )
+
+    from app.services.product_ops.math_model_service import MathModelSyncService
+
+    svc = MathModelSyncService(cast(Any, object()))
+    result = svc.sync_sheet_to_db(
+        db_session,
+        spreadsheet_id="sheet-1",
+        tab_name="MathModels",
+        commit_every=100,
+    )
+
+    assert result["updated"] == 1
+    initiative = db_session.query(Initiative).filter(Initiative.initiative_key == "INIT-000050").one()
+    assert initiative.immediate_kpi_key == "checkout_conversion_rate"
+    assert len(initiative.math_models) == 1
+    assert initiative.math_models[0].target_kpi_key == "qlub_revenue"
 
 
 def test_pm_switch_framework_routes_normalized_scoring_tab_to_canonical_tab(db_session, monkeypatch: pytest.MonkeyPatch) -> None:

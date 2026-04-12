@@ -45,6 +45,7 @@ class Initiative(Base):
     problem_statement = Column(Text, nullable=True)
     hypothesis = Column(Text, nullable=True)
     llm_summary = Column(Text, nullable=True)
+    llm_summary_json = Column(JSON, nullable=True)
 
     # D. Strategic alignment & classification
     customer_segment = Column(String(100), nullable=True)

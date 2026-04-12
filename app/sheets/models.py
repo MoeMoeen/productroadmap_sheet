@@ -347,6 +347,14 @@ MATHMODELS_HEADER_MAP = {
     "llm_suggested_metric_chain_text": ["llm_suggested_metric_chain_text", "metric_chain_llm_suggestion", "LLM Suggested Metric Chain"],
     "llm_notes": ["llm_notes", "assumptions_suggestion", "llm_assumptions"],
     "constructed_llm_prompt": ["constructed_llm_prompt", "Constructed LLM Prompt", "constructed prompt"],
+    "llm_evaluation_score": ["llm_evaluation_score", "LLM Evaluation Score", "evaluation_score"],
+    "llm_evaluation_verdict": ["llm_evaluation_verdict", "LLM Evaluation Verdict", "evaluation_verdict"],
+    "llm_evaluation_issues": ["llm_evaluation_issues", "LLM Evaluation Issues", "evaluation_issues"],
+    "llm_evaluation_strengths": ["llm_evaluation_strengths", "LLM Evaluation Strengths", "evaluation_strengths"],
+    "llm_evaluation_suggested_improvements": ["llm_evaluation_suggested_improvements", "LLM Evaluation Suggested Improvements", "evaluation_suggested_improvements"],
+    "llm_selected_target_kpi": ["llm_selected_target_kpi", "LLM Selected Target KPI", "selected_target_kpi"],
+    "llm_target_kpi_reasoning": ["llm_target_kpi_reasoning", "LLM Target KPI Reasoning", "target_kpi_reasoning"],
+    "llm_revision_attempts": ["llm_revision_attempts", "LLM Revision Attempts", "revision_attempts"],
     "model_description_free_text": ["model_description_free_text", "model_description", "description"],
     "model_prompt_to_llm": ["model_prompt_to_llm", "prompt_to_llm", "llm_prompt"],
     # Metadata/provenance (optional columns)
@@ -609,6 +617,14 @@ class MathModelRow(BaseModel):
     - llm_suggested_formula_text (str): LLM suggestion for formula (separate column)
     - llm_notes (str): LLM notes column
     - constructed_llm_prompt (str): Full system+user prompt sent to the LLM (sheet-only audit field)
+    - llm_evaluation_score (int): Evaluator score
+    - llm_evaluation_verdict (str): Evaluator verdict
+    - llm_evaluation_issues (str): Evaluator issues
+    - llm_evaluation_strengths (str): Evaluator strengths
+    - llm_evaluation_suggested_improvements (str): Evaluator suggested improvements
+    - llm_selected_target_kpi (str): Evaluator-selected target KPI when inferred
+    - llm_target_kpi_reasoning (str): Evaluator reasoning for target KPI choice
+    - llm_revision_attempts (int): Number of revision attempts used
     - assumptions_text (str): Assumptions/notes (PM-owned)
     - suggested_by_llm (bool): Was this suggested by LLM?
     """
@@ -627,6 +643,14 @@ class MathModelRow(BaseModel):
     llm_suggested_formula_text: Optional[str] = None
     llm_notes: Optional[str] = None
     constructed_llm_prompt: Optional[str] = None
+    llm_evaluation_score: Optional[int] = None
+    llm_evaluation_verdict: Optional[str] = None
+    llm_evaluation_issues: Optional[str] = None
+    llm_evaluation_strengths: Optional[str] = None
+    llm_evaluation_suggested_improvements: Optional[str] = None
+    llm_selected_target_kpi: Optional[str] = None
+    llm_target_kpi_reasoning: Optional[str] = None
+    llm_revision_attempts: Optional[int] = None
     model_description_free_text: Optional[str] = None
     model_prompt_to_llm: Optional[str] = None
     immediate_kpi_key: Optional[str] = None

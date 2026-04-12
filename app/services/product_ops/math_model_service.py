@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.db.models.initiative import Initiative
 from app.db.models.scoring import InitiativeMathModel
+from app.llm.scoring_assistant import load_metrics_config_prompt_json, normalize_kpi_reference
+from app.config import settings
 from app.sheets.client import SheetsClient
 from app.sheets.math_models_reader import MathModelsReader, MathModelRowPair
 from app.services.product_ops.metric_chain_parser import parse_metric_chain
@@ -61,6 +63,11 @@ class MathModelSyncService:
                             with matching initiative_keys are synced. If None, all rows are synced.
         """
         rows = self.reader.get_rows_for_sheet(spreadsheet_id, tab_name)
+        metrics_config_json = load_metrics_config_prompt_json(
+            self.client,
+            spreadsheet_id=spreadsheet_id,
+            tab_name=getattr(settings.PRODUCT_OPS, "metrics_config_tab", None) if settings.PRODUCT_OPS else None,
+        )
         
         # Filter to selected initiative_keys if provided
         if initiative_keys is not None:
@@ -98,7 +105,7 @@ class MathModelSyncService:
 
             # Determine composite key: use target_kpi_key as identifier (or model_name if target_kpi not present)
             # PRODUCTION GUARDRAIL: Enforce at least one of (target_kpi_key, model_name) to prevent silent collision on "default"
-            target_kpi_val = getattr(mm, "target_kpi_key", None)
+            target_kpi_val = normalize_kpi_reference(getattr(mm, "target_kpi_key", None), metrics_config_json)
             model_name_val = getattr(mm, "model_name", None)
             
             if not target_kpi_val and not model_name_val:
@@ -146,7 +153,7 @@ class MathModelSyncService:
                 setattr(math_model, "approved_by_user", bool(mm.approved_by_user))
 
             # Persist target_kpi_key and is_primary on math model
-            target_kpi = getattr(mm, "target_kpi_key", None)
+            target_kpi = target_kpi_val
             if target_kpi:
                 setattr(math_model, "target_kpi_key", target_kpi)
             
@@ -174,8 +181,9 @@ class MathModelSyncService:
                 setattr(math_model, "computed_score", float(computed))
 
             # Persist immediate_kpi_key on Initiative (for backwards compatibility)
-            if getattr(mm, "immediate_kpi_key", None):
-                setattr(initiative, "immediate_kpi_key", mm.immediate_kpi_key)
+            immediate_kpi = normalize_kpi_reference(getattr(mm, "immediate_kpi_key", None), metrics_config_json)
+            if immediate_kpi:
+                setattr(initiative, "immediate_kpi_key", immediate_kpi)
 
             # Parse and persist metric chain on math model (not initiative)
             if getattr(mm, "metric_chain_text", None):
