@@ -24,40 +24,40 @@ logger = logging.getLogger(__name__)
 
 def load_sheet_level_llm_context(
 
-    sheets_client: Optional[SheetsClient],
-    *,
-    spreadsheet_id: Optional[str],
-    tab_name: Optional[str] = None,
+	sheets_client: Optional[SheetsClient],
+	*,
+	spreadsheet_id: Optional[str],
+	tab_name: Optional[str] = None,
 ) -> Optional[str]:
-    """Load and format shared ProductOps LLM context for prompt enrichment."""
-    if sheets_client is None or not spreadsheet_id:
-        return None
+	"""Load and format shared ProductOps LLM context for prompt enrichment."""
+	if sheets_client is None or not spreadsheet_id:
+		return None
 
-    resolved_tab = tab_name or (getattr(settings.PRODUCT_OPS, "llm_context_tab", None) if settings.PRODUCT_OPS else None) or "LLM_Context"
-    try:
-        reader = LLMContextReader(
-            client=sheets_client,
-            spreadsheet_id=str(spreadsheet_id),
-            tab_name=str(resolved_tab),
-        )
-        sections = reader.read()
-        formatted = format_llm_context_sections(sections)
-        if not formatted.text:
-            return None
-        logger.info(
-            "llm_context.loaded",
-            extra={
-                "tab": resolved_tab,
-                "section_count": formatted.included_sections,
-                "entry_count": formatted.included_lines,
-                "truncated": formatted.truncated,
-                "total_chars": formatted.total_chars,
-            },
-        )
-        return formatted.text
-    except Exception as exc:
-        logger.warning("llm_context.load_failed: %s", str(exc)[:200])
-        return None
+	try:
+		resolved_tab = tab_name or (getattr(settings.PRODUCT_OPS, "llm_context_tab", None) if settings.PRODUCT_OPS else None) or "LLM_Context"
+		reader = LLMContextReader(
+			client=sheets_client,
+			spreadsheet_id=str(spreadsheet_id),
+			tab_name=str(resolved_tab),
+		)
+		sections = reader.read()
+		formatted = format_llm_context_sections(sections)
+		if not formatted.text:
+			return None
+		logger.info(
+			"llm_context.loaded",
+			extra={
+				"tab": resolved_tab,
+				"section_count": formatted.included_sections,
+				"entry_count": formatted.included_lines,
+				"truncated": formatted.truncated,
+				"total_chars": formatted.total_chars,
+			},
+		)
+		return formatted.text
+	except Exception as exc:
+		logger.warning("llm_context.load_failed: %s", str(exc)[:200])
+		return None
 
 
 def load_metrics_config_prompt_context(
@@ -70,8 +70,8 @@ def load_metrics_config_prompt_context(
 	if sheets_client is None or not spreadsheet_id:
 		return None
 
-	resolved_tab = tab_name or (getattr(settings.PRODUCT_OPS, "metrics_config_tab", None) if settings.PRODUCT_OPS else None) or "Metrics_Config"
 	try:
+		resolved_tab = tab_name or (getattr(settings.PRODUCT_OPS, "metrics_config_tab", None) if settings.PRODUCT_OPS else None) or "Metrics_Config"
 		reader = MetricsConfigReader(sheets_client)
 		rows = [
 			row

@@ -1226,11 +1226,6 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
         for k in missing_in_sheet:
             status_by_key[k] = "SKIPPED: Not found in MathModels tab"
 
-        llm_context_text, metrics_config_text = build_math_model_prompt_enrichment(
-            ctx.sheets_client,
-            spreadsheet_id=str(spreadsheet_id),
-        )
-
         models_suggested = 0
         llm_calls = 0
 
@@ -1277,6 +1272,11 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
             if not has_problem_context and not has_custom_prompt:
                 status_by_key[key] = "SKIPPED: Insufficient context (add model_prompt_to_llm or fill initiative fields)"
                 continue
+
+            llm_context_text, metrics_config_text = build_math_model_prompt_enrichment(
+                ctx.sheets_client,
+                spreadsheet_id=str(spreadsheet_id),
+            )
 
             # Call LLM to suggest model
             try:

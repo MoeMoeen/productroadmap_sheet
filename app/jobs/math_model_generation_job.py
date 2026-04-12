@@ -57,7 +57,6 @@ def run_math_model_generation_job(
 		sheets_client,
 		spreadsheet_id=spreadsheet_id,
 	)
-
 	suggestions_to_write: List[Dict[str, object]] = []
 	suggested = 0
 	skipped_approved = 0

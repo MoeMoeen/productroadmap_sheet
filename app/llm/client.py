@@ -110,77 +110,84 @@ class LLMClient:
 
 def _build_system_prompt() -> str:
     return (
-        "You are a senior product economist and KPI modeling expert working on a dining platform.\n\n"
-        "Your job is to build a causal, delta-based mathematical model that quantifies how a product initiative changes a target KPI.\n\n"
+        "You are a senior product economist and KPI modeling expert working on a dining/checkout platform.\n\n"
+
+        "Your job is to build a **causal, delta-based mathematical model** that quantifies how a product initiative impacts a target KPI.\n\n"
+
         "====================\n"
         "CORE PRINCIPLE\n"
         "====================\n"
-        "You MUST model impact as a DELTA (change), never as an absolute KPI level.\n"
-        "Every model must answer: how much does this initiative change the target KPI?\n\n"
+        "You MUST model IMPACT as a DELTA (change), not absolute values.\n\n"
+        "Every model must answer:\n"
+        "→ How much does this initiative CHANGE the target KPI?\n\n"
+
         "====================\n"
-        "REASONING PROCESS\n"
+        "REASONING PROCESS (MANDATORY)\n"
         "====================\n"
         "1. Identify the target KPI\n"
-        "2. Identify the immediate KPI or driver that the initiative changes first\n"
-        "3. Build a causal chain from the immediate change to the target KPI\n"
+        "2. Identify which metric(s) the initiative directly changes\n"
+        "3. Build a causal chain from those changes → target KPI\n"
         "4. Express each step as a measurable delta\n"
         "5. Propagate deltas through the chain mathematically\n"
-        "6. Output final delta as value\n\n"
+        "6. Output final delta as 'value'\n\n"
+
         "====================\n"
         "MODEL REQUIREMENTS\n"
         "====================\n"
-        "- The model MUST be delta-driven\n"
-        "- The model MUST be causal, not correlational\n"
-        "- The model MUST use real business quantities only\n"
-        "- The model MUST align to the provided target KPI\n"
-        "- If an immediate KPI is provided, it is only an upstream driver unless it is also the target KPI\n"
-        "- If a metric chain is provided, stay on that chain or a very near equivalent refinement\n"
+        "- The model MUST be delta-driven (prefix variables with delta_ when applicable)\n"
+        "- The model MUST reflect real business mechanics (no abstract variables)\n"
+        "- The model MUST follow a causal chain (not random formulas)\n"
+        "- The model MUST align with KPI structure if provided\n"
         "- The final output MUST be:\n"
         "    value = delta impact on target KPI\n\n"
+
         "====================\n"
         "STRICT RULES\n"
         "====================\n"
-        "- DO NOT model effort, cost, implementation complexity, ROI, or efficiency\n"
-        "- DO NOT output absolute KPI values as the final answer\n"
-        "- DO NOT invent vague variables like impact_factor, quality_score, or efficiency_gain\n"
-        "- DO NOT introduce unrelated KPIs that are outside the provided target/immediate/metric-chain context\n"
-        "- When target KPI and immediate KPI differ, it is INVALID for value to equal the immediate KPI or its uplift directly\n"
-        "- The final non-cost value term must be in the target KPI's units\n"
-        "- All variables must represent measurable real-world quantities\n\n"
+        "- DO NOT model effort, cost, or implementation complexity\n"
+        "- DO NOT include ROI, efficiency, or effort-based metrics\n"
+        "- DO NOT invent meaningless variables (e.g. 'impact_factor')\n"
+        "- DO NOT output absolute KPI values\n"
+        "- ALWAYS output delta-based variables\n"
+        "- ALL variables must represent real measurable quantities\n\n"
+
         "====================\n"
         "OUTPUT FORMAT\n"
         "====================\n"
-        "Return ONLY a JSON object with keys:\n"
+        "Return ONLY JSON with:\n"
         "- llm_suggested_metric_chain_text\n"
         "- llm_suggested_formula_text\n"
         "- llm_notes\n\n"
+
         "====================\n"
         "FORMULA RULES\n"
         "====================\n"
         "- Use ONLY assignment lines: variable = expression\n"
         "- Use lower_snake_case variable names\n"
-        "- Prefer delta_ prefixes for change variables\n"
         "- Allowed operations: +, -, *, /, parentheses, min(), max()\n"
-        "- Do NOT write prose inside formula_text\n"
+        "- DO NOT write explanations inside formula_text\n"
         "- Final output MUST include:\n"
-        "    value = <delta impact on target KPI>\n\n"
+        "    value = <delta impact on KPI>\n\n"
+
         "====================\n"
         "QUALITY BAR\n"
         "====================\n"
-        "The model must be realistic, causal, auditable, and usable by product and finance teams.\n"
-        "It should clearly show how the initiative changes the target KPI through intermediate measurable steps.\n\n"
+        "This model must be realistic, causal, and usable by a product & finance team.\n"
+        "It should clearly explain HOW the initiative changes the KPI.\n\n"
+
         "====================\n"
-        "EXAMPLE\n"
+        "EXAMPLE (IMPORTANT)\n"
         "====================\n"
-        "Initiative: improve self-serve onboarding\n"
-        "Immediate KPI: onboarding_conversion_rate\n"
-        "Target KPI: active_restaurants\n"
-        "Metric chain: onboarding_conversion_rate -> new_restaurants -> active_restaurants\n\n"
+        "Initiative: Improve checkout UX\n\n"
+
+        "Metric chain:\n"
+        "checkout_conversion_rate → completed_transactions → GMV\n\n"
+
         "Formula:\n"
-        "delta_onboarding_conversion_rate = improved_onboarding_conversion_rate - baseline_onboarding_conversion_rate\n"
-        "delta_new_restaurants = potential_restaurants * delta_onboarding_conversion_rate\n"
-        "delta_active_restaurants = delta_new_restaurants * restaurant_activation_rate\n"
-        "value = delta_active_restaurants"
+        "delta_checkout_conversion = improvement_in_conversion_rate\n"
+        "delta_transactions = traffic * delta_checkout_conversion\n"
+        "delta_gmv = delta_transactions * average_order_value\n"
+        "value = delta_gmv\n"
     )
 
 
@@ -193,25 +200,10 @@ def _build_user_prompt(payload: MathModelPromptInput) -> str:
         if val:
             lines.append(f"{label}: {val}")
 
-    add("Target KPI", payload.target_kpi_key)
-    add("Immediate KPI", payload.immediate_kpi_key)
-
-    if payload.target_kpi_key:
-        lines.append(
-            f"-> Your job is to model the DELTA (change) in '{payload.target_kpi_key}' caused by this initiative."
-        )
-
+    add("Target KPI", payload.immediate_kpi_key)
     if payload.immediate_kpi_key:
         lines.append(
-            f"-> '{payload.immediate_kpi_key}' is the first driver this initiative most directly changes."
-        )
-
-    if payload.immediate_kpi_key and payload.target_kpi_key and payload.immediate_kpi_key != payload.target_kpi_key:
-        lines.append(
-            f"-> IMPORTANT: do NOT make value equal '{payload.immediate_kpi_key}' or a delta of '{payload.immediate_kpi_key}'."
-        )
-        lines.append(
-            f"-> REQUIRED: make value equal the incremental change in '{payload.target_kpi_key}', using '{payload.immediate_kpi_key}' only as an upstream driver."
+            f"→ Your goal is to model the DELTA (change) in '{payload.immediate_kpi_key}' caused by this initiative."
         )
 
     lines.append("\n=== TASK ===")
@@ -221,44 +213,42 @@ def _build_user_prompt(payload: MathModelPromptInput) -> str:
 
     lines.append("\n=== THINKING FRAMEWORK ===")
     lines.append(
-        "- What behavior or funnel step does this initiative directly change?\n"
+        "- What behavior does this initiative change?\n"
         "- Which metric changes first?\n"
         "- How does that change propagate to the target KPI?\n"
-        "- What measurable deltas occur at each step?\n"
-        "- How do these deltas combine into final impact on the target KPI?"
+        "- What measurable deltas occur?\n"
+        "- How do these deltas combine into final impact?"
     )
 
     if payload.metric_chain_text:
         add("Existing metric chain", payload.metric_chain_text)
-        lines.append("-> Stay on this chain unless a small refinement is clearly better.")
+        lines.append("→ You may refine or improve this chain if needed.")
 
     add("Problem", payload.problem_statement)
-    add("Desired outcome", payload.desired_outcome)
     add("Hypothesis", payload.hypothesis)
-    add("LLM summary", payload.llm_summary)
     add("Expected impact", payload.expected_impact_description)
+
     add("Impact metric", payload.impact_metric)
     add("Impact unit", payload.impact_unit)
+
     add("Model name", payload.model_name)
     add("Model description", payload.model_description_free_text)
     add("Custom instructions", payload.model_prompt_to_llm)
+
     if payload.llm_context_text:
         lines.append("\n=== COMPANY CONTEXT ===")
         lines.append(payload.llm_context_text)
     if payload.metrics_config_text:
-        lines.append("\n=== RELEVANT KPI DEFINITIONS ===")
+        lines.append("\n=== KPI DEFINITIONS ===")
         lines.append(payload.metrics_config_text)
-    if payload.assumptions_text:
-        lines.append("\n=== PM ASSUMPTIONS ===")
-        lines.append(payload.assumptions_text)
 
     lines.append("\n=== IMPORTANT CONSTRAINTS ===")
     lines.append(
-        "- Model ONLY impact delta, not absolute KPI levels\n"
-        "- Do NOT include effort, cost, ROI, or efficiency terms\n"
-        "- Use only real business metrics relevant to the target/immediate/metric-chain context\n"
-        "- Do NOT pull in unrelated KPIs from elsewhere in the business\n"
-        "- Final output must define: value = delta impact on target KPI"
+        "- Model ONLY impact (delta), NOT absolute values\n"
+        "- DO NOT include effort, cost, or ROI\n"
+        "- Use real business metrics (conversion, GMV, transactions, etc.)\n"
+        "- Ensure clear causal logic\n"
+        "- Final output must define: value = delta impact on KPI"
     )
 
     return "\n".join(lines)

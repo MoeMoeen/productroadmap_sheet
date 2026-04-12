@@ -327,28 +327,25 @@ def test_build_user_prompt_includes_additional_business_context_block() -> None:
 
     prompt = _build_user_prompt(payload)
 
-    assert "Target KPI: active_restaurants" in prompt
-    assert "Immediate KPI: onboarding_conversion_rate" in prompt
-    assert "Your job is to model the DELTA (change) in 'active_restaurants'" in prompt
-    assert "IMPORTANT: do NOT make value equal 'onboarding_conversion_rate'" in prompt
-    assert "REQUIRED: make value equal the incremental change in 'active_restaurants'" in prompt
+    assert "Target KPI: onboarding_conversion_rate" in prompt
+    assert "Your goal is to model the DELTA (change) in 'onboarding_conversion_rate'" in prompt
     assert "=== TASK ===" in prompt
     assert "=== THINKING FRAMEWORK ===" in prompt
     assert "[Strategy]" in prompt
     assert "=== COMPANY CONTEXT ===" in prompt
-    assert "=== RELEVANT KPI DEFINITIONS ===" in prompt
+    assert "=== KPI DEFINITIONS ===" in prompt
     assert "north_star_gmv" in prompt
-    assert "=== PM ASSUMPTIONS ===" in prompt
     assert "=== IMPORTANT CONSTRAINTS ===" in prompt
 
 
 def test_build_system_prompt_requires_delta_on_target_kpi() -> None:
     prompt = _build_system_prompt()
 
-    assert "You MUST model impact as a DELTA" in prompt
-    assert "When target KPI and immediate KPI differ, it is INVALID for value to equal the immediate KPI" in prompt
-    assert "DO NOT model effort, cost, implementation complexity, ROI, or efficiency" in prompt
-    assert "delta_active_restaurants" in prompt
+    assert "You MUST model IMPACT as a DELTA" in prompt
+    assert "REASONING PROCESS (MANDATORY)" in prompt
+    assert "DO NOT model effort, cost, or implementation complexity" in prompt
+    assert "Initiative: Improve checkout UX" in prompt
+    assert "delta_gmv" in prompt
 
 
 def test_build_constructed_math_model_prompt_combines_system_and_user_sections() -> None:
@@ -363,7 +360,7 @@ def test_build_constructed_math_model_prompt_combines_system_and_user_sections()
 
     assert "[system]" in prompt
     assert "[user]" in prompt
-    assert "Target KPI: active_restaurants" in prompt
+    assert "Target KPI: onboarding_conversion_rate" in prompt
 
 
 def test_format_metrics_config_rows_builds_metric_definition_lines() -> None:
