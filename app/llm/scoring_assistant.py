@@ -143,6 +143,38 @@ def format_metric_chain_for_prompt(metric_chain_text: Optional[str], db: Optiona
 		return metric_chain_text
 
 
+def build_math_model_prompt_input(
+	initiative: Initiative,
+	row: MathModelRow,
+	*,
+	db: Optional[Session] = None,
+	llm_context_text: Optional[str] = None,
+	metrics_config_text: Optional[str] = None,
+) -> MathModelPromptInput:
+	"""Build the exact prompt payload used for math-model suggestions."""
+
+	return MathModelPromptInput(
+		initiative_key=str(initiative.initiative_key),
+		title=str(initiative.title),
+		problem_statement=getattr(initiative, "problem_statement", None),
+		desired_outcome=getattr(initiative, "desired_outcome", None),
+		hypothesis=getattr(initiative, "hypothesis", None),
+		llm_summary=getattr(initiative, "llm_summary", None),
+		immediate_kpi_key=getattr(row, "immediate_kpi_key", None) or getattr(initiative, "immediate_kpi_key", None),
+		target_kpi_key=getattr(row, "target_kpi_key", None),
+		metric_chain_text=format_metric_chain_for_prompt(getattr(row, "metric_chain_text", None), db),
+		expected_impact_description=getattr(initiative, "expected_impact_description", None),
+		impact_metric=getattr(initiative, "impact_metric", None),
+		impact_unit=getattr(initiative, "impact_unit", None),
+		model_name=getattr(row, "model_name", None),
+		model_description_free_text=getattr(row, "model_description_free_text", None),
+		model_prompt_to_llm=getattr(row, "model_prompt_to_llm", None),
+		llm_context_text=llm_context_text,
+		metrics_config_text=metrics_config_text,
+		assumptions_text=getattr(row, "assumptions_text", None),
+	)
+
+
 def suggest_math_model_for_initiative(
 	initiative: Initiative,
 	row: MathModelRow,
@@ -158,24 +190,12 @@ def suggest_math_model_for_initiative(
 	so LLM can build on prior context or iterate.
 	"""
 
-	payload = MathModelPromptInput(
-		initiative_key=str(initiative.initiative_key),
-		title=str(initiative.title),
-		problem_statement=getattr(initiative, "problem_statement", None),
-		desired_outcome=getattr(initiative, "desired_outcome", None),
-		hypothesis=getattr(initiative, "hypothesis", None),
-		llm_summary=getattr(initiative, "llm_summary", None),
-		immediate_kpi_key=getattr(row, "immediate_kpi_key", None) or getattr(initiative, "immediate_kpi_key", None),
-		metric_chain_text=format_metric_chain_for_prompt(getattr(row, "metric_chain_text", None), db),
-		expected_impact_description=getattr(initiative, "expected_impact_description", None),
-		impact_metric=getattr(initiative, "impact_metric", None),
-		impact_unit=getattr(initiative, "impact_unit", None),
-		model_name=getattr(row, "model_name", None),
-		model_description_free_text=getattr(row, "model_description_free_text", None),
-		model_prompt_to_llm=getattr(row, "model_prompt_to_llm", None),
+	payload = build_math_model_prompt_input(
+		initiative,
+		row,
+		db=db,
 		llm_context_text=llm_context_text,
 		metrics_config_text=metrics_config_text,
-		assumptions_text=getattr(row, "assumptions_text", None),
 	)
 
 	return llm.suggest_math_model(payload)
@@ -197,6 +217,7 @@ def suggest_param_metadata_for_model(
 
 __all__ = [
 	"build_math_model_prompt_enrichment",
+	"build_math_model_prompt_input",
 	"format_metric_chain_for_prompt",
 	"load_metrics_config_prompt_context",
 	"load_sheet_level_llm_context",

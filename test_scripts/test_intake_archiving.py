@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -15,7 +16,7 @@ from app.jobs.math_model_generation_job import run_math_model_generation_job
 from app.jobs.sync_intake_job import reconcile_intake_managed_initiatives
 from app.jobs.sync_intake_job import run_sync_for_sheet
 from app.jobs.sync_intake_job import run_sync_all_intake_sheets
-from app.llm.client import _build_user_prompt
+from app.llm.client import _build_system_prompt, _build_user_prompt, build_constructed_math_model_prompt
 from app.llm.context_formatters import format_llm_context_sections, format_metrics_config_rows
 from app.llm.models import MathModelPromptInput
 from app.llm.scoring_assistant import load_metrics_config_prompt_context
@@ -316,6 +317,8 @@ def test_build_user_prompt_includes_additional_business_context_block() -> None:
     payload = MathModelPromptInput(
         initiative_key="INIT-000001",
         title="Test Initiative",
+        immediate_kpi_key="onboarding_conversion_rate",
+        target_kpi_key="active_restaurants",
         model_description_free_text="Quantify the initiative impact",
         llm_context_text="[Strategy]\n- Focus on monetization",
         metrics_config_text="- north_star_gmv | name=GMV | level=north_star",
@@ -324,11 +327,43 @@ def test_build_user_prompt_includes_additional_business_context_block() -> None:
 
     prompt = _build_user_prompt(payload)
 
-    assert "Additional business context:" in prompt
+    assert "Target KPI: active_restaurants" in prompt
+    assert "Immediate KPI: onboarding_conversion_rate" in prompt
+    assert "Your job is to model the DELTA (change) in 'active_restaurants'" in prompt
+    assert "IMPORTANT: do NOT make value equal 'onboarding_conversion_rate'" in prompt
+    assert "REQUIRED: make value equal the incremental change in 'active_restaurants'" in prompt
+    assert "=== TASK ===" in prompt
+    assert "=== THINKING FRAMEWORK ===" in prompt
     assert "[Strategy]" in prompt
-    assert "Available KPI definitions from Metrics_Config:" in prompt
+    assert "=== COMPANY CONTEXT ===" in prompt
+    assert "=== RELEVANT KPI DEFINITIONS ===" in prompt
     assert "north_star_gmv" in prompt
-    assert "PM-owned assumptions" in prompt
+    assert "=== PM ASSUMPTIONS ===" in prompt
+    assert "=== IMPORTANT CONSTRAINTS ===" in prompt
+
+
+def test_build_system_prompt_requires_delta_on_target_kpi() -> None:
+    prompt = _build_system_prompt()
+
+    assert "You MUST model impact as a DELTA" in prompt
+    assert "When target KPI and immediate KPI differ, it is INVALID for value to equal the immediate KPI" in prompt
+    assert "DO NOT model effort, cost, implementation complexity, ROI, or efficiency" in prompt
+    assert "delta_active_restaurants" in prompt
+
+
+def test_build_constructed_math_model_prompt_combines_system_and_user_sections() -> None:
+    payload = MathModelPromptInput(
+        initiative_key="INIT-000001",
+        title="Test Initiative",
+        immediate_kpi_key="onboarding_conversion_rate",
+        target_kpi_key="active_restaurants",
+    )
+
+    prompt = build_constructed_math_model_prompt(payload)
+
+    assert "[system]" in prompt
+    assert "[user]" in prompt
+    assert "Target KPI: active_restaurants" in prompt
 
 
 def test_format_metrics_config_rows_builds_metric_definition_lines() -> None:
@@ -1308,6 +1343,7 @@ def test_pm_suggest_math_model_llm_passes_shared_llm_context(db_session, monkeyp
     monkeypatch.setattr("app.sheets.math_models_writer.MathModelsWriter", FakeMathModelsWriter)
     monkeypatch.setattr("app.llm.scoring_assistant.build_math_model_prompt_enrichment", lambda *args, **kwargs: ("[Strategy]\n- Focus", "- north_star_gmv | name=GMV"))
     monkeypatch.setattr("app.llm.scoring_assistant.suggest_math_model_for_initiative", fake_suggest_math_model_for_initiative)
+    monkeypatch.setattr("app.llm.client.build_constructed_math_model_prompt", lambda payload: "[system]\nTest system\n\n[user]\nTest user")
     monkeypatch.setattr("app.sheets.productops_writer.write_status_to_sheet", lambda *_args, **_kwargs: None)
 
     try:
@@ -1324,6 +1360,7 @@ def test_pm_suggest_math_model_llm_passes_shared_llm_context(db_session, monkeyp
         assert result["suggested_models"] == 1
         assert captured_payloads == [("[Strategy]\n- Focus", "- north_star_gmv | name=GMV")]
         assert len(written_batches) == 1
+        assert written_batches[0][0]["constructed_llm_prompt"] == "[system]\nTest system\n\n[user]\nTest user"
     finally:
         settings.PRODUCT_OPS = original_product_ops
 
@@ -1346,6 +1383,157 @@ def test_pm_seed_math_params_guides_user_on_wrong_tab(db_session) -> None:
         assert result["status"] == "skipped"
         assert result["target_tab"] == "MathModels"
         assert summary["skipped"] == 1
+    finally:
+        settings.PRODUCT_OPS = original_product_ops
+
+
+def test_pm_seed_math_params_passes_model_name_to_params_sheet(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    original_product_ops = settings.PRODUCT_OPS
+    appended_batches: list[list[dict[str, Any]]] = []
+
+    class FakeMathModelsReader:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def get_rows_for_sheet(self, spreadsheet_id: str, tab_name: str, header_row: int = 1, start_data_row: int | None = None, max_rows: int | None = None):
+            return [
+                (
+                    5,
+                    MathModelRow(
+                        initiative_key="INIT-000001",
+                        model_name="self_serve_onboarding_uplift_model",
+                        formula_text="new_restaurants = onboarding_conversion_rate * potential_restaurants",
+                        approved_by_user=True,
+                    ),
+                )
+            ]
+
+    class FakeParamsReader:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def get_rows_for_sheet(self, spreadsheet_id: str, tab_name: str):
+            return []
+
+    class FakeParamsWriter:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def append_new_params(self, spreadsheet_id: str, tab_name: str, params: list[dict[str, Any]]) -> None:
+            appended_batches.append(params)
+
+    class FakeParamSuggestion:
+        key = "potential_restaurants"
+        name = "Potential Restaurants"
+        description = "Restaurants eligible for onboarding"
+        unit = "count"
+        example_value = "500"
+        source_hint = "pm_estimate"
+
+    class FakeSuggestion:
+        params = [FakeParamSuggestion()]
+
+    settings.PRODUCT_OPS = cast(Any, type("Cfg", (), {"spreadsheet_id": "sheet-1", "mathmodels_tab": "MathModels", "params_tab": "Params"})())
+
+    monkeypatch.setattr("app.sheets.math_models_reader.MathModelsReader", FakeMathModelsReader)
+    monkeypatch.setattr("app.sheets.params_reader.ParamsReader", FakeParamsReader)
+    monkeypatch.setattr("app.sheets.params_writer.ParamsWriter", FakeParamsWriter)
+    monkeypatch.setattr("app.llm.scoring_assistant.suggest_param_metadata_for_model", lambda **_kwargs: FakeSuggestion())
+    monkeypatch.setattr("app.sheets.productops_writer.write_status_to_sheet", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.utils.safe_eval.validate_formula", lambda _formula: [])
+    monkeypatch.setattr("app.utils.safe_eval.extract_identifiers", lambda _formula: ["potential_restaurants"])
+
+    try:
+        ctx = ActionContext(
+            payload={
+                "action": "pm.seed_math_params",
+                "sheet_context": {"spreadsheet_id": "sheet-1", "tab": "MathModels"},
+                "scope": {"initiative_keys": ["INIT-000001"]},
+            },
+            sheets_client=cast(Any, object()),
+            llm_client=cast(Any, object()),
+        )
+        result = _action_pm_seed_math_params(db_session, ctx)
+        assert result["params_seeded"] == 1
+        assert len(appended_batches) == 1
+        assert appended_batches[0][0]["model_name"] == "self_serve_onboarding_uplift_model"
+    finally:
+        settings.PRODUCT_OPS = original_product_ops
+
+
+def test_pm_seed_math_params_backfills_model_name_for_existing_params(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    original_product_ops = settings.PRODUCT_OPS
+    backfill_updates: list[list[dict[str, Any]]] = []
+
+    class FakeMathModelsReader:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def get_rows_for_sheet(self, spreadsheet_id: str, tab_name: str, header_row: int = 1, start_data_row: int | None = None, max_rows: int | None = None):
+            return [
+                (
+                    5,
+                    MathModelRow(
+                        initiative_key="INIT-000001",
+                        model_name="self_serve_onboarding_uplift_model",
+                        formula_text="new_restaurants = onboarding_conversion_rate * potential_restaurants",
+                        approved_by_user=True,
+                    ),
+                )
+            ]
+
+    class FakeParamsReader:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def get_rows_for_sheet(self, spreadsheet_id: str, tab_name: str):
+            existing_row = SimpleNamespace(
+                initiative_key="INIT-000001",
+                framework="MATH_MODEL",
+                param_name="potential_restaurants",
+                model_name=None,
+            )
+            return [
+                (
+                    5,
+                    existing_row,
+                )
+            ]
+
+    class FakeParamsWriter:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def append_new_params(self, spreadsheet_id: str, tab_name: str, params: list[dict[str, Any]]) -> None:
+            raise AssertionError("append_new_params should not run when params already exist")
+
+        def backfill_model_names(self, spreadsheet_id: str, tab_name: str, updates: list[dict[str, Any]]) -> int:
+            backfill_updates.append(updates)
+            return len(updates)
+
+    settings.PRODUCT_OPS = cast(Any, type("Cfg", (), {"spreadsheet_id": "sheet-1", "mathmodels_tab": "MathModels", "params_tab": "Params"})())
+
+    monkeypatch.setattr("app.sheets.math_models_reader.MathModelsReader", FakeMathModelsReader)
+    monkeypatch.setattr("app.sheets.params_reader.ParamsReader", FakeParamsReader)
+    monkeypatch.setattr("app.sheets.params_writer.ParamsWriter", FakeParamsWriter)
+    monkeypatch.setattr("app.sheets.productops_writer.write_status_to_sheet", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.utils.safe_eval.validate_formula", lambda _formula: [])
+    monkeypatch.setattr("app.utils.safe_eval.extract_identifiers", lambda _formula: ["potential_restaurants"])
+
+    try:
+        ctx = ActionContext(
+            payload={
+                "action": "pm.seed_math_params",
+                "sheet_context": {"spreadsheet_id": "sheet-1", "tab": "MathModels"},
+                "scope": {"initiative_keys": ["INIT-000001"]},
+            },
+            sheets_client=cast(Any, object()),
+            llm_client=cast(Any, object()),
+        )
+        result = _action_pm_seed_math_params(db_session, ctx)
+        assert result["params_seeded"] == 0
+        assert result["ok_count"] == 1
+        assert backfill_updates == [[{"row_number": 5, "model_name": "self_serve_onboarding_uplift_model"}]]
     finally:
         settings.PRODUCT_OPS = original_product_ops
 
@@ -1397,6 +1585,7 @@ def test_run_math_model_generation_job_passes_shared_llm_context(db_session, mon
     monkeypatch.setattr("app.jobs.math_model_generation_job.MathModelsWriter", FakeMathModelsWriter)
     monkeypatch.setattr("app.jobs.math_model_generation_job.build_math_model_prompt_enrichment", lambda *args, **kwargs: ("[Company Context]\n- Shared", "- strategic_profit | name=Profit"))
     monkeypatch.setattr("app.jobs.math_model_generation_job.suggest_math_model_for_initiative", fake_suggest_math_model_for_initiative)
+    monkeypatch.setattr("app.jobs.math_model_generation_job.build_constructed_math_model_prompt", lambda payload: "[system]\nBatch system\n\n[user]\nBatch user")
     monkeypatch.setattr("app.jobs.math_model_generation_job.validate_formula", lambda _formula: [])
 
     try:
@@ -1410,6 +1599,7 @@ def test_run_math_model_generation_job_passes_shared_llm_context(db_session, mon
         assert stats["suggested"] == 1
         assert captured_payloads == [("[Company Context]\n- Shared", "- strategic_profit | name=Profit")]
         assert len(written_batches) == 1
+        assert written_batches[0][0]["constructed_llm_prompt"] == "[system]\nBatch system\n\n[user]\nBatch user"
     finally:
         settings.PRODUCT_OPS = original_product_ops
 

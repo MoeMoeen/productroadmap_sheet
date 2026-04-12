@@ -1204,7 +1204,8 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
 
     from app.sheets.math_models_reader import MathModelsReader
     from app.sheets.math_models_writer import MathModelsWriter
-    from app.llm.scoring_assistant import build_math_model_prompt_enrichment, suggest_math_model_for_initiative
+    from app.llm.client import build_constructed_math_model_prompt
+    from app.llm.scoring_assistant import build_math_model_prompt_enrichment, build_math_model_prompt_input, suggest_math_model_for_initiative
     from app.db.models.initiative import Initiative
     
     status_by_key: Dict[str, Optional[str]] = {k: None for k in keys}
@@ -1288,6 +1289,16 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
                     metrics_config_text=metrics_config_text,
                 )
                 llm_calls += 1
+
+                constructed_prompt = build_constructed_math_model_prompt(
+                    build_math_model_prompt_input(
+                        initiative,
+                        math_row,
+                        db=db,
+                        llm_context_text=llm_context_text,
+                        metrics_config_text=metrics_config_text,
+                    )
+                )
                 
                 # Queue for batch write (LLM-owned columns only; assumptions_text is user-owned)
                 suggestions_to_write.append({
@@ -1295,6 +1306,7 @@ def _action_pm_suggest_math_model_llm(db: Session, ctx: ActionContext) -> Dict[s
                     "llm_suggested_formula_text": suggestion.llm_suggested_formula_text,
                     "llm_notes": suggestion.llm_notes,
                     "llm_suggested_metric_chain_text": suggestion.llm_suggested_metric_chain_text,
+                    "constructed_llm_prompt": constructed_prompt,
                 })
                 
                 status_by_key[key] = "OK: Suggested formula (review and approve before seeding params)"
@@ -1452,6 +1464,11 @@ def _action_pm_seed_math_params(db: Session, ctx: ActionContext) -> Dict[str, An
 
         for row_number, math_row in selected_math_rows:
             key = math_row.initiative_key
+            matching_existing_param_rows = [
+                (existing_row_number, existing_row)
+                for existing_row_number, existing_row in existing_params_rows
+                if existing_row.initiative_key == key and (existing_row.framework or "MATH_MODEL") == "MATH_MODEL"
+            ]
 
             # Skip unapproved
             if not math_row.approved_by_user:
@@ -1480,6 +1497,22 @@ def _action_pm_seed_math_params(db: Session, ctx: ActionContext) -> Dict[str, An
             if not identifiers:
                 status_by_key[key] = "SKIPPED: No parameters needed"
                 continue
+
+            if math_row.model_name:
+                rows_missing_model_name = [
+                    {
+                        "row_number": existing_row_number,
+                        "model_name": math_row.model_name,
+                    }
+                    for existing_row_number, existing_row in matching_existing_param_rows
+                    if not getattr(existing_row, "model_name", None)
+                ]
+                if rows_missing_model_name:
+                    params_writer.backfill_model_names(
+                        spreadsheet_id=str(spreadsheet_id),
+                        tab_name=params_tab,
+                        updates=rows_missing_model_name,
+                    )
 
             # Find missing identifiers
             missing_identifiers = sorted(
@@ -1524,6 +1557,7 @@ def _action_pm_seed_math_params(db: Session, ctx: ActionContext) -> Dict[str, An
                 notes = f"LLM example: {param_sugg.example_value}" if param_sugg.example_value else ""
                 params_to_append.append({
                     "initiative_key": key,
+                    "model_name": math_row.model_name or "",
                     "param_name": param_sugg.key,
                     "param_display": param_sugg.name or param_sugg.key,
                     "description": param_sugg.description or "",

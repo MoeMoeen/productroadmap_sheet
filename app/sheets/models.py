@@ -346,6 +346,7 @@ MATHMODELS_HEADER_MAP = {
     "llm_suggested_formula_text": ["llm_suggested_formula_text", "formula_suggestion"],
     "llm_suggested_metric_chain_text": ["llm_suggested_metric_chain_text", "metric_chain_llm_suggestion", "LLM Suggested Metric Chain"],
     "llm_notes": ["llm_notes", "assumptions_suggestion", "llm_assumptions"],
+    "constructed_llm_prompt": ["constructed_llm_prompt", "Constructed LLM Prompt", "constructed prompt"],
     "model_description_free_text": ["model_description_free_text", "model_description", "description"],
     "model_prompt_to_llm": ["model_prompt_to_llm", "prompt_to_llm", "llm_prompt"],
     # Metadata/provenance (optional columns)
@@ -356,6 +357,7 @@ MATHMODELS_HEADER_MAP = {
 # ProductOps Params tab columns and header aliases
 PARAMS_HEADER_MAP = {
     "initiative_key": ["initiative_key", "Initiative Key", "Initiative_Key", "initiative key"],
+    "model_name": ["model_name", "Model Name", "model name"],
     "param_name": ["param_name", "parameter_name", "name"],
     "value": ["value"],
     "unit": ["unit"],
@@ -606,6 +608,7 @@ class MathModelRow(BaseModel):
     - computed_score (float): Calculated impact score for this specific model
     - llm_suggested_formula_text (str): LLM suggestion for formula (separate column)
     - llm_notes (str): LLM notes column
+    - constructed_llm_prompt (str): Full system+user prompt sent to the LLM (sheet-only audit field)
     - assumptions_text (str): Assumptions/notes (PM-owned)
     - suggested_by_llm (bool): Was this suggested by LLM?
     """
@@ -623,6 +626,7 @@ class MathModelRow(BaseModel):
     approved_by_user: Optional[bool] = None
     llm_suggested_formula_text: Optional[str] = None
     llm_notes: Optional[str] = None
+    constructed_llm_prompt: Optional[str] = None
     model_description_free_text: Optional[str] = None
     model_prompt_to_llm: Optional[str] = None
     immediate_kpi_key: Optional[str] = None
@@ -635,6 +639,7 @@ class ParamRow(BaseModel):
     
     Columns:
     - initiative_key (str): Initiative key (PM-friendly identifier)
+    - model_name (str): Math model name copied from MathModels
     - param_name (str): Name of parameter
     - value (str/float): Current parameter value
     - unit (str): Unit of measurement
@@ -651,6 +656,7 @@ class ParamRow(BaseModel):
     model_config = ConfigDict(extra="ignore")
     
     initiative_key: str
+    model_name: Optional[str] = None
     param_name: str
     value: Optional[float | str] = None
     unit: Optional[str] = None

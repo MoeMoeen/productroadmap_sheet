@@ -16,6 +16,7 @@ class MathModelPromptInput(BaseModel):
     llm_summary: Optional[str] = None
 
     immediate_kpi_key: Optional[str] = None
+    target_kpi_key: Optional[str] = None
     metric_chain_text: Optional[str] = None
 
     expected_impact_description: Optional[str] = None

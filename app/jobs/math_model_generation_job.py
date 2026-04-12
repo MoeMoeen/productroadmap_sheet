@@ -8,8 +8,8 @@ from typing import Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from app.db.models.initiative import Initiative
-from app.llm.client import LLMClient
-from app.llm.scoring_assistant import build_math_model_prompt_enrichment, suggest_math_model_for_initiative
+from app.llm.client import LLMClient, build_constructed_math_model_prompt
+from app.llm.scoring_assistant import build_math_model_prompt_enrichment, build_math_model_prompt_input, suggest_math_model_for_initiative
 from app.sheets.math_models_reader import MathModelsReader, MathModelRowPair
 from app.sheets.math_models_writer import MathModelsWriter
 from app.sheets.client import SheetsClient
@@ -116,6 +116,15 @@ def run_math_model_generation_job(
 			)
 			continue
 
+		payload = build_math_model_prompt_input(
+			initiative,
+			mm,
+			db=db,
+			llm_context_text=llm_context_text,
+			metrics_config_text=metrics_config_text,
+		)
+		constructed_prompt = build_constructed_math_model_prompt(payload)
+
 		# FORMULA VALIDATION: Check if formula is valid, warn if not
 		if suggestion.llm_suggested_formula_text:
 			try:
@@ -136,6 +145,7 @@ def run_math_model_generation_job(
 				"llm_suggested_formula_text": suggestion.llm_suggested_formula_text,
 				"llm_notes": suggestion.llm_notes,
 				"llm_suggested_metric_chain_text": suggestion.llm_suggested_metric_chain_text,
+				"constructed_llm_prompt": constructed_prompt,
 			}
 		)
 		suggested += 1

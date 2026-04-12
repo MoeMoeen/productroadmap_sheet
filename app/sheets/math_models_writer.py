@@ -142,6 +142,7 @@ class MathModelsWriter:
             "llm_suggested_formula_text": Optional[str],
             "llm_notes": Optional[str],
             "llm_suggested_metric_chain_text": Optional[str],
+            "constructed_llm_prompt": Optional[str],
         }
         
         NOTE: We do NOT write assumptions_text—that is user-owned. PM edits assumptions manually.
@@ -153,11 +154,12 @@ class MathModelsWriter:
         formula_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_suggested_formula_text")
         notes_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_notes")
         metric_chain_col_idx = self._find_column_index(spreadsheet_id, tab_name, "llm_suggested_metric_chain_text")
+        prompt_col_idx = self._find_column_index(spreadsheet_id, tab_name, "constructed_llm_prompt")
         approved_col_idx = self._find_column_index(spreadsheet_id, tab_name, "approved_by_user")
         suggested_by_llm_col_idx = self._find_column_index(spreadsheet_id, tab_name, "suggested_by_llm")
         
         # Guard: require at least one suggestion column
-        if not (formula_col_idx or notes_col_idx or metric_chain_col_idx):
+        if not (formula_col_idx or notes_col_idx or metric_chain_col_idx or prompt_col_idx):
             logger.warning(f"Could not find suggestion columns in {tab_name}")
             return
         
@@ -191,16 +193,17 @@ class MathModelsWriter:
                 logger.warning("mathmodels.write.skip_bad_row_number", extra={"row_number": row_number})
                 continue
             
-            # RACE-SAFETY CHECK: Skip if now approved (staleness guard)
-            if approved_map.get(row_number, False):
-                logger.info("mathmodels.write.skip_approved", extra={"row": row_number})
-                continue
-            
             formula_sugg = suggestion.get("llm_suggested_formula_text")
             notes_sugg = suggestion.get("llm_notes")
             metric_chain_sugg = suggestion.get("llm_suggested_metric_chain_text")
+            constructed_prompt = suggestion.get("constructed_llm_prompt")
+
+            row_is_approved = approved_map.get(row_number, False)
+            if row_is_approved and not constructed_prompt:
+                logger.info("mathmodels.write.skip_approved", extra={"row": row_number})
+                continue
             
-            if formula_col_idx and formula_sugg:
+            if formula_col_idx and formula_sugg and not row_is_approved:
                 col_a1 = _col_index_to_a1(formula_col_idx)
                 cell_a1 = f"{tab_name}!{col_a1}{row_number}"
                 batch_data.append({
@@ -209,7 +212,7 @@ class MathModelsWriter:
                 })
                 updated_rows.add(row_number)
 
-            if notes_col_idx and notes_sugg:
+            if notes_col_idx and notes_sugg and not row_is_approved:
                 col_a1 = _col_index_to_a1(notes_col_idx)
                 cell_a1 = f"{tab_name}!{col_a1}{row_number}"
                 batch_data.append({
@@ -218,7 +221,7 @@ class MathModelsWriter:
                 })
                 updated_rows.add(row_number)
 
-            if metric_chain_col_idx and metric_chain_sugg:
+            if metric_chain_col_idx and metric_chain_sugg and not row_is_approved:
                 col_a1 = _col_index_to_a1(metric_chain_col_idx)
                 cell_a1 = f"{tab_name}!{col_a1}{row_number}"
                 batch_data.append({
@@ -227,9 +230,18 @@ class MathModelsWriter:
                 })
                 updated_rows.add(row_number)
 
+            if prompt_col_idx and constructed_prompt:
+                col_a1 = _col_index_to_a1(prompt_col_idx)
+                cell_a1 = f"{tab_name}!{col_a1}{row_number}"
+                batch_data.append({
+                    "range": cell_a1,
+                    "values": [[constructed_prompt]],
+                })
+                updated_rows.add(row_number)
+
 
             # Mark as suggested by LLM if any suggestion was provided
-            if suggested_by_llm_col_idx and (formula_sugg or notes_sugg or metric_chain_sugg):
+            if suggested_by_llm_col_idx and (formula_sugg or notes_sugg or metric_chain_sugg or constructed_prompt):
                 col_a1 = _col_index_to_a1(suggested_by_llm_col_idx)
                 cell_a1 = f"{tab_name}!{col_a1}{row_number}"
                 batch_data.append({

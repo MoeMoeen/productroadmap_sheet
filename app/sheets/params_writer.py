@@ -555,6 +555,63 @@ class ParamsWriter:
         
         return updated_count
 
+    def backfill_model_names(
+        self,
+        spreadsheet_id: str,
+        tab_name: str,
+        updates: List[Dict[str, Any]],
+    ) -> int:
+        """Backfill model_name for existing Params rows when the sheet column is present."""
+        if not updates:
+            return 0
+
+        model_name_col_idx = self._safe_find_column_index(spreadsheet_id, tab_name, "model_name")
+        if not model_name_col_idx:
+            return 0
+
+        us_col_idx = self._safe_find_column_index(spreadsheet_id, tab_name, "updated_source")
+        ua_col_idx = self._safe_find_column_index(spreadsheet_id, tab_name, "updated_at")
+        batch_data: List[Dict[str, Any]] = []
+        touched_rows: List[int] = []
+        timestamp = _now_iso()
+
+        for update in updates:
+            row_number = update.get("row_number")
+            model_name = update.get("model_name")
+            if not isinstance(row_number, int):
+                continue
+            if not isinstance(model_name, str) or not model_name.strip():
+                continue
+
+            batch_data.append({
+                "range": f"{tab_name}!{_col_index_to_a1(model_name_col_idx)}{row_number}",
+                "values": [[model_name]],
+            })
+            touched_rows.append(row_number)
+
+        if not batch_data:
+            return 0
+
+        if us_col_idx:
+            for row_number in touched_rows:
+                batch_data.append({
+                    "range": f"{tab_name}!{_col_index_to_a1(us_col_idx)}{row_number}",
+                    "values": [[token(Provenance.FLOW4_SEED_PARAMS)]],
+                })
+        if ua_col_idx:
+            for row_number in touched_rows:
+                batch_data.append({
+                    "range": f"{tab_name}!{_col_index_to_a1(ua_col_idx)}{row_number}",
+                    "values": [[timestamp]],
+                })
+
+        self.client.batch_update_values(
+            spreadsheet_id=spreadsheet_id,
+            data=batch_data,
+            value_input_option="RAW",
+        )
+        return len(touched_rows)
+
     def _build_column_indices(self, header: List[str]) -> Dict[str, int]:
         """Build a mapping of normalized column names to 1-based indices."""
         indices = {}
@@ -575,6 +632,7 @@ class ParamsWriter:
         field_mapping = {
             "initiative_key": "initiative_key",
             "framework": "framework",
+            "model_name": "model_name",
             "param_name": "param_name",
             "param_display": "param_display",
             "description": "description",
