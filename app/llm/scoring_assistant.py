@@ -1,5 +1,4 @@
 # productroadmap_sheet_project/app/llm/scoring_assistant.py
-
 from __future__ import annotations
 
 import logging

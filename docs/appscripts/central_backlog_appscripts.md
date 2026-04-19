@@ -11,6 +11,7 @@ It provides PM actions for syncing initiatives between the sheet and database.
 |-----------|--------|-----------|-------------|
 | Sync intake → backlog | `pm.backlog_sync` | Intake sheets → DB → backlog | Reconciles intake into DB, then refreshes backend-owned backlog columns |
 | Save selected rows | `pm.save_selected` | Sheet → DB | Syncs CENTRAL_EDITABLE_FIELDS to DB |
+| Sync DB ↔ Backlog (safe) | `pm.sync_backlog_db` | Sheet ↔ DB | Ownership-aware reconciliation: PM-owned fields flow to DB, DB-owned fields flow back to sheet |
 | Generate LLM Summary | `pm.generate_llm_summary` | DB + Backlog context → DB + backlog | Overwrites `LLM Summary` using DB fields, sheet-only Description, and approved math model context |
 | Switch scoring framework | `pm.switch_framework` | DB → Sheet | Activates per-framework scores |
 
@@ -193,11 +194,67 @@ function onOpen() {
     .createMenu("🧠 Roadmap AI")
     .addItem("Sync intake → backlog", "uiBacklogSync")
     .addItem("Save selected rows", "uiSaveSelected")
+    .addItem("Sync DB ↔ Backlog (safe)", "uiSyncBacklogDB")
     .addItem("Generate LLM Summary", "uiGenerateLLMSummary")
     .addItem("Switch scoring framework", "uiSwitchFramework")
     .addSeparator()
     .addItem("Refresh tab instructions", "uiRefreshTabInstructions")
     .addToUi();
+}
+```
+
+### ui_sync_backlog_db.gs
+
+```javascript
+// ui_sync_backlog_db.gs
+// Safe ownership-aware reconciliation for selected Backlog rows.
+
+function uiSyncBacklogDB() {
+  const ss = SpreadsheetApp.getActive();
+  const keys = getSelectedInitiativeKeys();
+
+  if (!keys.length) {
+    ss.toast("No selection", "Roadmap AI", 5);
+    return;
+  }
+
+  const payload = {
+    sheet_context: {
+      spreadsheet_id: SpreadsheetApp.getActive().getId(),
+      tab: SpreadsheetApp.getActiveSheet().getName(),
+    },
+    scope: {
+      type: "selection",
+      initiative_keys: keys,
+    },
+  };
+
+  try {
+    const res = postActionRun("pm.sync_backlog_db", payload);
+    ss.toast(
+      `Reconciling ${keys.length} row(s)...\nRun ID: ${res.run_id}`,
+      "🧠 Roadmap AI",
+      5
+    );
+
+    const finalResult = pollRunUntilDone(res.run_id);
+    showRunToast_(finalResult, "Sync DB ↔ Backlog");
+
+    if (String(finalResult?.status || "").toLowerCase() === "success") {
+      const summary = finalResult?.result?.summary || {};
+      ss.toast(
+        `Rows updated: ${summary.rows_updated || 0}, ` +
+        `DB fields: ${summary.db_fields_updated || 0}, ` +
+        `sheet fields: ${summary.sheet_fields_updated || 0}, ` +
+        `no-op: ${summary.no_op_count || 0}`,
+        "🧠 Roadmap AI ✅",
+        8
+      );
+      showSyncBacklogDiffDialog_(summary);
+    }
+  } catch (e) {
+    ss.toast("Failed: " + (e?.message || e), "🧠 Roadmap AI ❌", 10);
+  }
 }
 ```
 
@@ -573,6 +630,41 @@ function showRunToast_(run, title) {
   }
   SpreadsheetApp.getActive().toast(`Status: ${status}`, title, 6);
 }
+
+function showSyncBacklogDiffDialog_(summary) {
+  const changesLog = summary?.changes_log || {};
+  const keys = Object.keys(changesLog);
+  if (!keys.length) return;
+
+  const maxRows = 20;
+  const lines = [
+    `Updated rows: ${summary.rows_updated || 0}`,
+    `DB rows changed: ${summary.db_rows_updated || 0}`,
+    `Sheet rows changed: ${summary.sheet_rows_updated || 0}`,
+    "",
+    "Per-row diffs:",
+  ];
+
+  keys.slice(0, maxRows).forEach((key) => {
+    const entry = changesLog[key] || {};
+    const dbFields = (entry.db || []).join(", ") || "none";
+    const sheetFields = (entry.sheet || []).join(", ") || "none";
+    lines.push(`${key}`);
+    lines.push(`  DB ← Sheet: ${dbFields}`);
+    lines.push(`  Sheet ← DB: ${sheetFields}`);
+  });
+
+  if (keys.length > maxRows) {
+    lines.push("");
+    lines.push(`...and ${keys.length - maxRows} more row(s).`);
+  }
+
+  SpreadsheetApp.getUi().alert(
+    "Sync DB ↔ Backlog Diffs",
+    lines.join("\n"),
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
 ```
 
 ---
@@ -609,6 +701,18 @@ function showRunToast_(run, title) {
 The "Sync intake → backlog" action refreshes backend-owned backlog columns from DB.
 PM-added helper/formula columns are preserved, but unsaved edits in backend-managed columns can still be replaced.
 Always run "Save selected rows" first if you have unsaved PM edits!
+
+### Inspecting Sync Diffs
+
+After "Sync DB ↔ Backlog (safe)" completes successfully, the Apps Script UI now shows:
+
+- A toast with aggregate reconciliation counts
+- An alert dialog with per-row `changes_log` details
+
+Each diff entry shows:
+
+- `DB ← Sheet`: PM-owned fields that changed in the database
+- `Sheet ← DB`: DB-owned fields written back to the sheet
 
 ### Fields Synced by "Save selected rows"
 

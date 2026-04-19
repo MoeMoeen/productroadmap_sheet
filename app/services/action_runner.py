@@ -338,6 +338,25 @@ def _extract_summary(action: str, result: Dict[str, Any]) -> Dict[str, Any]:
         summary["skipped"] = skipped_no_key + result.get("skipped_count", 0)
         summary["failed"] = result.get("failed_count", 0)
 
+    elif action == "pm.sync_backlog_db":
+        if result.get("status") == "skipped":
+            summary["total"] = 1
+            summary["skipped"] = 1
+            return summary
+        selected_count = result.get("selected_count", 0)
+        skipped_no_key = result.get("skipped_no_key", 0)
+        summary["total"] = selected_count + skipped_no_key
+        summary["success"] = result.get("ok_count", 0)
+        summary["skipped"] = skipped_no_key + result.get("skipped_count", 0)
+        summary["failed"] = result.get("failed_count", 0)
+        summary["rows_updated"] = result.get("rows_updated", 0)
+        summary["no_op_count"] = result.get("no_op_count", 0)
+        summary["db_rows_updated"] = result.get("db_rows_updated", result.get("db_updated", 0))
+        summary["db_fields_updated"] = result.get("db_fields_updated", 0)
+        summary["sheet_rows_updated"] = result.get("sheet_updated", 0)
+        summary["sheet_fields_updated"] = result.get("sheet_fields_updated", 0)
+        summary["changes_log"] = result.get("changes_log", {})
+
     elif action == "pm.seed_math_params":
         if result.get("status") == "skipped":
             summary["total"] = 1
@@ -1486,6 +1505,96 @@ def _action_pm_generate_llm_summary(db: Session, ctx: ActionContext) -> Dict[str
         "sheet_updated": int(result.get("sheet_updated", 0)),
         "substeps": [
             {"step": "generate_summary", "status": "ok", "count": int(result.get("ok_count", 0))},
+            {"step": "status_write", "status": "ok"},
+        ],
+    }
+
+
+def _action_pm_sync_backlog_db(db: Session, ctx: ActionContext) -> Dict[str, Any]:
+    from app.services.backlog_reconciliation_service import BacklogReconciliationService
+
+    sheet_ctx = ctx.payload.get("sheet_context") or {}
+    scope = ctx.payload.get("scope") or {}
+    if not isinstance(sheet_ctx, dict):
+        sheet_ctx = {}
+    if not isinstance(scope, dict):
+        scope = {}
+
+    cfg = settings.PRODUCT_OPS
+    spreadsheet_id = sheet_ctx.get("spreadsheet_id") or (cfg.spreadsheet_id if cfg else None)
+    requested_tab = sheet_ctx.get("tab")
+    resolved_tab = _resolve_pm_tab(requested_tab, cfg, default_kind="backlog")
+    tab = resolved_tab.canonical_tab
+
+    keys = scope.get("initiative_keys") or []
+    if not isinstance(keys, list):
+        keys = []
+    keys = [k for k in keys if isinstance(k, str) and k.strip()]
+    keys = list(dict.fromkeys(keys))
+    original_keys = scope.get("initiative_keys")
+    skipped_no_key = (len(original_keys) - len(keys)) if isinstance(original_keys, list) else 0
+
+    if not spreadsheet_id:
+        raise ValueError("sheet_context.spreadsheet_id missing and PRODUCT_OPS not configured")
+
+    if resolved_tab.kind != "backlog":
+        logger.info("pm.sync_backlog_db.wrong_tab", extra={"requested_tab": requested_tab, "target_tab": "Backlog"})
+        return _pm_guided_skip(
+            pm_job="pm.sync_backlog_db",
+            reason="wrong_tab",
+            message=f"Sync DB ↔ Backlog only works on 'Backlog'. You ran it from '{requested_tab}'. Go to 'Backlog' and try again.",
+            requested_tab=str(requested_tab),
+            target_tab="Backlog",
+        )
+
+    if not keys:
+        logger.info("pm.sync_backlog_db.no_keys_selected", extra={"skipped_no_key": skipped_no_key})
+        return {
+            "pm_job": "pm.sync_backlog_db",
+            "tab": tab,
+            "selected_count": 0,
+            "skipped_no_key": skipped_no_key,
+            "ok_count": 0,
+            "skipped_count": 0,
+            "failed_count": 0,
+            "sheet_updated": 0,
+            "db_updated": 0,
+            "status_by_key": {},
+            "substeps": [
+                {"step": "reconcile", "status": "skipped", "reason": "no keys selected"},
+                {"step": "status_write", "status": "skipped", "reason": "no keys selected"},
+            ],
+        }
+
+    service = BacklogReconciliationService(ctx.sheets_client)
+    result = service.sync(
+        db=db,
+        spreadsheet_id=str(spreadsheet_id),
+        tab_name=str(tab),
+        initiative_keys=keys,
+    )
+
+    try:
+        from app.sheets.productops_writer import write_status_to_sheet
+
+        write_status_to_sheet(
+            ctx.sheets_client,
+            str(spreadsheet_id),
+            str(tab),
+            result.get("status_by_key", {}),
+        )
+    except Exception:
+        logger.warning("pm.sync_backlog_db.status_write_failed")
+
+    return {
+        "pm_job": "pm.sync_backlog_db",
+        "tab": tab,
+        "selected_count": len(keys),
+        "skipped_no_key": skipped_no_key,
+        **result,
+        "substeps": [
+            {"step": "reconcile", "status": "ok", "count": result.get("ok_count", 0)},
+            {"step": "sheet_writeback", "status": "ok", "count": result.get("sheet_updated", 0)},
             {"step": "status_write", "status": "ok"},
         ],
     }
@@ -3551,6 +3660,7 @@ _ACTION_REGISTRY: Dict[str, ActionFn] = {
     "pm.populate_initiatives": _action_pm_populate_initiatives,
     "pm.suggest_math_model_llm": _action_pm_suggest_math_model_llm,
     "pm.generate_llm_summary": _action_pm_generate_llm_summary,
+    "pm.sync_backlog_db": _action_pm_sync_backlog_db,
     "pm.seed_math_params": _action_pm_seed_math_params,
     
     # PM Jobs (V3 Optimization)

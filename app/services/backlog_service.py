@@ -12,7 +12,8 @@ from app.db.models.initiative import Initiative  # type: ignore
 from app.sheets.backlog_reader import BacklogRow  # type: ignore
 from app.config import settings
 from app.utils.header_utils import get_value_by_header_alias
-from app.sheets.models import INTAKE_HEADER_MAP, CENTRAL_EDITABLE_FIELDS
+from app.sheets.models import INTAKE_HEADER_MAP
+from app.services.backlog_field_ownership import SHEET_OWNED_FIELDS
 from app.utils.provenance import Provenance, token
 
 from .backlog_mapper import backlog_row_to_update_data
@@ -129,7 +130,7 @@ class BacklogService:
     def _apply_central_update(initiative: Initiative, data: Dict[str, Any]) -> None:
         """Apply central editable fields from data to the Initiative instance."""
         for field_name, value in data.items():
-            if field_name not in CENTRAL_EDITABLE_FIELDS:
+            if field_name not in SHEET_OWNED_FIELDS:
                 continue
             setattr(initiative, field_name, value)
 

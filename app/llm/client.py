@@ -589,7 +589,9 @@ def _build_initiative_summary_system_prompt() -> str:
         "- If the math model is unclear, incomplete, or ambiguous, say that explicitly\n"
         "- Do NOT interpret a formula beyond the information explicitly provided\n"
         "- Do not invent metrics, dependencies, or risks\n"
-        "- Put uncertainties in open_questions instead of stating them as facts\n"
+        "- open_questions must be [] unless a material uncertainty is directly implied by the provided context\n"
+        "- Do NOT ask generic process questions such as what strategy will be tested, how success will be measured, or what data sources will be used\n"
+        "- If you include an open question, it must point to a concrete missing fact specific to this initiative\n"
         "- Keep each field concise and useful for backlog review\n\n"
         "Return ONLY JSON with keys:\n"
         "{\n"
@@ -642,7 +644,9 @@ def _build_initiative_summary_user_prompt(payload: InitiativeSummaryPromptInput)
     lines.extend(
         [
             "",
-            "Write a structured initiative summary that helps a PM quickly understand the opportunity, proposed solution, expected business impact, and what still needs clarification.",
+            "Write a structured initiative summary that helps a PM quickly understand the opportunity, proposed solution, and expected business impact.",
+            "Only include open_questions when the provided context clearly leaves a material initiative-specific gap.",
+            "If there is no such concrete gap, return open_questions as an empty list.",
         ]
     )
     return "\n".join(lines)

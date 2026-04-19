@@ -20,6 +20,8 @@ from app.utils.header_utils import normalize_header
 
 logger = logging.getLogger(__name__)
 
+TARGETED_BACKLOG_BATCH_UPDATE_SIZE = 200
+
 
 def _resolve_source_sheet_key(initiative: Initiative) -> str:
     source_sheet_key = str(getattr(initiative, "source_sheet_key", "") or "").strip()
@@ -215,6 +217,92 @@ def write_llm_summaries_to_backlog_sheet(
 
     if batch_updates:
         client.batch_update_values(spreadsheet_id, batch_updates)
+
+    return len(updated_keys)
+
+
+def _serialize_targeted_backlog_value(field: str, value: Any) -> Any:
+    if field == "metric_chain_json" and value not in (None, ""):
+        if isinstance(value, str):
+            return value
+        try:
+            return json.dumps(value)
+        except Exception:
+            return str(value)
+    return _to_sheet_value(value)
+
+
+def write_backlog_fields_batch(
+    client: SheetsClient,
+    spreadsheet_id: str,
+    tab_name: str = "Backlog",
+    *,
+    updates_by_key: Dict[str, Dict[str, Any]],
+) -> int:
+    """Update specific backlog columns for selected initiative rows only."""
+    if not updates_by_key:
+        return 0
+
+    header_values = client.get_values(spreadsheet_id, f"{tab_name}!1:1")
+    if not header_values or not header_values[0]:
+        logger.warning("backlog_writer.fields.empty_sheet", extra={"tab": tab_name})
+        return 0
+
+    headers = header_values[0]
+    norm_headers = [normalize_header(str(h)) for h in headers]
+
+    key_col = None
+    field_columns: Dict[str, int] = {}
+    normalized_canonical_to_field = {
+        normalize_header(header): field for header, field in CENTRAL_HEADER_TO_FIELD.items()
+    }
+
+    for idx, normalized in enumerate(norm_headers):
+        if normalized == "initiative_key":
+            key_col = idx
+            continue
+        field = normalized_canonical_to_field.get(normalized)
+        if field:
+            field_columns[field] = idx
+
+    if key_col is None:
+        logger.warning("backlog_writer.fields.missing_key_column", extra={"tab": tab_name})
+        return 0
+
+    start_row = data_start_row(tab_name)
+    key_col_a1 = _col_index_to_a1(key_col + 1)
+    key_values = client.get_values(spreadsheet_id, f"{tab_name}!{key_col_a1}{start_row}:{key_col_a1}")
+
+    batch_updates: List[Dict[str, Any]] = []
+    updated_keys: set[str] = set()
+
+    for row_number, row in enumerate(key_values, start=start_row):
+        key = str(row[0]).strip() if row else ""
+        field_updates = updates_by_key.get(key)
+        if not key or not field_updates:
+            continue
+
+        wrote_any = False
+        for field, value in field_updates.items():
+            col_idx = field_columns.get(field)
+            if col_idx is None:
+                continue
+            col_a1 = _col_index_to_a1(col_idx + 1)
+            batch_updates.append(
+                {
+                    "range": f"{tab_name}!{col_a1}{row_number}",
+                    "values": [[_serialize_targeted_backlog_value(field, value)]],
+                }
+            )
+            wrote_any = True
+
+        if wrote_any:
+            updated_keys.add(key)
+
+    if batch_updates:
+        for start in range(0, len(batch_updates), TARGETED_BACKLOG_BATCH_UPDATE_SIZE):
+            chunk = batch_updates[start : start + TARGETED_BACKLOG_BATCH_UPDATE_SIZE]
+            client.batch_update_values(spreadsheet_id, chunk)
 
     return len(updated_keys)
 

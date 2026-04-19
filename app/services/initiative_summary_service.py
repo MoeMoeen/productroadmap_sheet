@@ -25,6 +25,14 @@ SUMMARY_HASH_META_KEY = "_meta"
 SUMMARY_INPUT_HASH_KEY = "input_hash"
 SUMMARY_GENERATED_AT_KEY = "generated_at"
 MAX_PARALLEL_SUMMARY_LLM_CALLS = 4
+GENERIC_OPEN_QUESTION_SUBSTRINGS = (
+    "what specific",
+    "how will",
+    "what data sources",
+    "what metrics",
+    "how do we measure",
+    "how should we measure",
+)
 
 
 def build_initiative_summary_prompt_input(
@@ -111,6 +119,44 @@ def format_initiative_summary_text(summary: InitiativeSummaryOutput) -> str:
     return "\n".join(lines)
 
 
+def sanitize_summary_output(summary: InitiativeSummaryOutput) -> InitiativeSummaryOutput:
+    def normalize_question(question: str) -> str:
+        return " ".join(question.strip().split())
+
+    filtered_questions: list[str] = []
+    seen_questions: set[str] = set()
+    for raw_question in summary.open_questions:
+        question = normalize_question(raw_question)
+        if not question:
+            continue
+        lowered = question.lower()
+        if any(marker in lowered for marker in GENERIC_OPEN_QUESTION_SUBSTRINGS):
+            continue
+        if lowered in seen_questions:
+            continue
+        seen_questions.add(lowered)
+        filtered_questions.append(question)
+
+    filtered_risks: list[str] = []
+    seen_risks: set[str] = set()
+    for raw_risk in summary.risks_and_dependencies:
+        risk = " ".join(raw_risk.strip().split())
+        if not risk:
+            continue
+        lowered = risk.lower()
+        if lowered in seen_risks:
+            continue
+        seen_risks.add(lowered)
+        filtered_risks.append(risk)
+
+    return summary.model_copy(
+        update={
+            "open_questions": filtered_questions,
+            "risks_and_dependencies": filtered_risks,
+        }
+    )
+
+
 def compute_summary_input_hash(payload: InitiativeSummaryPromptInput) -> str:
     payload_json = payload.model_dump(mode="json", exclude_none=True)
     payload_text = json.dumps(payload_json, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
@@ -118,6 +164,10 @@ def compute_summary_input_hash(payload: InitiativeSummaryPromptInput) -> str:
 
 
 def get_existing_summary_input_hash(initiative: Initiative) -> Optional[str]:
+    existing_summary_text = cast(Optional[str], getattr(initiative, "llm_summary", None))
+    if not existing_summary_text or not str(existing_summary_text).strip():
+        return None
+
     summary_json = cast(Any, getattr(initiative, "llm_summary_json", None))
     if not isinstance(summary_json, dict):
         return None
@@ -239,7 +289,7 @@ class InitiativeSummaryService:
                 failed_count += 1
                 continue
 
-            summary = generated
+            summary = sanitize_summary_output(generated)
             summary_text = format_initiative_summary_text(summary)
             initiative_row = cast(Any, initiative)
             initiative_row.llm_summary = summary_text

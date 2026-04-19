@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -21,12 +22,14 @@ from app.llm.client import _build_math_model_evaluator_system_prompt, _build_mat
 from app.llm.context_formatters import format_llm_context_sections, format_metrics_config_rows
 from app.llm.models import InitiativeSummaryOutput, MathModelEvaluation, MathModelPromptInput, MathModelSuggestion
 from app.llm.scoring_assistant import build_math_model_prompt_input, load_metrics_config_prompt_context
-from app.services.initiative_summary_service import InitiativeSummaryService, build_initiative_summary_prompt_input, choose_approved_math_model, compute_summary_input_hash, format_initiative_summary_text
+from app.services.initiative_summary_service import InitiativeSummaryService, build_initiative_summary_prompt_input, choose_approved_math_model, compute_summary_input_hash, format_initiative_summary_text, sanitize_summary_output
 from app.utils.safe_eval import validate_formula
-from app.services.action_runner import ActionContext, _action_pm_backlog_sync, _action_pm_generate_llm_summary, _action_pm_populate_candidates, _action_pm_populate_initiatives, _action_pm_save_selected, _action_pm_score_selected, _action_pm_seed_math_params, _action_pm_suggest_math_model_llm, _action_pm_switch_framework, _extract_summary
+from app.services.action_runner import ActionContext, _action_pm_backlog_sync, _action_pm_generate_llm_summary, _action_pm_populate_candidates, _action_pm_populate_initiatives, _action_pm_save_selected, _action_pm_score_selected, _action_pm_seed_math_params, _action_pm_suggest_math_model_llm, _action_pm_switch_framework, _action_pm_sync_backlog_db, _extract_summary
+from app.services.backlog_reconciliation_service import BacklogReconciliationService
+from app.services.backlog_service import BacklogService
 from app.services.intake_mapper import map_sheet_row_to_initiative_create
 from app.services.intake_service import IntakeService
-from app.sheets.backlog_writer import write_backlog_from_db, write_llm_summaries_to_backlog_sheet
+from app.sheets.backlog_writer import write_backlog_fields_batch, write_backlog_from_db, write_llm_summaries_to_backlog_sheet
 from app.sheets.intake_writer import GoogleSheetsIntakeWriter
 from app.sheets.layout import data_start_row
 from app.sheets.llm_context_reader import LLMContextReader
@@ -118,6 +121,16 @@ class BacklogSummaryClient:
 
     def batch_update_values(self, spreadsheet_id: str, data: list[dict], value_input_option: str = "USER_ENTERED") -> None:
         self.updated.extend(data)
+
+
+class ChunkTrackingBacklogSummaryClient(BacklogSummaryClient):
+    def __init__(self, header: list[str], keys: list[str]) -> None:
+        super().__init__(header, keys)
+        self.batch_sizes: list[int] = []
+
+    def batch_update_values(self, spreadsheet_id: str, data: list[dict], value_input_option: str = "USER_ENTERED") -> None:
+        self.batch_sizes.append(len(data))
+        super().batch_update_values(spreadsheet_id, data, value_input_option)
 
 
 @pytest.fixture
@@ -558,7 +571,7 @@ def test_build_math_model_prompt_input_normalizes_kpi_names_from_metrics_config(
     )
 
     payload = build_math_model_prompt_input(
-        initiative,
+        cast(Any, initiative),
         row,
         metrics_config_json=[
             {"kpi_key": "qlub_revenue", "kpi_name": "Qlub Revenue", "kpi_level": "north_star"},
@@ -911,15 +924,316 @@ def test_write_llm_summaries_to_backlog_sheet_updates_selected_rows() -> None:
     assert client.updated[0]["values"] == [["New summary"]]
 
 
+def test_write_backlog_fields_batch_updates_selected_rows() -> None:
+    client = BacklogSummaryClient(
+        ["Initiative Key", "Value Score", "LLM Summary", "Updated Source"],
+        ["INIT-000001", "INIT-000002"],
+    )
+
+    updated = write_backlog_fields_batch(
+        cast(Any, client),
+        "sheet-1",
+        "Backlog",
+        updates_by_key={
+            "INIT-000002": {
+                "value_score": 7.5,
+                "llm_summary": "Backend summary",
+                "updated_source": "pm.sync_backlog_db",
+            }
+        },
+    )
+
+    assert updated == 1
+    assert [item["range"] for item in client.updated] == ["Backlog!B6", "Backlog!C6", "Backlog!D6"]
+    assert client.updated[0]["values"] == [[7.5]]
+
+
+def test_write_backlog_fields_batch_chunks_large_updates(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = ChunkTrackingBacklogSummaryClient(
+        ["Initiative Key", "LLM Summary"],
+        ["INIT-000001", "INIT-000002", "INIT-000003"],
+    )
+    monkeypatch.setattr("app.sheets.backlog_writer.TARGETED_BACKLOG_BATCH_UPDATE_SIZE", 2)
+
+    updated = write_backlog_fields_batch(
+        cast(Any, client),
+        "sheet-1",
+        "Backlog",
+        updates_by_key={
+            "INIT-000001": {"llm_summary": "Summary 1"},
+            "INIT-000002": {"llm_summary": "Summary 2"},
+            "INIT-000003": {"llm_summary": "Summary 3"},
+        },
+    )
+
+    assert updated == 3
+    assert client.batch_sizes == [2, 1]
+
+
+def test_backlog_service_ignores_db_owned_llm_summary_sheet_edit(db_session) -> None:
+    initiative = _create_initiative(
+        db_session,
+        initiative_key="INIT-000018",
+        title="Existing Summary",
+    )
+    initiative_row = cast(Any, initiative)
+    initiative_row.llm_summary = "Old generated summary"
+    initiative_row.llm_summary_json = {"headline": "Old headline", "_meta": {"input_hash": "abc"}}
+    db_session.commit()
+
+    service = BacklogService(db_session)
+    service.update_from_backlog_row({"Initiative Key": "INIT-000018", "LLM Summary": ""})
+
+    db_session.refresh(initiative)
+    assert cast(Any, initiative).llm_summary == "Old generated summary"
+    assert cast(Any, initiative).llm_summary_json == {"headline": "Old headline", "_meta": {"input_hash": "abc"}}
+
+
+def test_backlog_reconciliation_service_sync_applies_ownership_rules(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    initiative = _create_initiative(
+        db_session,
+        initiative_key="INIT-000021",
+        title="Old title",
+    )
+    initiative_row = cast(Any, initiative)
+    initiative_row.country = "AE"
+    initiative_row.value_score = 8.2
+    initiative_row.llm_summary = "System summary"
+    db_session.commit()
+
+    backlog_row = {
+        "Initiative Key": "INIT-000021",
+        "Title": "New PM title",
+        "Value Score": 1.0,
+        "Country": "US",
+        "LLM Summary": "PM override",
+    }
+    captured_updates: dict[str, dict[str, Any]] = {}
+
+    class FakeBacklogReader:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def get_rows(self, spreadsheet_id: str, tab_name: str = "Backlog", header_row: int = 1, start_data_row: int | None = None, max_rows: int | None = None):
+            return [(5, backlog_row)]
+
+    monkeypatch.setattr("app.services.backlog_reconciliation_service.BacklogReader", FakeBacklogReader)
+    monkeypatch.setattr(
+        "app.services.backlog_reconciliation_service.write_backlog_fields_batch",
+        lambda client, spreadsheet_id, tab_name, updates_by_key: captured_updates.update(updates_by_key) or len(updates_by_key),
+    )
+
+    service = BacklogReconciliationService(cast(Any, object()))
+    result = service.sync(
+        db=db_session,
+        spreadsheet_id="sheet-1",
+        tab_name="Backlog",
+        initiative_keys=["INIT-000021"],
+    )
+
+    db_session.refresh(initiative)
+    assert cast(Any, initiative).title == "New PM title"
+    assert cast(Any, initiative).country == "AE"
+    assert cast(Any, initiative).llm_summary == "System summary"
+    assert cast(Any, initiative).updated_source == "pm.sync_backlog_db"
+    assert result["ok_count"] == 1
+    assert result["rows_processed"] == 1
+    assert result["rows_updated"] == 1
+    assert result["db_updated"] == 1
+    assert result["db_fields_updated"] == 1
+    assert result["sheet_updated"] == 1
+    assert result["sheet_fields_updated"] == 2
+    assert result["changes_log"]["INIT-000021"] == {
+        "db": ["title"],
+        "sheet": ["llm_summary", "value_score"],
+    }
+    assert captured_updates["INIT-000021"]["value_score"] == 8.2
+    assert captured_updates["INIT-000021"]["llm_summary"] == "System summary"
+
+
+def test_backlog_reconciliation_service_skips_empty_sheet_clears_and_noop_write(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    initiative = _create_initiative(
+        db_session,
+        initiative_key="INIT-000022",
+        title="Protected title",
+    )
+    initiative_row = cast(Any, initiative)
+    initiative_row.llm_summary = "Stable summary"
+    db_session.commit()
+
+    backlog_row = {
+        "Initiative Key": "INIT-000022",
+        "Title": "",
+        "LLM Summary": "Stable summary",
+    }
+    writer_calls: list[dict[str, dict[str, Any]]] = []
+
+    class FakeBacklogReader:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def get_rows(self, spreadsheet_id: str, tab_name: str = "Backlog", header_row: int = 1, start_data_row: int | None = None, max_rows: int | None = None):
+            return [(5, backlog_row)]
+
+    monkeypatch.setattr("app.services.backlog_reconciliation_service.BacklogReader", FakeBacklogReader)
+    monkeypatch.setattr(
+        "app.services.backlog_reconciliation_service.write_backlog_fields_batch",
+        lambda client, spreadsheet_id, tab_name, updates_by_key: writer_calls.append(updates_by_key) or len(updates_by_key),
+    )
+
+    service = BacklogReconciliationService(cast(Any, object()))
+    result = service.sync(
+        db=db_session,
+        spreadsheet_id="sheet-1",
+        tab_name="Backlog",
+        initiative_keys=["INIT-000022"],
+    )
+
+    db_session.refresh(initiative)
+    assert cast(Any, initiative).title == "Protected title"
+    assert result["ok_count"] == 1
+    assert result["rows_updated"] == 0
+    assert result["no_op_count"] == 1
+    assert result["db_updated"] == 0
+    assert result["sheet_updated"] == 0
+    assert writer_calls == []
+
+
+def test_backlog_reconciliation_service_keeps_external_fields_protected_if_sheet_owned_drifts(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    initiative = _create_initiative(
+        db_session,
+        initiative_key="INIT-000023",
+        title="Stable title",
+    )
+    cast(Any, initiative).country = "AE"
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.backlog_reconciliation_service.SHEET_OWNED_FIELDS",
+        {"title", "country"},
+    )
+
+    BacklogReconciliationService._apply_sheet_to_db(
+        {"Initiative Key": "INIT-000023", "Title": "Updated title", "Country": "US"},
+        initiative,
+    )
+
+    assert cast(Any, initiative).title == "Updated title"
+    assert cast(Any, initiative).country == "AE"
+
+
+def test_backlog_reconciliation_service_serializes_metric_chain_json_for_sheet_comparison(db_session) -> None:
+    initiative = _create_initiative(
+        db_session,
+        initiative_key="INIT-000024",
+        title="Metric chain initiative",
+    )
+    metric_chain_json = {"steps": [{"kpi": "gmv", "delta": 1.5}]}
+    model = InitiativeMathModel(
+        initiative_id=initiative.id,
+        model_name="primary_model",
+        formula_text="value = 1",
+        metric_chain_json=metric_chain_json,
+        approved_by_user=True,
+        is_primary=True,
+    )
+    initiative.math_models.append(model)
+    db_session.add(model)
+    db_session.commit()
+
+    same_row_updates = BacklogReconciliationService._extract_db_to_sheet(
+        {"Metric Chain JSON (Primary)": json.dumps(metric_chain_json)},
+        initiative,
+    )
+    changed_row_updates = BacklogReconciliationService._extract_db_to_sheet(
+        {"Metric Chain JSON (Primary)": json.dumps({"steps": []})},
+        initiative,
+    )
+
+    assert same_row_updates == ({}, [])
+    assert changed_row_updates == (
+        {"metric_chain_json": json.dumps(metric_chain_json)},
+        ["metric_chain_json"],
+    )
+
+
+def test_backlog_reconciliation_service_treats_list_reordering_as_no_change() -> None:
+    assert BacklogReconciliationService._values_equal(["A", "B"], ["b", "a"]) is True
+
+
+def test_backlog_reconciliation_service_treats_small_float_noise_as_no_change() -> None:
+    assert BacklogReconciliationService._values_equal(0.1 + 0.2, 0.3) is True
+
+
+def test_backlog_reconciliation_service_chunks_db_commits_and_sheet_flushes(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    first = _create_initiative(db_session, initiative_key="INIT-000025", title="First old title")
+    second = _create_initiative(db_session, initiative_key="INIT-000026", title="Second old title")
+    cast(Any, first).llm_summary = "DB summary 1"
+    cast(Any, second).llm_summary = "DB summary 2"
+    db_session.commit()
+
+    rows = [
+        (5, {"Initiative Key": "INIT-000025", "Title": "First new title", "LLM Summary": "Sheet summary 1"}),
+        (6, {"Initiative Key": "INIT-000026", "Title": "Second new title", "LLM Summary": "Sheet summary 2"}),
+    ]
+    commit_calls = 0
+    original_commit = db_session.commit
+    sheet_chunks: list[dict[str, dict[str, Any]]] = []
+
+    class FakeBacklogReader:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def get_rows(self, spreadsheet_id: str, tab_name: str = "Backlog", header_row: int = 1, start_data_row: int | None = None, max_rows: int | None = None):
+            return rows
+
+    def counting_commit() -> None:
+        nonlocal commit_calls
+        commit_calls += 1
+        original_commit()
+
+    monkeypatch.setattr("app.services.backlog_reconciliation_service.BacklogReader", FakeBacklogReader)
+    monkeypatch.setattr("app.services.backlog_reconciliation_service.DB_RECONCILIATION_COMMIT_ROW_CHUNK_SIZE", 1)
+    monkeypatch.setattr("app.services.backlog_reconciliation_service.SHEET_RECONCILIATION_WRITE_ROW_CHUNK_SIZE", 1)
+    monkeypatch.setattr(db_session, "commit", counting_commit)
+    monkeypatch.setattr(
+        "app.services.backlog_reconciliation_service.write_backlog_fields_batch",
+        lambda client, spreadsheet_id, tab_name, updates_by_key: sheet_chunks.append(dict(updates_by_key)) or len(updates_by_key),
+    )
+
+    service = BacklogReconciliationService(cast(Any, object()))
+    result = service.sync(
+        db=db_session,
+        spreadsheet_id="sheet-1",
+        tab_name="Backlog",
+        initiative_keys=["INIT-000025", "INIT-000026"],
+    )
+
+    db_session.refresh(first)
+    db_session.refresh(second)
+    assert cast(Any, first).title == "First new title"
+    assert cast(Any, second).title == "Second new title"
+    assert commit_calls == 2
+    assert result["sheet_updated"] == 2
+    assert len(sheet_chunks) == 2
+    assert sheet_chunks[0] == {"INIT-000025": {"llm_summary": "DB summary 1"}}
+    assert sheet_chunks[1] == {"INIT-000026": {"llm_summary": "DB summary 2"}}
+    assert result["changes_log"] == {
+        "INIT-000025": {"db": ["title"], "sheet": ["llm_summary"]},
+        "INIT-000026": {"db": ["title"], "sheet": ["llm_summary"]},
+    }
+
+
 def test_build_initiative_summary_prompt_input_uses_sheet_description_and_approved_model(db_session) -> None:
     initiative = _create_initiative(
         db_session,
         initiative_key="INIT-000001",
         title="Improve onboarding",
     )
-    initiative.problem_statement = "Setup is too manual"
-    initiative.hypothesis = "Automation increases activation"
-    initiative.immediate_kpi_key = "onboarding_conversion_rate"
+    initiative_row = cast(Any, initiative)
+    initiative_row.problem_statement = "Setup is too manual"
+    initiative_row.hypothesis = "Automation increases activation"
+    initiative_row.immediate_kpi_key = "onboarding_conversion_rate"
     approved_model = InitiativeMathModel(
         initiative_id=initiative.id,
         model_name="onboarding_uplift_model",
@@ -965,15 +1279,36 @@ def test_format_initiative_summary_text_includes_optional_sections() -> None:
     assert "- What share of restaurants are eligible for self-serve onboarding?" in text
 
 
+def test_sanitize_summary_output_removes_generic_open_questions() -> None:
+    summary = InitiativeSummaryOutput(
+        headline="Dynamic Pricing Optimization Initiative",
+        opportunity="Improve pricing decisions to raise AOV.",
+        proposed_solution="Adjust prices dynamically.",
+        expected_impact="Higher AOV through better pricing.",
+        risks_and_dependencies=["Needs pricing guardrails", "Needs pricing guardrails"],
+        open_questions=[
+            "What specific pricing strategies will be tested?",
+            "How will customer response to dynamic pricing be measured?",
+            "Should EU markets be excluded from the first rollout?",
+        ],
+    )
+
+    sanitized = sanitize_summary_output(summary)
+
+    assert sanitized.risks_and_dependencies == ["Needs pricing guardrails"]
+    assert sanitized.open_questions == ["Should EU markets be excluded from the first rollout?"]
+
+
 def test_initiative_summary_service_overwrites_db_and_sheet(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
     initiative = _create_initiative(
         db_session,
         initiative_key="INIT-000001",
         title="Improve onboarding",
     )
-    initiative.problem_statement = "Setup is too manual"
-    initiative.hypothesis = "Automation increases activation"
-    initiative.llm_summary = "Old summary"
+    initiative_row = cast(Any, initiative)
+    initiative_row.problem_statement = "Setup is too manual"
+    initiative_row.hypothesis = "Automation increases activation"
+    initiative_row.llm_summary = "Old summary"
     approved_model = InitiativeMathModel(
         initiative_id=initiative.id,
         model_name="onboarding_uplift_model",
@@ -1030,13 +1365,16 @@ def test_initiative_summary_service_overwrites_db_and_sheet(db_session, monkeypa
     )
 
     db_session.refresh(initiative)
+    llm_summary = cast(Any, initiative).llm_summary
+    llm_summary_json = cast(Any, initiative).llm_summary_json
     assert result["ok_count"] == 1
     assert result["sheet_updated"] == 1
-    assert initiative.llm_summary is not None and "Headline: Reduce onboarding friction" in initiative.llm_summary
-    assert initiative.llm_summary_json is not None
-    assert initiative.llm_summary_json["headline"] == "Reduce onboarding friction"
-    assert initiative.llm_summary_json["_meta"]["input_hash"]
-    assert written_summaries == [{"INIT-000001": initiative.llm_summary}]
+    assert isinstance(llm_summary, str)
+    assert "Headline: Reduce onboarding friction" in llm_summary
+    assert isinstance(llm_summary_json, dict)
+    assert llm_summary_json["headline"] == "Reduce onboarding friction"
+    assert llm_summary_json["_meta"]["input_hash"]
+    assert written_summaries == [{"INIT-000001": llm_summary}]
 
 
 def test_initiative_summary_service_skips_when_input_hash_matches(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1045,8 +1383,9 @@ def test_initiative_summary_service_skips_when_input_hash_matches(db_session, mo
         initiative_key="INIT-000001",
         title="Improve onboarding",
     )
-    initiative.problem_statement = "Setup is too manual"
-    initiative.hypothesis = "Automation increases activation"
+    initiative_row = cast(Any, initiative)
+    initiative_row.problem_statement = "Setup is too manual"
+    initiative_row.hypothesis = "Automation increases activation"
 
     backlog_row = {"Initiative Key": "INIT-000001", "Description": "Sheet-only context"}
     prompt = build_initiative_summary_prompt_input(
@@ -1056,8 +1395,8 @@ def test_initiative_summary_service_skips_when_input_hash_matches(db_session, mo
         llm_context_text="[Context]\nUse concise PM language",
     )
     input_hash = compute_summary_input_hash(prompt)
-    initiative.llm_summary = "Existing summary"
-    initiative.llm_summary_json = {
+    initiative_row.llm_summary = "Existing summary"
+    initiative_row.llm_summary_json = {
         "headline": "Existing headline",
         "_meta": {"input_hash": input_hash},
     }
@@ -1095,13 +1434,81 @@ def test_initiative_summary_service_skips_when_input_hash_matches(db_session, mo
     )
 
     db_session.refresh(initiative)
+    llm_summary = cast(Any, initiative).llm_summary
     assert result["ok_count"] == 0
     assert result["skipped_count"] == 1
     assert result["skipped_unchanged_count"] == 1
     assert result["sheet_updated"] == 0
     assert result["status_by_key"]["INIT-000001"] == "SKIPPED: Summary input unchanged"
-    assert initiative.llm_summary == "Existing summary"
+    assert llm_summary == "Existing summary"
     assert written_summaries == []
+
+
+def test_initiative_summary_service_regenerates_when_summary_text_was_cleared(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    initiative = _create_initiative(
+        db_session,
+        initiative_key="INIT-000019",
+        title="Regenerate Summary",
+    )
+    initiative_row = cast(Any, initiative)
+    initiative_row.problem_statement = "Pricing changes need clearer rationale"
+
+    backlog_row = {"Initiative Key": "INIT-000019", "Description": "Optimize pricing without harming conversion"}
+    prompt = build_initiative_summary_prompt_input(
+        initiative,
+        backlog_row,
+        None,
+        llm_context_text="[Context]\nUse concise PM language",
+    )
+    input_hash = compute_summary_input_hash(prompt)
+    initiative_row.llm_summary = None
+    initiative_row.llm_summary_json = {
+        "headline": "Stale headline",
+        "_meta": {"input_hash": input_hash},
+    }
+    db_session.commit()
+
+    class FakeBacklogReader:
+        def __init__(self, client: Any) -> None:
+            self.client = client
+
+        def get_rows(self, spreadsheet_id: str, tab_name: str = "Backlog", header_row: int = 1, start_data_row: int | None = None, max_rows: int | None = None):
+            return [(5, backlog_row)]
+
+    class FakeLLMClient:
+        def generate_initiative_summary(self, payload: Any) -> InitiativeSummaryOutput:
+            return InitiativeSummaryOutput(
+                headline="Pricing optimization refresh",
+                opportunity="Clarify how pricing changes affect value.",
+                proposed_solution="Regenerate the PM summary from latest context.",
+                expected_impact="Better aligned pricing narrative for review.",
+                open_questions=[],
+            )
+
+    written_summaries: list[dict[str, str]] = []
+
+    monkeypatch.setattr("app.services.initiative_summary_service.BacklogReader", FakeBacklogReader)
+    monkeypatch.setattr(
+        "app.services.initiative_summary_service.load_sheet_level_llm_context",
+        lambda sheets_client, spreadsheet_id, tab_name=None: "[Context]\nUse concise PM language",
+    )
+    monkeypatch.setattr(
+        "app.services.initiative_summary_service.write_llm_summaries_to_backlog_sheet",
+        lambda client, spreadsheet_id, tab_name, summaries_by_key: written_summaries.append(summaries_by_key) or len(summaries_by_key),
+    )
+
+    service = InitiativeSummaryService(cast(Any, object()), cast(Any, FakeLLMClient()))
+    result = service.generate_for_initiatives(
+        db=db_session,
+        spreadsheet_id="sheet-1",
+        tab_name="Backlog",
+        initiative_keys=["INIT-000019"],
+    )
+
+    db_session.refresh(initiative)
+    assert result["ok_count"] == 1
+    assert result["skipped_count"] == 0
+    assert written_summaries == [{"INIT-000019": cast(Any, initiative).llm_summary}]
 
 
 def test_flow3_populate_excludes_archived_candidates(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1717,6 +2124,78 @@ def test_pm_generate_llm_summary_returns_counts(db_session, monkeypatch: pytest.
         assert result["sheet_updated"] == 1
         assert summary["success"] == 1
         assert summary["failed"] == 0
+    finally:
+        settings.PRODUCT_OPS = original_product_ops
+
+
+def test_pm_sync_backlog_db_guides_user_on_wrong_tab(db_session) -> None:
+    original_product_ops = settings.PRODUCT_OPS
+    settings.PRODUCT_OPS = cast(Any, type("Cfg", (), {"spreadsheet_id": "sheet-1", "scoring_inputs_tab": "Scoring_Inputs"})())
+    try:
+        ctx = ActionContext(
+            payload={
+                "action": "pm.sync_backlog_db",
+                "sheet_context": {"spreadsheet_id": "sheet-1", "tab": "Scoring_Inputs"},
+                "scope": {"initiative_keys": ["INIT-000001"]},
+            },
+            sheets_client=cast(Any, object()),
+            llm_client=None,
+        )
+        result = _action_pm_sync_backlog_db(db_session, ctx)
+        summary = _extract_summary("pm.sync_backlog_db", result)
+        assert result["status"] == "skipped"
+        assert result["target_tab"] == "Backlog"
+        assert summary["skipped"] == 1
+    finally:
+        settings.PRODUCT_OPS = original_product_ops
+
+
+def test_pm_sync_backlog_db_returns_counts(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    original_product_ops = settings.PRODUCT_OPS
+    settings.PRODUCT_OPS = cast(Any, type("Cfg", (), {"spreadsheet_id": "sheet-1", "scoring_inputs_tab": "Scoring_Inputs"})())
+    monkeypatch.setattr(
+        "app.services.backlog_reconciliation_service.BacklogReconciliationService",
+        lambda sheets_client: SimpleNamespace(
+            sync=lambda **kwargs: {
+                "ok_count": 1,
+                "skipped_count": 0,
+                "failed_count": 0,
+                "rows_updated": 1,
+                "no_op_count": 0,
+                "sheet_updated": 1,
+                "db_updated": 1,
+                "db_rows_updated": 1,
+                "db_fields_updated": 2,
+                "sheet_fields_updated": 3,
+                "changes_log": {"INIT-000001": {"db": ["title"], "sheet": ["llm_summary"]}},
+                "status_by_key": {"INIT-000001": "OK"},
+            }
+        ),
+    )
+    monkeypatch.setattr("app.sheets.productops_writer.write_status_to_sheet", lambda *_args, **_kwargs: 1)
+
+    try:
+        ctx = ActionContext(
+            payload={
+                "action": "pm.sync_backlog_db",
+                "sheet_context": {"spreadsheet_id": "sheet-1", "tab": "Backlog"},
+                "scope": {"initiative_keys": ["INIT-000001"]},
+            },
+            sheets_client=cast(Any, object()),
+            llm_client=None,
+        )
+        result = _action_pm_sync_backlog_db(db_session, ctx)
+        summary = _extract_summary("pm.sync_backlog_db", result)
+        assert result["ok_count"] == 1
+        assert result["sheet_updated"] == 1
+        assert summary["success"] == 1
+        assert summary["failed"] == 0
+        assert summary["rows_updated"] == 1
+        assert summary["db_rows_updated"] == 1
+        assert summary["db_fields_updated"] == 2
+        assert summary["sheet_rows_updated"] == 1
+        assert summary["sheet_fields_updated"] == 3
+        assert summary["changes_log"] == {"INIT-000001": {"db": ["title"], "sheet": ["llm_summary"]}}
     finally:
         settings.PRODUCT_OPS = original_product_ops
 

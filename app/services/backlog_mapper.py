@@ -1,11 +1,12 @@
 #productroadmap_sheet_project/app/services/backlog_mapper.py
-
+"""Mapping logic between central backlog sheet rows and Initiative database fields."""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
 from app.sheets.backlog_reader import BacklogRow  # type: ignore
-from app.sheets.models import CENTRAL_EDITABLE_FIELDS, CENTRAL_HEADER_TO_FIELD
+from app.sheets.models import CENTRAL_HEADER_TO_FIELD
+from app.services.backlog_field_ownership import SHEET_OWNED_FIELDS
 from app.utils.header_utils import get_value_by_header_alias
 
 def _to_float(value: Any) -> Optional[float]:
@@ -70,10 +71,12 @@ def backlog_row_to_update_data(row: BacklogRow) -> Dict[str, Any]:
     editable_headers = {
         sheet_header: field_name
         for sheet_header, field_name in CENTRAL_HEADER_TO_FIELD.items()
-        if field_name in CENTRAL_EDITABLE_FIELDS
+        if field_name in SHEET_OWNED_FIELDS
     }
 
     for sheet_header, field_name in editable_headers.items():
+        if sheet_header not in row:
+            continue
         raw_value = get_value_by_header_alias(row, sheet_header, [])
         converter = FIELD_CONVERTERS.get(field_name, lambda value: value)
         data[field_name] = converter(raw_value)
